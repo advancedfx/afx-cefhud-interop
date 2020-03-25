@@ -15,7 +15,7 @@
 <p>
 	Usage:<br/>
 	Launch CS:GO from HLAE with <code>-afxInteropLight</code>.<br />
-	Execute <code>afx-cefhud-interop.exe --url "C:\Path to\afx-cefhud-interop.exe"</code>.<br />
+	Execute <code>afx-cefhud-interop.exe --url "C:\Path to\example.html"</code>.<br />
 	Enter <code>afx_interop connect 1</code> into console<br />.
 	(The processes run in background see tast manager, you have to try to terminate different of those to exit for now due to work in progress.)
 </p>
@@ -26,6 +26,6 @@
 	//alert(window.afxInterop.pipeName);
 	setInterval(function(){
 		document.getElementById("afx_interop_status").innerHTML = window.afxInterop.process() ? "Processing OK" : "Processing Error";
-	},1 );
+	},0 );
 </script>
 </html>
