@@ -21,7 +21,7 @@ set_property(GLOBAL PROPERTY OS_FOLDERS ON)
 #
 
 # Specify the CEF distribution version.
-set(CEF_VERSION "79.1.27+gd2449e5+chromium-79.0.3945.117")
+set(CEF_VERSION "75.1.14+gc81164e+chromium-75.0.3770.100")
 
 # Determine the platform.
 if("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
@@ -135,7 +135,7 @@ if(WITH_EXAMPLES)
 endif()
 
 # TODO: Include other application targets here.
-
+add_subdirectory(afx-cefhud-interop)
 
 # Display configuration settings.
 PRINT_CEF_CONFIG()
