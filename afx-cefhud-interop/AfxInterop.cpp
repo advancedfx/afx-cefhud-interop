@@ -795,6 +795,7 @@ class CEngineInterop : public CInterop, public IEngineInterop {
     bool afterTranslucent;
     bool beforeHud;
     bool afterHud;
+    bool afterRenderView;
 
     while (!done) {
       INT32 engineMessage;
@@ -973,10 +974,19 @@ class CEngineInterop : public CInterop, public IEngineInterop {
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M33))
             return false;
 
+          beforeTranslucentShadow = false;
+          afterTranslucentShadow = false;
+          beforeTranslucent = false;
+          afterTranslucent = false;
+          beforeHud = false;
+          afterHud = false;
+          afterRenderView = false;
+
           if(m_RenderCallback) m_RenderCallback->RenderCallback(
               renderInfo,
               beforeTranslucentShadow, afterTranslucentShadow,
-              beforeTranslucent, afterTranslucent, beforeHud, afterHud);
+              beforeTranslucent, afterTranslucent, beforeHud, afterHud,
+              afterRenderView);
 
           if (!m_PipeServer->WriteBoolean(beforeTranslucentShadow))
             return false;
@@ -990,9 +1000,11 @@ class CEngineInterop : public CInterop, public IEngineInterop {
             return false;
           if (!m_PipeServer->WriteBoolean(afterHud))
             return false;
+          if (!m_PipeServer->WriteBoolean(afterRenderView))
+            return false;
 
           if (!(beforeTranslucentShadow || afterTranslucentShadow ||
-                beforeTranslucent || afterTranslucent || beforeHud || afterHud))
+                beforeTranslucent || afterTranslucent || beforeHud || afterHud || afterRenderView))
             done = true;
 
           if (!done) {
@@ -1280,6 +1292,7 @@ class CDrawingInterop : public CInterop, public IDrawingInterop {
         case DrawingMessage_AfterTranslucent:
         case DrawingMessage_BeforeHud:
         case DrawingMessage_AfterHud:
+        case DrawingMessage_OnRenderViewEnd:
           break;
         
         default:

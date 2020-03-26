@@ -126,9 +126,10 @@ class AfxHandler : public CefV8Accessor,
       bool& outBeforeTranslucent,
       bool& outAfterTranslucent,
       bool& outBeforeHud,
-      bool& outAfterHud) {
+      bool& outAfterHud,
+      bool& outAfterRenderView) {
       
-    outAfterHud = true;
+    outAfterRenderView = true;
 
     auto message = CefProcessMessage::Create("afx-process");
     if (message != nullptr && browser_ != nullptr) {

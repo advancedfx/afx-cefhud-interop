@@ -100,7 +100,8 @@ class __declspec(novtable) IRenderCallback abstract {
                                 bool& outBeforeTranslucent,
                                 bool& outAfterTranslucent,
                                 bool& outBeforeHud,
-                                bool& outAfterHud) = 0;
+                                bool& outAfterHud,
+      bool& outAfterRenderView) = 0;
 };
 
 class __declspec(novtable) IRenderPassCallback abstract {
