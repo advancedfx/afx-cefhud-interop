@@ -595,7 +595,7 @@ class CIntCalcCallbacks
 
 class CInterop : public CRefCounted {
  public:
-  const INT32 Version = 6;
+  const INT32 Version = 7;
 
   CInterop(const char* pipeName) : m_PipeName(pipeName) {}
 
@@ -687,11 +687,11 @@ class CEngineInterop : public CInterop, public IEngineInterop {
     m_CommandsCallback = commandsCallback;
  }
 
-  virtual void SetRenderCallback(class IRenderCallback* renderCallback) {
-   if (m_RenderCallback)
-     m_RenderCallback->Release();
+  virtual void SetRenderViewBeginCallback(class IRenderViewBeginCallback* renderCallback) {
+   if (m_RenderViewBeginCallback)
+     m_RenderViewBeginCallback->Release();
 
-   m_RenderCallback = renderCallback;
+   m_RenderViewBeginCallback = renderCallback;
   }
 
   virtual void ScheduleCommand(const char* command) { m_Commands.emplace(command);
@@ -711,6 +711,27 @@ class CEngineInterop : public CInterop, public IEngineInterop {
       m_RenderPassCallback->Release();
 
     m_RenderPassCallback = renderPassCallback;
+  }
+
+  virtual void SetHudBeginCallback(class IEventCallback* eventCallback) {
+    if (m_HudBeginCallback)
+      m_HudBeginCallback->Release();
+
+    m_HudBeginCallback = eventCallback;
+ }
+
+  virtual void SetHudEndCallback(class IEventCallback* eventCallback) {
+   if (m_HudEndCallback)
+      m_HudEndCallback->Release();
+
+   m_HudEndCallback = eventCallback;
+  }
+
+  virtual void SetRenderViewEndCallback(class IEventCallback* eventCallback) {
+    if (m_RenderViewEndCallback)
+      m_RenderViewEndCallback->Release();
+
+    m_RenderViewEndCallback = eventCallback;
   }
 
   virtual void AddHandleCalcCallback(const char* name,
@@ -777,12 +798,18 @@ class CEngineInterop : public CInterop, public IEngineInterop {
   ~CEngineInterop() {
     if (m_CommandsCallback)
       m_CommandsCallback->Release();
-    if (m_RenderCallback)
-      m_RenderCallback->Release();
+    if (m_RenderViewBeginCallback)
+      m_RenderViewBeginCallback->Release();
     if (m_OnViewOverrideCallback)
       m_OnViewOverrideCallback->Release();
     if (m_RenderPassCallback)
       m_RenderPassCallback->Release();
+    if (m_HudBeginCallback)
+      m_HudBeginCallback->Release();
+    if (m_HudEndCallback)
+      m_HudEndCallback->Release();
+    if (m_RenderViewEndCallback)
+      m_RenderViewEndCallback->Release();
   }
 
 
@@ -982,7 +1009,7 @@ class CEngineInterop : public CInterop, public IEngineInterop {
           afterHud = false;
           afterRenderView = false;
 
-          if(m_RenderCallback) m_RenderCallback->RenderCallback(
+          if(m_RenderViewBeginCallback) m_RenderViewBeginCallback->RenderViewBeginCallback(
               renderInfo,
               beforeTranslucentShadow, afterTranslucentShadow,
               beforeTranslucent, afterTranslucent, beforeHud, afterHud,
@@ -1013,7 +1040,19 @@ class CEngineInterop : public CInterop, public IEngineInterop {
         } break;
 
         case EngineMessage_OnRenderViewEnd:
+          if (m_RenderViewEndCallback)
+            m_RenderViewEndCallback->EventCallback();
           done = true;
+          break;
+
+        case EngineMessage_BeforeHud:
+          if (m_HudBeginCallback)
+            m_HudBeginCallback->EventCallback();
+          break;
+
+        case EngineMessage_AfterHud:
+          if (m_HudEndCallback)
+            m_HudEndCallback->EventCallback();
           break;
 
         case EngineMessage_BeforeTranslucentShadow:
@@ -1119,16 +1158,21 @@ class CEngineInterop : public CInterop, public IEngineInterop {
     EngineMessage_BeforeTranslucentShadow = 9,
     EngineMessage_AfterTranslucentShadow = 10,
     EngineMessage_BeforeTranslucent = 11,
-    EngineMessage_AfterTranslucent = 12
+    EngineMessage_AfterTranslucent = 12,
+    EngineMessage_BeforeHud = 13,
+    EngineMessage_AfterHud = 14
   };
 
   class ICommandsCallback* m_CommandsCallback = nullptr;
-  class IRenderCallback* m_RenderCallback = nullptr;
+  class IRenderViewBeginCallback* m_RenderViewBeginCallback = nullptr;
 
   std::queue<std::string> m_Commands;
 
   class IOnViewOverrideCallback* m_OnViewOverrideCallback = nullptr;
   class IRenderPassCallback* m_RenderPassCallback = nullptr;
+  class IEventCallback* m_HudBeginCallback = nullptr;
+  class IEventCallback* m_HudEndCallback = nullptr;
+  class IEventCallback* m_RenderViewEndCallback = nullptr;
 
   CHandleCalcCallbacks m_HandleCalcCallbacks;
   CVecAngCalcCallbacks m_VecAngCalcCallbacks;

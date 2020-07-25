@@ -1,4 +1,19 @@
 <!DOCTYPE html>
+<!--
+
+Usage:
+
+Launch CS:GO from HLAE with -afxInteropLight.
+
+For testing execute (will open console window that can be closed and log to debug.log in current directoy):
+afx-cefhud-interop.exe "--url=file:///C:/source/cef-project/afx-cefhud-interop/example.html" --afxConsole --log-severity=info
+
+For live execute (will run in background):
+afx-cefhud-interop.exe "--url=file:///C:/source/cef-project/afx-cefhud-interop/example.html" --log-severity=disable
+
+Enter afx_interop connect 1 into CS:GO console.
+
+-->
 <html>
 <head>
 <title>Title of the document</title>
@@ -8,24 +23,162 @@
 
 <body>
 <h1 style="background: red; color: yellow">Hello World from afx-cefhud-interop</h1>
-<div style="margin-top: 1rem; background: white">
-<p>
-	Status: <span id="afx_interop_status">Unknown</span>.
-</p>
-<p>
-	Usage:<br/>
-	Launch CS:GO from HLAE with <code>-afxInteropLight</code>.<br />
-	Execute <code>afx-cefhud-interop.exe "--url=file:///C:/source/cef-project/afx-cefhud-interop/example.html"</code>.<br />
-	Enter <code>afx_interop connect 1</code> into console<br />.
-	(The processes run in background see tast manager, you have to try to terminate different of those to exit for now due to work in progress.)
-</p>
-</div>
 </body>
 
 <script>
-	//alert(window.afxInterop.pipeName);
-	setInterval(function(){
-		document.getElementById("afx_interop_status").innerHTML = window.afxInterop.process() ? "Processing OK" : "Processing Error";
-	},0 );
+	{
+		var AFX_RENDERPASS_STATE = {
+			BeforeTranslucentShadow: 2,
+			AfterTranslucentShadow: 3,
+			BeforeTranslucent: 4,
+			AfterTranslucent: 5
+		};
+		var AFX_CULLING = {
+			Back: -1,
+			None: 0,
+			Front: 1
+		};
+		var afxInterop = window.afxInterop;
+		var afxRenderInfo;
+		var afxRenderPasses;
+		
+		function afxOnCommands(commands)
+		{
+			for(var i=0; i < commands.length; ++i)
+			{
+				var command = commands[i];
+				if(0 < command.length)
+				{
+					if(2 <= command.length && "cefhud" === commands[1])
+					{
+						if(3 <= command.length)
+						{
+							var handled = false;
+							var command2 = commands[2];
+							switch(command2)
+							{
+							case "echo":
+								var result = "echo";
+								for(var j=2; j < command.length; ++j)
+								{
+									result += " "+commands[j];
+								}
+								afxInterop.scheduleCommand(result);
+								handled = true;
+								break;
+							}
+							
+							if(handled) continue;
+						}
+					}
+					
+					afxInterop.scheduleCommand("echo "+command[0]+" echo <sText>+ - echo text back to CS:GO.");
+				}
+			}
+		}
+		
+		function afxOnViewOverride(value)
+		{
+			// Uncomment return and those you want to override to set new value(s):
+			
+			//return {
+			//	tX: value.Tx,
+			//	tY: value.Ty,
+			//	tZ: value.Tz,
+			//	rX: value.rX,
+			//	rY: value.rY,
+			//	rZ: value.rZ,
+			//	fov: value.fov
+			//};
+		}
+		
+		function afxOnRenderViewBegin(renderInfo)
+		{
+			var passes = {};
+			
+			// Select passes you want here:
+			// Hint: It is recommend to do one browser per one pass!
+			
+			//passes["beforeTranslucentShadow"] = true;
+			//passes["afterTranslucentShadow"] = true;
+			//passes["beforeTranslucent"] = true;
+			//passes["afterTranslucent"] = true;
+			//passes["beforeHud"] = true;
+			//passes["afterHud"] = true;
+			passes["afterRenderView"] = true;
+			
+			afxRenderInfo = renderInfo;
+			afxRenderPasses = passes;
+			
+			return passes;
+		}
+		
+		function afxOnRenderPass(renderPassState, renderView)
+		{
+			var texWidth = renderView.width - afxRenderInfo.renderView.x;
+			var texHeight = renderView.height - afxRenderInfo.renderView.y;
+
+			if(renderPassState == AFX_RENDERPASS_STATE.BeforeTranslucent)
+			{
+				// Draw 3D rectangle:
+				afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
+				afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount, [0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]);
+			}
+			else
+			{
+				// Draw standard screen rectangle:
+				afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
+				afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);
+			}
+		}
+			
+		//function afxOnHudBegin()
+		//{
+		//	var texWidth = renderView.width - renderView.x;
+		//	var texHeight = renderView.height - renderView.y;	
+		//	afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
+		//	afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);			
+		//}
+		
+		//function afxOnHudEnd()
+		//{
+		//	var texWidth = renderView.width - renderView.x;
+		//	var texHeight = renderView.height - renderView.y;	
+		//	afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
+		//	afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);			
+		//}
+		
+		function afxOnRenderViewEnd()
+		{
+			var texWidth = afxRenderInfo.view.width - afxRenderInfo.view.x;
+			var texHeight = afxRenderInfo.view.height - afxRenderInfo.view.y;	
+			afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
+			afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);		
+		}
+		
+		afxInterop.onCommands(afxOnCommands);
+		afxInterop.onViewOverride(afxOnViewOverride);
+		afxInterop.onRenderViewBegin(afxOnRenderViewBegin);
+		afxInterop.onRenderPass(afxOnRenderPass);
+		//afxInterop.onHudBegin(afxOnHudBegin);
+		//afxInterop.onHudEnd(afxOnHudEnd);
+		afxInterop.onRenderViewEnd(afxOnRenderViewEnd);
+		
+		console.log(window.afxInterop.pipeName);
+
+		setInterval(function(){
+			if(afxInterop.connect())
+			{
+				if(afxInterop.getConnected())
+				{
+				}
+				else
+				{
+					afxInterop.scheduleDrawingBeginFrame();
+					afxInterop.scheduleDrawingConnect();
+				}
+			}
+		},0 );
+	}
 </script>
 </html>

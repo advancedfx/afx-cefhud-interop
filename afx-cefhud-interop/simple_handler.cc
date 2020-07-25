@@ -142,22 +142,26 @@ bool SimpleHandler::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                         CefRefPtr<CefProcessMessage> message) {
   auto const name = message->GetName().ToString();
 
-  if (name == "afx-process" && browser != nullptr) {
+  if (name == "afx-connect") {
     auto const args = message->GetArgumentList();
     auto const size = args->GetSize();
     if (size == 0) {
-      browser->GetHost()->SendExternalBeginFrame();
-
       AfxDrawingInteropConnection();
-    }
-    else if (3 == size) {
-      AfxSetSize(browser, args->GetInt(1), args->GetInt(2));
-
-      browser->GetHost()->SendExternalBeginFrame();
-
+    } else if (1 <= size) {
       AfxDrawingInteropConnection(
           args->GetInt(0));
     }
+    return true;
+  }
+
+  if (name == "afx-begin-frame" && browser != nullptr) {
+    auto const args = message->GetArgumentList();
+    auto const size = args->GetSize();
+    if (size == 2) {
+      AfxSetSize(browser, args->GetInt(0), args->GetInt(1));
+    }
+    
+    browser->GetHost()->SendExternalBeginFrame();
     return true;
   }
 

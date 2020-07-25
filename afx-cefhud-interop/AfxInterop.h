@@ -88,13 +88,13 @@ class __declspec(novtable) ICommandsCallback abstract{
 };
 
 
-class __declspec(novtable) IRenderCallback abstract {
+class __declspec(novtable) IRenderViewBeginCallback abstract {
  public:
   virtual void AddRef() = 0;
 
   virtual void Release() = 0;
 
-  virtual void RenderCallback(const struct RenderInfo_s& renderInfo,
+  virtual void RenderViewBeginCallback(const struct RenderInfo_s& renderInfo,
                                 bool& outBeforeTranslucentShadow,
                                 bool& outAfterTranslucentShadow,
                                 bool& outBeforeTranslucent,
@@ -112,6 +112,15 @@ class __declspec(novtable) IRenderPassCallback abstract {
 
   virtual void RenderPassCallback(enum RenderPassType_e pass,
                                     const struct View_s& view) = 0;
+};
+
+class __declspec(novtable) IEventCallback abstract {
+ public:
+  virtual void AddRef() = 0;
+
+  virtual void Release() = 0;
+
+  virtual void EventCallback() = 0;
 };
 
 struct HandleCalcResult_s {
@@ -245,16 +254,24 @@ class __declspec(novtable) IEngineInterop abstract
 
   virtual void SetCommandsCallback(class ICommandsCallback* commandsCallback) = 0;
 
-  virtual void SetRenderCallback(class IRenderCallback* renderCallback) = 0;
-
   virtual void ScheduleCommand(const char* command) = 0;
 
   virtual void SetOnViewOverrideCallback(
       class IOnViewOverrideCallback* onViewOverrideCallback) = 0;
 
+  virtual void SetRenderViewBeginCallback(class IRenderViewBeginCallback* renderCallback) = 0;
 
   virtual void SetRenderPassCallback(
       class IRenderPassCallback* renderPassCallback) = 0;
+
+  virtual void SetHudBeginCallback(
+      class IEventCallback* eventCallback) = 0;
+
+  virtual void SetHudEndCallback(
+      class IEventCallback* eventCallback) = 0;
+
+  virtual void SetRenderViewEndCallback(
+      class IEventCallback* eventCallback) = 0;
 
   virtual void AddHandleCalcCallback(const char* name,
                                      class IHandleCalcCallback* callback) = 0;
