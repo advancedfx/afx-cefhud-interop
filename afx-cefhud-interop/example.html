@@ -6,12 +6,15 @@ Usage:
 Launch CS:GO from HLAE with -afxInteropLight.
 
 For testing execute (will open console window that can be closed and log to debug.log in current directoy):
-afx-cefhud-interop.exe "--url=file:///C:/source/cef-project/afx-cefhud-interop/example.html" --afxConsole --log-severity=info
+afx-cefhud-interop.exe "--url=file:///C:/source/cef-project/afx-cefhud-interop/example.html" --afxConsole --enable-logging --v=1
 
 For live execute (will run in background):
-afx-cefhud-interop.exe "--url=file:///C:/source/cef-project/afx-cefhud-interop/example.html" --log-severity=disable
+afx-cefhud-interop.exe "--url=file:///C:/source/cef-project/afx-cefhud-interop/example.html" --enable-logging --log-severity=error
 
 Enter afx_interop connect 1 into CS:GO console.
+
+Console inteface:
+afx_interop send cefhud [...]
 
 -->
 <html>
@@ -49,19 +52,19 @@ Enter afx_interop connect 1 into CS:GO console.
 				var command = commands[i];
 				if(0 < command.length)
 				{
-					if(2 <= command.length && "cefhud" === commands[1])
+					if(2 <= command.length && "cefhud" === command[1])
 					{
 						if(3 <= command.length)
 						{
 							var handled = false;
-							var command2 = commands[2];
+							var command2 = command[2];
 							switch(command2)
 							{
 							case "echo":
 								var result = "echo";
-								for(var j=2; j < command.length; ++j)
+								for(var j=3; j < command.length; ++j)
 								{
-									result += " "+commands[j];
+									result += " "+command[j];
 								}
 								afxInterop.scheduleCommand(result);
 								handled = true;
@@ -69,10 +72,9 @@ Enter afx_interop connect 1 into CS:GO console.
 							}
 							
 							if(handled) continue;
-						}
+						}					
+						afxInterop.scheduleCommand("echo \""+command[0]+" cefhud echo <sText>+ - echo text back to CS:GO.\"");
 					}
-					
-					afxInterop.scheduleCommand("echo "+command[0]+" echo <sText>+ - echo text back to CS:GO.");
 				}
 			}
 		}
@@ -174,7 +176,6 @@ Enter afx_interop connect 1 into CS:GO console.
 				}
 				else
 				{
-					afxInterop.scheduleDrawingBeginFrame();
 					afxInterop.scheduleDrawingConnect();
 				}
 			}
