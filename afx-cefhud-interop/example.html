@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
 
-Usage:
+## Usage:
 
 Launch CS:GO from HLAE with -afxInteropLight.
 
@@ -15,6 +15,150 @@ Enter afx_interop connect 1 into CS:GO console.
 
 Console inteface:
 afx_interop send cefhud [...]
+
+
+## Type descriptions:
+
+AfxMatrix4x4 = {
+	m00: Double,
+	m01: Double,
+	m02: Double,
+	m03: Double,
+	m10: Double,
+	m11: Double,
+	m12: Double,
+	m13: Double,
+	m20: Double,
+	m21: Double,
+	m22: Double,
+	m23: Double,
+	m30: Double,
+	m31: Double,
+	m32: Double,
+	m33: Double
+}
+
+AfxView = {
+	x: Int,
+	y: Int,
+	width: Int,
+	height: Int,
+	viewMatrix: AfxMatrix4x4,
+	projectionMatrix: AfxMatrix4x4
+};
+
+AfxRenderInfo = {
+	view: AfxView,
+    frameCount: Int, // client frame count
+	absoluteFrameTime: Double, // unpaused client frame delta time
+	curTime: Double, // client time
+	frameTime: Double // simulated client frame time (can be 0 when paused)
+};
+
+AfxCommandArgs = String;
+
+AfxCommand = Array<AfxCommandArgs>;
+
+AfxCommands = Array<AfxCommand>;
+
+AfxRenderViewBeginResult = {
+	[beforeTranslucentShadow: Bool,] // optional
+	[afterTranslucentShadow: Bool,] // optional
+	[beforeTranslucent: Bool,] // optional
+	[afterTranslucent: Bool,] // optional
+	[beforeHud: Bool,] // optional
+	[afterHud: Bool,] // optional
+	[afterRenderView: Bool,] // optional
+};
+
+AfxViewOverrideArg = {
+	tX: Double, // forward
+	tY: Double, // left
+	tZ: Double, // up
+	rX: Double, // "pitch" (y/left-axis rotation)
+	rY: Double, // "yaw" (z/up-axis rotation)
+	rZ: Double, // roll (x/forward-axis rotation)
+	fov: Double // unscaled engine FOV (the engine additionally scales the actual horizontal FOV by the screen aspect ratio)
+};
+
+AfxViewOverrideResult = {
+	[tX: Double,] // optional, forward
+	[tY: Double,] // optional, left
+	[tZ: Double,] // optional, up
+	[rX: Double,] // optional, "pitch" (y/left-axis rotation)
+	[rY: Double,] // optional, "yaw" (z/up-axis rotation)
+	[rZ: Double,] // optional, roll (x/forward-axis rotation)
+	[fov: Double] // optional
+};
+
+AfxAddMirvCalcResult = {
+	release: Function() // call this in order to remove / release the calc
+};
+
+AfxAddMirvCalcArgHandle {
+	intHandle: Int
+};
+
+AfxAddMirvCalcVector {
+	x: Double, // forward
+	y: Double, // left
+	z: Double // up
+};
+
+AfxAddMirvCalcQAngle {
+	pitch: Double, // yRotation (left)
+	yaw: Double, // zRotation (up)
+	roll: Double, // xRotation (forward)
+};
+
+AfxAddMirvCalcArgVecAng {
+	vector: AfxAddMirvCalcVector,
+	qAngle: AfxAddMirvCalcQAngle
+};
+
+AfxAddMirvCalcArgCam {
+	vector: AfxAddMirvCalcVector,
+	qAngle: AfxAddMirvCalcQAngle,
+	fov: Double // engine (unscaled) FOV
+};
+
+AfxAddMirvCalcArgFov {
+	fov: Double
+};
+
+AfxAddMirvCalcArgBool {
+	result: Bool
+};
+
+AfxAddMirvCalcArgInt {
+	result: Int
+};
+
+// For AFX_RENDERPASS_STATE see code bellow.
+
+AfxInterop = {
+	pipeName: String, // name part to use for the pipe (set before re-connecting)
+	connect: Function() => Bool, // interop connection pump, returns true when pump is active
+	getConnected: Function() => Bool, // returns true when actually connected
+	close: Function(), // close connection
+	onNewConnection: Function(Function()), // set function to be called upon new connection (can be also re-connect)
+	onCommands: Function(Function(AfxCommands)), // set callback function that gets command from the client
+	scheduleCommand: Function(String), // schedule a command string to be executed in the client (avoid scheduling too many, especially if there's no connection).
+	onRenderViewBegin: Function(Function(AfxRenderInfo) [=> AfxRenderViewBeginResult]), // set funtion to be called upon begin of rendering the player view, optionally returns AfxRenderViewBeginResult object for render passes to be handled. For efficiency reasons it is currently best to only do one render per window / instance.
+	onViewOverride: Function(Function(AfxViewOverrideArg) [=> AfxViewOverrideResult]), // set function to be called when view override is possible, optional returns AfxViewOverrideResult object.
+	onRenderPass: Function(Function(AFX_RENDERPASS_STATE,AfxView)), // set function to be called upon rendering a renderpass.
+	onHudBegin: Function(Function()), // set function to be called upon this event.
+	onHudEnd: Function(Function()), // set function to be called upon this event.
+	onRenderViewEnd: Function(Function()), // set function to be called upon this event.
+	scheduleDrawingBeginFrame: Function([width=Int,height=Int]), // schedule drawing of a frame, with optional width and height (e.g. from onRenderViewBegin to match the client size).
+	scheduleDrawingConnect: Function([frameCount=Int]), // schedule drawing connection, for the drawing to do anything useful beyong connecting you will need to pass on the frameCount you get from on onRenderViewBegin (it's required for synchronization).
+	addCalcHandle: Function(name=String,Function(null|AfxAddMirvCalcArgHandle)) => AfxAddMirvCalcResult, // Get data from a mirv_calc handle calc (can be called with null if not available).
+	addCalcVecAng: Function(name=String,Function(null|AfxAddMirvCalcArgVecAng)) => AfxAddMirvCalcResult, // Get data from a mirv_calc vecAng calc (can be called with null if not available).
+	addCalcCam: Function(name=String,Function(null|AfxAddMirvCalcArgCam)) => AfxAddMirvCalcResult, // Get data from a mirv_calc cam calc (can be called with null if not available).
+	addCalcFov: Function(name=String,Function(null|AfxAddMirvCalcArgFov)) => AfxAddMirvCalcResult, // Get data from a mirv_calc fov calc (can be called with null if not available).
+	addCalcBool: Function(name=String,Function(null|AfxAddMirvCalcArgBool)) => AfxAddMirvCalcResult, // Get data from a mirv_calc bool calc (can be called with null if not available).
+	addCalcInt: Function(name=String,Function(null|AfxAddMirvCalcArgInt)) => AfxAddMirvCalcResult, // Get data from a mirv_calc int calc (can be called with null if not available).
+}
 
 -->
 <html>
@@ -36,17 +180,16 @@ afx_interop send cefhud [...]
 			BeforeTranslucent: 4,
 			AfterTranslucent: 5
 		};
-		var AFX_CULLING = {
-			Back: -1,
-			None: 0,
-			Front: 1
-		};
 		var afxInterop = window.afxInterop;
 		var afxRenderInfo;
-		var afxRenderPasses;
 		
-		function afxOnCommands(commands)
-		{
+		afxInterop.onNewConnection(function(){
+		
+			afxInterop.scheduleCommand("echo cefhud: afxInterop.onNewConnection (connect / reconnect).");
+		});
+		
+		afxInterop.onCommands(function(commands){
+		
 			for(var i=0; i < commands.length; ++i)
 			{
 				var command = commands[i];
@@ -77,25 +220,26 @@ afx_interop send cefhud [...]
 					}
 				}
 			}
-		}
+		});
 		
-		function afxOnViewOverride(value)
-		{
-			// Uncomment return and those you want to override to set new value(s):
-			
+		// afxInterop.onViewOverride(function(value){
+
+			// console.log( "afxInterop.onViewOverride: x: "+value.tX+", y: "+value.tY+", z: "+value.tZ+", rX: "+value.rX,+", rY: "+value.rY+", rZ: "+value.rZ+", fov: "+value.fov );
+		
+			// Uncomment return and those you want to override to set to a new value:			
 			//return {
-			//	tX: value.Tx,
-			//	tY: value.Ty,
-			//	tZ: value.Tz,
-			//	rX: value.rX,
-			//	rY: value.rY,
-			//	rZ: value.rZ,
-			//	fov: value.fov
+			//	tX: 0,
+			//	tY: 0,
+			//	tZ: 0,
+			//	rX: 0,
+			//	rY: 0,
+			//	rZ: 0,
+			//	fov: 90
 			//};
-		}
+		// });
 		
-		function afxOnRenderViewBegin(renderInfo)
-		{
+		afxInterop.onRenderViewBegin(function(renderInfo){
+		
 			var passes = {};
 			
 			// Select passes you want here:
@@ -110,13 +254,12 @@ afx_interop send cefhud [...]
 			passes["afterRenderView"] = true;
 			
 			afxRenderInfo = renderInfo;
-			afxRenderPasses = passes;
 			
 			return passes;
-		}
+		});
 		
-		function afxOnRenderPass(renderPassState, renderView)
-		{
+		afxInterop.onRenderPass(function(renderPassState, renderView){
+		
 			var texWidth = renderView.width - afxRenderInfo.renderView.x;
 			var texHeight = renderView.height - afxRenderInfo.renderView.y;
 
@@ -132,39 +275,34 @@ afx_interop send cefhud [...]
 				afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
 				afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);
 			}
-		}
-			
-		//function afxOnHudBegin()
-		//{
-		//	var texWidth = renderView.width - renderView.x;
-		//	var texHeight = renderView.height - renderView.y;	
-		//	afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
-		//	afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);			
-		//}
+		});
 		
-		//function afxOnHudEnd()
-		//{
-		//	var texWidth = renderView.width - renderView.x;
-		//	var texHeight = renderView.height - renderView.y;	
-		//	afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
-		//	afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);			
-		//}
+		/*
+		afxInterop.onHudBegin(function afxOnHudBegin(){
+			var texWidth = renderView.width - renderView.x;
+			var texHeight = renderView.height - renderView.y;	
+			afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
+			afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);			
+		});
+		*/
 		
-		function afxOnRenderViewEnd()
-		{
+		/*
+		afxInterop.onHudEnd(function(){
+		
+			var texWidth = renderView.width - renderView.x;
+			var texHeight = renderView.height - renderView.y;	
+			afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
+			afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);			
+		});
+		*/
+		
+		afxInterop.onRenderViewEnd(function(){
+		
 			var texWidth = afxRenderInfo.view.width - afxRenderInfo.view.x;
 			var texHeight = afxRenderInfo.view.height - afxRenderInfo.view.y;	
 			afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
 			afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);		
-		}
-		
-		afxInterop.onCommands(afxOnCommands);
-		afxInterop.onViewOverride(afxOnViewOverride);
-		afxInterop.onRenderViewBegin(afxOnRenderViewBegin);
-		afxInterop.onRenderPass(afxOnRenderPass);
-		//afxInterop.onHudBegin(afxOnHudBegin);
-		//afxInterop.onHudEnd(afxOnHudEnd);
-		afxInterop.onRenderViewEnd(afxOnRenderViewEnd);
+		});
 		
 		console.log(window.afxInterop.pipeName);
 

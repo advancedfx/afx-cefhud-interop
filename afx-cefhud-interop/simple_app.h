@@ -25,6 +25,7 @@ class AfxHandler : public CefV8Accessor,
         "connect", this);
     fn_get_connected_ = CefV8Value::CreateFunction("getConnected", this);
     fn_close_ = CefV8Value::CreateFunction("close", this);
+    fn_on_new_connection_ = CefV8Value::CreateFunction("onNewConnection", this);
     fn_on_render_ = CefV8Value::CreateFunction("onRenderViewBegin", this);
     fn_on_view_override_ = CefV8Value::CreateFunction("onViewOverride", this);
     fn_on_render_pass_ = CefV8Value::CreateFunction("onRenderPass", this);
@@ -37,6 +38,13 @@ class AfxHandler : public CefV8Accessor,
         CefV8Value::CreateFunction("scheduleDrawingBeginFrame", this);
     fn_schedule_drawing_connect_ = 
         CefV8Value::CreateFunction("scheduleDrawingConnect", this);
+    fn_add_calc_handle_ =
+        CefV8Value::CreateFunction("addCalcHandle", this);
+    fn_add_calc_vecang_ = CefV8Value::CreateFunction("addCalcVecAng", this);
+    fn_add_calc_cam_ = CefV8Value::CreateFunction("addCalcCam", this);
+    fn_add_calc_fov_ = CefV8Value::CreateFunction("addCalcFov", this);
+    fn_add_calc_bool_ = CefV8Value::CreateFunction("addCalcBool", this);
+    fn_add_calc_int_ = CefV8Value::CreateFunction("addCalcInt", this);
 
     auto const obj = CefV8Value::CreateObject(this, nullptr);
     obj->SetValue("pipeName", V8_ACCESS_CONTROL_DEFAULT,
@@ -47,13 +55,15 @@ class AfxHandler : public CefV8Accessor,
                   V8_PROPERTY_ATTRIBUTE_NONE);
     obj->SetValue("close", V8_ACCESS_CONTROL_DEFAULT,
                   V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("onNewConnection", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
     obj->SetValue("onCommands", V8_ACCESS_CONTROL_DEFAULT,
                   V8_PROPERTY_ATTRIBUTE_NONE);
     obj->SetValue("scheduleCommand", V8_ACCESS_CONTROL_DEFAULT,
                   V8_PROPERTY_ATTRIBUTE_NONE);
-    obj->SetValue("onViewOverride", V8_ACCESS_CONTROL_DEFAULT,
-                  V8_PROPERTY_ATTRIBUTE_NONE);
     obj->SetValue("onRenderViewBegin", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("onViewOverride", V8_ACCESS_CONTROL_DEFAULT,
                   V8_PROPERTY_ATTRIBUTE_NONE);
     obj->SetValue("onRenderPass", V8_ACCESS_CONTROL_DEFAULT,
                   V8_PROPERTY_ATTRIBUTE_NONE);
@@ -107,8 +117,11 @@ class AfxHandler : public CefV8Accessor,
       if (1 == arguments.size() && arguments[0] && arguments[0]->IsFunction()) {
         AfxEnsureEngineInterop();
 
-        engine_interop_->SetCommandsCallback(
-            new AfxCommandsCallback(arguments[0], context_));
+        auto callback = new AfxCommandsCallback(arguments[0], context_);
+        engine_interop_->SetCommandsCallback(callback);
+        callback->Release();
+
+        return true;
       }
     }
 
@@ -118,6 +131,8 @@ class AfxHandler : public CefV8Accessor,
 
         std::string strValue(arguments[0]->GetStringValue().ToString());
         engine_interop_->ScheduleCommand(strValue.c_str());
+
+        return true;
       }
     }
 
@@ -125,17 +140,37 @@ class AfxHandler : public CefV8Accessor,
       if (1 == arguments.size() && arguments[0] && arguments[0]->IsFunction()) {
         AfxEnsureEngineInterop();
 
-        engine_interop_->SetOnViewOverrideCallback(
-            new AfxOnViewOverrideCallback(arguments[0], context_));
+        auto callback = new AfxOnViewOverrideCallback(arguments[0], context_);
+        engine_interop_->SetOnViewOverrideCallback(callback);
+        callback->Release();
+
+        return true;
       }
     }
+
+
+    if (name == "onNewConnection") {
+      if (1 == arguments.size() && arguments[0] && arguments[0]->IsFunction()) {
+        AfxEnsureEngineInterop();
+
+        auto callback = new AfxEventCallback(arguments[0], context_);
+        engine_interop_->SetNewConnectionCallback(callback);
+        callback->Release();
+
+        return true;
+      }
+    }
+
 
     if (name == "onRenderViewBegin") {
       if (1 == arguments.size() && arguments[0] && arguments[0]->IsFunction()) {
         AfxEnsureEngineInterop();
 
-        engine_interop_->SetRenderViewBeginCallback(
-            new AfxRenderViewBeginCallback(arguments[0], context_));
+        auto callback = new AfxRenderViewBeginCallback(arguments[0], context_);
+        engine_interop_->SetRenderViewBeginCallback(callback);
+        callback->Release();
+
+        return true;
       }
     }
 
@@ -143,8 +178,11 @@ class AfxHandler : public CefV8Accessor,
       if (1 == arguments.size() && arguments[0] && arguments[0]->IsFunction()) {
         AfxEnsureEngineInterop();
 
-        engine_interop_->SetRenderPassCallback(
-            new AfxRenderPassCallback(arguments[0], context_));
+        auto callback = new AfxRenderPassCallback(arguments[0], context_);
+        engine_interop_->SetRenderPassCallback(callback);
+        callback->Release();
+
+        return true;
       }
     }
 
@@ -152,8 +190,11 @@ class AfxHandler : public CefV8Accessor,
       if (1 == arguments.size() && arguments[0] && arguments[0]->IsFunction()) {
         AfxEnsureEngineInterop();
 
-        engine_interop_->SetHudBeginCallback(
-            new AfxEventCallback(arguments[0], context_));
+        auto callback = new AfxEventCallback(arguments[0], context_);
+        engine_interop_->SetHudBeginCallback(callback);
+        callback->Release();
+
+        return true;
       }
     }
 
@@ -161,8 +202,11 @@ class AfxHandler : public CefV8Accessor,
       if (1 == arguments.size() && arguments[0] && arguments[0]->IsFunction()) {
         AfxEnsureEngineInterop();
 
-        engine_interop_->SetHudEndCallback(
-            new AfxEventCallback(arguments[0], context_));
+        auto callback = new AfxEventCallback(arguments[0], context_);
+        engine_interop_->SetHudEndCallback(callback);
+        callback->Release();
+
+        return true;
       }
     }
 
@@ -170,8 +214,11 @@ class AfxHandler : public CefV8Accessor,
       if (1 == arguments.size() && arguments[0] && arguments[0]->IsFunction()) {
         AfxEnsureEngineInterop();
 
-        engine_interop_->SetRenderViewEndCallback(
-            new AfxEventCallback(arguments[0], context_));
+        auto callback = new AfxEventCallback(arguments[0], context_);
+        engine_interop_->SetRenderViewEndCallback(callback);
+        callback->Release();
+
+        return true;
       }
     }
 
@@ -183,6 +230,8 @@ class AfxHandler : public CefV8Accessor,
           SetArguments(message->GetArgumentList(), arguments);
         }
         frame_->SendProcessMessage(PID_BROWSER, message);
+
+        return true;
       }
     }
 
@@ -194,6 +243,100 @@ class AfxHandler : public CefV8Accessor,
           SetArguments(message->GetArgumentList(), arguments);
         }
         frame_->SendProcessMessage(PID_BROWSER, message);
+
+        return true;
+      }
+    }
+
+    if (name == "addCalcHandle") {
+      if (2 == arguments.size() && arguments[0] && arguments[1] && arguments[0]->IsString() && arguments[1]->IsFunction()) {
+        AfxEnsureEngineInterop();
+
+        std::string valName = arguments[0]->GetStringValue().ToString();
+        auto callback = new AfxHandleCalcCallback(
+            engine_interop_, valName.c_str(),
+                                                  arguments[1], context_);
+        engine_interop_->AddHandleCalcCallback(valName.c_str(), callback);
+        callback->Release();
+
+        return true;
+      }
+    }
+
+    if (name == "addCalcVecAng") {
+      if (2 == arguments.size() && arguments[0] && arguments[1] &&
+          arguments[0]->IsString() && arguments[1]->IsFunction()) {
+        AfxEnsureEngineInterop();
+
+        std::string valName = arguments[0]->GetStringValue().ToString();
+        auto callback = new AfxVecAngCalcCallback(
+            engine_interop_, valName.c_str(),
+                                                  arguments[1], context_);
+        engine_interop_->AddVecAngCalcCallback(valName.c_str(), callback);
+        callback->Release();
+
+        return true;
+      }
+    }
+
+    if (name == "addCalcCam") {
+      if (2 == arguments.size() && arguments[0] && arguments[1] &&
+          arguments[0]->IsString() && arguments[1]->IsFunction()) {
+        AfxEnsureEngineInterop();
+
+        std::string valName = arguments[0]->GetStringValue().ToString();
+        auto callback = new AfxCamCalcCallback(engine_interop_, valName.c_str(),
+                                                  arguments[1], context_);
+        engine_interop_->AddCamCalcCallback(valName.c_str(), callback);
+        callback->Release();
+
+        return true;
+      }
+    }
+
+    if (name == "addCalcFov") {
+      if (2 == arguments.size() && arguments[0] && arguments[1] &&
+          arguments[0]->IsString() && arguments[1]->IsFunction()) {
+        AfxEnsureEngineInterop();
+
+        std::string valName = arguments[0]->GetStringValue().ToString();
+        auto callback = new AfxFovCalcCallback(engine_interop_, valName.c_str(),
+                                               arguments[1], context_);
+        engine_interop_->AddFovCalcCallback(valName.c_str(), callback);
+        callback->Release();
+
+        return true;
+      }
+    }
+
+    if (name == "addCalcBool") {
+      if (2 == arguments.size() && arguments[0] && arguments[1] &&
+          arguments[0]->IsString() && arguments[1]->IsFunction()) {
+        AfxEnsureEngineInterop();
+
+        std::string valName = arguments[0]->GetStringValue().ToString();
+        auto callback = new AfxBoolCalcCallback(
+            engine_interop_, valName.c_str(),
+                                               arguments[1], context_);
+        engine_interop_->AddBoolCalcCallback(valName.c_str(), callback);
+        callback->Release();
+
+        return true;
+      }
+    }
+
+    if (name == "addCalcInt") {
+      if (2 == arguments.size() && arguments[0] && arguments[1] &&
+          arguments[0]->IsString() && arguments[1]->IsFunction()) {
+        AfxEnsureEngineInterop();
+
+        std::string valName = arguments[0]->GetStringValue().ToString();
+        auto callback = new AfxIntCalcCallback(engine_interop_, valName.c_str(),
+                                                arguments[1], context_);
+        engine_interop_->AddIntCalcCallback(valName.c_str(), callback);
+        callback->Release();
+
+        return true;
       }
     }
 
@@ -222,6 +365,10 @@ class AfxHandler : public CefV8Accessor,
     }
     if (name == "onCommands") {
       retval = fn_on_commands_;
+      return true;
+    }
+    if (name == "onNewConnection") {
+      retval = fn_on_new_connection_;
       return true;
     }
     if (name == "onRenderViewBegin") {
@@ -260,6 +407,30 @@ class AfxHandler : public CefV8Accessor,
       retval = fn_schedule_drawing_connect_;
       return true;
     }
+    if (name == "addCalcHandle") {
+      retval = fn_add_calc_handle_;
+      return true;
+    }
+    if (name == "addCalcVecAng") {
+      retval = fn_add_calc_vecang_;
+      return true;
+    }
+    if (name == "addCalcCam") {
+      retval = fn_add_calc_cam_;
+      return true;
+    }
+    if (name == "addCalcFov") {
+      retval = fn_add_calc_fov_;
+      return true;
+    }
+    if (name == "addCalcBool") {
+      retval = fn_add_calc_bool_;
+      return true;
+    }
+    if (name == "addCalcInt") {
+      retval = fn_add_calc_int_;
+      return true;
+    }
 
     // Value does not exist.
     return false;
@@ -291,6 +462,7 @@ class AfxHandler : public CefV8Accessor,
       fn_get_connected_ = nullptr;
       fn_close_ = nullptr;
       fn_on_commands_ = nullptr;
+      fn_on_new_connection_ = nullptr;
       fn_on_render_ = nullptr;
       fn_on_view_override_ = nullptr;
       fn_on_render_pass_ = nullptr;
@@ -300,6 +472,12 @@ class AfxHandler : public CefV8Accessor,
       fn_schedule_command_ = nullptr;
       fn_schedule_drawing_begin_frame_ = nullptr;
       fn_schedule_drawing_connect_ = nullptr;
+      fn_add_calc_handle_ = nullptr;
+      fn_add_calc_vecang_ = nullptr;
+      fn_add_calc_cam_ = nullptr;
+      fn_add_calc_fov_ = nullptr;
+      fn_add_calc_bool_ = nullptr;
+      fn_add_calc_int_ = nullptr;
   }
 
  private:
@@ -410,13 +588,9 @@ class AfxHandler : public CefV8Accessor,
   class AfxRenderViewBeginCallback : public advancedfx::interop::CRefCounted,
                                public advancedfx::interop::IRenderViewBeginCallback {
    public:
-    AfxRenderViewBeginCallback(
-        CefRefPtr<CefV8Value> callbackFunc,
-        CefRefPtr<CefV8Context> callbackContext)
-        : m_CallbackFunc(callbackFunc), m_CallbackContext(callbackContext)
-       {
-
-    }
+    AfxRenderViewBeginCallback(CefRefPtr<CefV8Value> callbackFunc,
+                               CefRefPtr<CefV8Context> callbackContext)
+        : m_CallbackFunc(callbackFunc), m_CallbackContext(callbackContext) {}
 
      virtual void AddRef() override {
       advancedfx::interop::CRefCounted::AddRef();
@@ -694,6 +868,418 @@ class AfxHandler : public CefV8Accessor,
     CefRefPtr<CefV8Context> m_CallbackContext;
   };
 
+ class AfxMirvCalcCallback : public CefV8Accessor, public CefV8Handler
+ {
+   public:
+   AfxMirvCalcCallback(advancedfx::interop::IEngineInterop* engineInterop,
+                       const char* name) : m_EngineInterop(engineInterop), m_Name(name) {
+      m_EngineInterop->AddRef();
+
+      m_Fn_Release = CefV8Value::CreateFunction("release", this);
+
+      m_Obj = CefV8Value::CreateObject(this, nullptr);
+      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
+                    V8_PROPERTY_ATTRIBUTE_NONE);
+
+      this->AddRef(); // AfxCallback has our Refcounted logic, meaning initial count = 1.
+   }
+
+    virtual bool Execute(const CefString& name,
+                        CefRefPtr<CefV8Value> object,
+                        const CefV8ValueList& arguments,
+                        CefRefPtr<CefV8Value>& retval,
+                        CefString& exception) override {
+     if (name == "release") {
+        retval = CefV8Value::CreateBool(ReleaseCalc());
+       return true;
+     }
+
+     return false;
+   }
+
+    virtual bool Get(const CefString& name,
+                    const CefRefPtr<CefV8Value> object,
+                    CefRefPtr<CefV8Value>& retval,
+                    CefString& /*exception*/) override {
+     if (name == "release") {
+       retval = m_Fn_Release;
+       return true;
+     }
+
+     return false;
+   }
+
+    CefRefPtr<CefV8Value> GetObj() {
+        return m_Obj;
+   }
+
+      bool Set(const CefString& name,
+             const CefRefPtr<CefV8Value> object,
+             const CefRefPtr<CefV8Value> value,
+             CefString& /*exception*/) override {
+      return false;
+      }
+
+   IMPLEMENT_REFCOUNTING(AfxMirvCalcCallback);
+
+   protected:
+   advancedfx::interop::IEngineInterop* m_EngineInterop;
+   std::string m_Name;
+
+   virtual ~AfxMirvCalcCallback() {
+       ReleaseCalc();
+   }
+
+   virtual void Unregister() = 0;
+
+   private:
+   CefRefPtr<CefV8Value> m_Fn_Release;
+    CefRefPtr<CefV8Value> m_Obj;
+   bool m_ReleasedCalc = false;
+    bool ReleaseCalc() {
+     if (m_ReleasedCalc)
+        return false;
+
+      m_ReleasedCalc = true;
+      Unregister();
+      m_EngineInterop->Release();
+
+      return true;
+    }
+
+ };
+
+ class AfxHandleCalcCallback : public AfxMirvCalcCallback,
+        public advancedfx::interop::IHandleCalcCallback {
+  protected:
+   virtual void Unregister() override {
+     m_EngineInterop->RemoveHandleCalcCallback(m_Name.c_str(), this);
+   }
+
+   public:
+   AfxHandleCalcCallback(advancedfx::interop::IEngineInterop* engineInterop,
+                         const char* name, CefRefPtr<CefV8Value> callbackFunc,
+                     CefRefPtr<CefV8Context> callbackContext)
+        : AfxMirvCalcCallback(engineInterop, name), m_CallbackFunc(callbackFunc),
+          m_CallbackContext(callbackContext) {}
+
+    virtual void advancedfx::interop::IHandleCalcCallback::AddRef() {
+     AfxMirvCalcCallback::Release();
+    }
+
+   virtual void advancedfx::interop::IHandleCalcCallback::Release() {
+      AfxMirvCalcCallback::AddRef();
+    }
+
+    virtual void HandleCalcCallback(
+        const struct advancedfx::interop::HandleCalcResult_s* result) override {
+
+      CefV8ValueList args;
+
+      if (result) {
+        CefRefPtr<CefV8Value> v8Obj =
+            CefV8Value::CreateObject(nullptr, nullptr);
+
+        v8Obj->SetValue("intHandle", CefV8Value::CreateInt(result->IntHandle),
+                        V8_PROPERTY_ATTRIBUTE_NONE);
+
+        args.push_back(v8Obj);
+      } else {
+        args.push_back(CefV8Value::CreateNull());
+      }
+
+      m_CallbackFunc->ExecuteFunctionWithContext(m_CallbackContext, NULL, args);
+    }
+
+   private:
+    CefRefPtr<CefV8Value> m_CallbackFunc;
+    CefRefPtr<CefV8Context> m_CallbackContext;
+  };
+
+ class AfxVecAngCalcCallback
+      : public AfxMirvCalcCallback,
+        public advancedfx::interop::IVecAngCalcCallback {
+   protected:
+    virtual void Unregister() override {
+      m_EngineInterop->RemoveVecAngCalcCallback(m_Name.c_str(), this);
+    }
+
+   public:
+    AfxVecAngCalcCallback(advancedfx::interop::IEngineInterop* engineInterop,
+                          const char* name,
+                          CefRefPtr<CefV8Value> callbackFunc,
+                          CefRefPtr<CefV8Context> callbackContext)
+        : AfxMirvCalcCallback(engineInterop, name),
+          m_CallbackFunc(callbackFunc),
+          m_CallbackContext(callbackContext) {}
+
+    virtual void advancedfx::interop::IVecAngCalcCallback::AddRef() {
+      AfxMirvCalcCallback::Release();
+    }
+
+    virtual void advancedfx::interop::IVecAngCalcCallback::Release() {
+      AfxMirvCalcCallback::AddRef();
+    }
+
+    virtual void VecAngCalcCallback(
+        const struct advancedfx::interop::VecAngCalcResult_s* result) override {
+      CefV8ValueList args;
+
+      if (result) {
+        CefRefPtr<CefV8Value> v8Obj =
+            CefV8Value::CreateObject(nullptr, nullptr);
+
+        CefRefPtr<CefV8Value> v8Vector =
+            CefV8Value::CreateObject(nullptr, nullptr);
+        v8Vector->SetValue("x", CefV8Value::CreateDouble(result->Vector.X),
+                           V8_PROPERTY_ATTRIBUTE_NONE);
+        v8Vector->SetValue("y", CefV8Value::CreateDouble(result->Vector.Y),
+                           V8_PROPERTY_ATTRIBUTE_NONE);
+        v8Vector->SetValue("z", CefV8Value::CreateDouble(result->Vector.Z),
+                           V8_PROPERTY_ATTRIBUTE_NONE);
+        v8Obj->SetValue("vector", v8Vector,
+                        V8_PROPERTY_ATTRIBUTE_NONE);
+
+        CefRefPtr<CefV8Value> v8QAngle =
+            CefV8Value::CreateObject(nullptr, nullptr);
+        v8Vector->SetValue("pitch", CefV8Value::CreateDouble(result->QAngle.Pitch),
+                           V8_PROPERTY_ATTRIBUTE_NONE);
+        v8Vector->SetValue("yaw", CefV8Value::CreateDouble(result->QAngle.Yaw),
+                           V8_PROPERTY_ATTRIBUTE_NONE);
+        v8Vector->SetValue("roll", CefV8Value::CreateDouble(result->QAngle.Roll),
+                           V8_PROPERTY_ATTRIBUTE_NONE);
+        v8Obj->SetValue("qAngle", v8QAngle, V8_PROPERTY_ATTRIBUTE_NONE);
+
+        args.push_back(v8Obj);
+      } else {
+        args.push_back(CefV8Value::CreateNull());
+      }
+
+      m_CallbackFunc->ExecuteFunctionWithContext(m_CallbackContext, NULL, args);
+    }
+
+   private:
+    CefRefPtr<CefV8Value> m_CallbackFunc;
+    CefRefPtr<CefV8Context> m_CallbackContext;
+  };
+
+  class AfxCamCalcCallback : public AfxMirvCalcCallback,
+                             public advancedfx::interop::ICamCalcCallback {
+   protected:
+    virtual void Unregister() override {
+      m_EngineInterop->RemoveCamCalcCallback(m_Name.c_str(), this);
+    }
+
+   public:
+    AfxCamCalcCallback(advancedfx::interop::IEngineInterop* engineInterop,
+                          const char* name,
+                          CefRefPtr<CefV8Value> callbackFunc,
+                          CefRefPtr<CefV8Context> callbackContext)
+        : AfxMirvCalcCallback(engineInterop, name),
+          m_CallbackFunc(callbackFunc),
+          m_CallbackContext(callbackContext) {}
+
+    virtual void advancedfx::interop::ICamCalcCallback::AddRef() {
+      AfxMirvCalcCallback::Release();
+    }
+
+    virtual void advancedfx::interop::ICamCalcCallback::Release() {
+      AfxMirvCalcCallback::AddRef();
+    }
+
+    virtual void CamCalcCallback(
+        const struct advancedfx::interop::CamCalcResult_s* result) override {
+      CefV8ValueList args;
+
+      if (result) {
+        CefRefPtr<CefV8Value> v8Obj =
+            CefV8Value::CreateObject(nullptr, nullptr);
+
+        CefRefPtr<CefV8Value> v8Vector =
+            CefV8Value::CreateObject(nullptr, nullptr);
+        v8Vector->SetValue("x", CefV8Value::CreateDouble(result->Vector.X),
+                           V8_PROPERTY_ATTRIBUTE_NONE);
+        v8Vector->SetValue("y", CefV8Value::CreateDouble(result->Vector.Y),
+                           V8_PROPERTY_ATTRIBUTE_NONE);
+        v8Vector->SetValue("z", CefV8Value::CreateDouble(result->Vector.Z),
+                           V8_PROPERTY_ATTRIBUTE_NONE);
+        v8Obj->SetValue("vector", v8Vector, V8_PROPERTY_ATTRIBUTE_NONE);
+
+        CefRefPtr<CefV8Value> v8QAngle =
+            CefV8Value::CreateObject(nullptr, nullptr);
+        v8Vector->SetValue("pitch",
+                           CefV8Value::CreateDouble(result->QAngle.Pitch),
+                           V8_PROPERTY_ATTRIBUTE_NONE);
+        v8Vector->SetValue("yaw", CefV8Value::CreateDouble(result->QAngle.Yaw),
+                           V8_PROPERTY_ATTRIBUTE_NONE);
+        v8Vector->SetValue("roll",
+                           CefV8Value::CreateDouble(result->QAngle.Roll),
+                           V8_PROPERTY_ATTRIBUTE_NONE);
+        v8Obj->SetValue("qAngle", v8QAngle, V8_PROPERTY_ATTRIBUTE_NONE);
+
+        v8Obj->SetValue("fov", CefV8Value::CreateDouble(result->Fov),
+                        V8_PROPERTY_ATTRIBUTE_NONE);
+
+        args.push_back(v8Obj);
+      } else {
+        args.push_back(CefV8Value::CreateNull());
+      }
+
+      m_CallbackFunc->ExecuteFunctionWithContext(m_CallbackContext, NULL, args);
+    }
+
+   private:
+    CefRefPtr<CefV8Value> m_CallbackFunc;
+    CefRefPtr<CefV8Context> m_CallbackContext;
+  };
+
+class AfxFovCalcCallback : public AfxMirvCalcCallback,
+                             public advancedfx::interop::IFovCalcCallback {
+   protected:
+    virtual void Unregister() override {
+      m_EngineInterop->RemoveFovCalcCallback(m_Name.c_str(), this);
+    }
+
+   public:
+    AfxFovCalcCallback(advancedfx::interop::IEngineInterop* engineInterop,
+                       const char* name,
+                       CefRefPtr<CefV8Value> callbackFunc,
+                       CefRefPtr<CefV8Context> callbackContext)
+        : AfxMirvCalcCallback(engineInterop, name),
+          m_CallbackFunc(callbackFunc),
+          m_CallbackContext(callbackContext) {}
+
+    virtual void advancedfx::interop::IFovCalcCallback::AddRef() {
+      AfxMirvCalcCallback::Release();
+    }
+
+    virtual void advancedfx::interop::IFovCalcCallback::Release() {
+      AfxMirvCalcCallback::AddRef();
+    }
+
+
+    virtual void FovCalcCallback(
+        const struct advancedfx::interop::FovCalcResult_s* result) override {
+      CefV8ValueList args;
+
+      if (result) {
+        CefRefPtr<CefV8Value> v8Obj =
+            CefV8Value::CreateObject(nullptr, nullptr);
+
+        v8Obj->SetValue("fov", CefV8Value::CreateDouble(result->Fov),
+                        V8_PROPERTY_ATTRIBUTE_NONE);
+
+        args.push_back(v8Obj);
+      } else {
+        args.push_back(CefV8Value::CreateNull());
+      }
+
+      m_CallbackFunc->ExecuteFunctionWithContext(m_CallbackContext, NULL, args);
+    }
+
+   private:
+    CefRefPtr<CefV8Value> m_CallbackFunc;
+    CefRefPtr<CefV8Context> m_CallbackContext;
+  };
+
+
+  class AfxBoolCalcCallback : public AfxMirvCalcCallback,
+                              public advancedfx::interop::IBoolCalcCallback {
+   protected:
+    virtual void Unregister() override {
+      m_EngineInterop->RemoveBoolCalcCallback(m_Name.c_str(), this);
+    }
+
+   public:
+    AfxBoolCalcCallback(advancedfx::interop::IEngineInterop* engineInterop,
+                       const char* name,
+                       CefRefPtr<CefV8Value> callbackFunc,
+                       CefRefPtr<CefV8Context> callbackContext)
+        : AfxMirvCalcCallback(engineInterop, name),
+          m_CallbackFunc(callbackFunc),
+          m_CallbackContext(callbackContext) {}
+
+    virtual void advancedfx::interop::IBoolCalcCallback::AddRef() {
+      AfxMirvCalcCallback::Release();
+    }
+
+    virtual void advancedfx::interop::IBoolCalcCallback::Release() {
+      AfxMirvCalcCallback::AddRef();
+    }
+
+
+    virtual void BoolCalcCallback(
+        const struct advancedfx::interop::BoolCalcResult_s* result) override {
+      CefV8ValueList args;
+
+      if (result) {
+        CefRefPtr<CefV8Value> v8Obj =
+            CefV8Value::CreateObject(nullptr, nullptr);
+
+        v8Obj->SetValue("result", CefV8Value::CreateBool(result->Result),
+                        V8_PROPERTY_ATTRIBUTE_NONE);
+
+        args.push_back(v8Obj);
+      } else {
+        args.push_back(CefV8Value::CreateNull());
+      }
+
+      m_CallbackFunc->ExecuteFunctionWithContext(m_CallbackContext, NULL, args);
+    }
+
+   private:
+    CefRefPtr<CefV8Value> m_CallbackFunc;
+    CefRefPtr<CefV8Context> m_CallbackContext;
+  };
+
+  class AfxIntCalcCallback : public AfxMirvCalcCallback,
+                              public advancedfx::interop::IIntCalcCallback {
+   protected:
+    virtual void Unregister() override {
+      m_EngineInterop->RemoveIntCalcCallback(m_Name.c_str(), this);
+    }
+
+   public:
+    AfxIntCalcCallback(advancedfx::interop::IEngineInterop* engineInterop,
+                        const char* name,
+                        CefRefPtr<CefV8Value> callbackFunc,
+                        CefRefPtr<CefV8Context> callbackContext)
+        : AfxMirvCalcCallback(engineInterop, name),
+          m_CallbackFunc(callbackFunc),
+          m_CallbackContext(callbackContext) {}
+
+    virtual void advancedfx::interop::IIntCalcCallback::AddRef() {
+      AfxMirvCalcCallback::Release();
+    }
+
+    virtual void advancedfx::interop::IIntCalcCallback::Release() {
+      AfxMirvCalcCallback::AddRef();
+    }
+
+    virtual void IntCalcCallback(
+        const struct advancedfx::interop::IntCalcResult_s* result) override {
+      CefV8ValueList args;
+
+      if (result) {
+        CefRefPtr<CefV8Value> v8Obj =
+            CefV8Value::CreateObject(nullptr, nullptr);
+
+        v8Obj->SetValue("result", CefV8Value::CreateInt(result->Result),
+                        V8_PROPERTY_ATTRIBUTE_NONE);
+
+        args.push_back(v8Obj);
+      } else {
+        args.push_back(CefV8Value::CreateNull());
+      }
+
+      m_CallbackFunc->ExecuteFunctionWithContext(m_CallbackContext, NULL, args);
+    }
+
+   private:
+    CefRefPtr<CefV8Value> m_CallbackFunc;
+    CefRefPtr<CefV8Context> m_CallbackContext;
+  };
+
   CefRefPtr<CefBrowser> const browser_;
   CefRefPtr<CefFrame> const frame_;
   CefRefPtr<CefV8Context> const context_;
@@ -702,6 +1288,7 @@ class AfxHandler : public CefV8Accessor,
   CefRefPtr<CefV8Value> fn_close_;
   advancedfx::interop::IEngineInterop* engine_interop_ = nullptr;
   CefString pipe_name_ = "advancedfxInterop";
+  CefRefPtr<CefV8Value> fn_on_new_connection_;
   CefRefPtr<CefV8Value> fn_on_commands_;
   CefRefPtr<CefV8Value> fn_schedule_command_;
   CefRefPtr<CefV8Value> fn_on_view_override_;
@@ -712,6 +1299,12 @@ class AfxHandler : public CefV8Accessor,
   CefRefPtr<CefV8Value> fn_on_render_view_end_;
   CefRefPtr<CefV8Value> fn_schedule_drawing_begin_frame_;
   CefRefPtr<CefV8Value> fn_schedule_drawing_connect_;
+  CefRefPtr<CefV8Value> fn_add_calc_handle_;
+  CefRefPtr<CefV8Value> fn_add_calc_vecang_;
+  CefRefPtr<CefV8Value> fn_add_calc_cam_;
+  CefRefPtr<CefV8Value> fn_add_calc_fov_;
+  CefRefPtr<CefV8Value> fn_add_calc_bool_;
+  CefRefPtr<CefV8Value> fn_add_calc_int_;
 
   void AfxEnsureEngineInterop() {
     if (nullptr == engine_interop_) {

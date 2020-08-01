@@ -256,6 +256,9 @@ class __declspec(novtable) IEngineInterop abstract
 
   virtual void ScheduleCommand(const char* command) = 0;
 
+  virtual void SetNewConnectionCallback(
+      class IEventCallback* eventCallback) = 0;
+
   virtual void SetOnViewOverrideCallback(
       class IOnViewOverrideCallback* onViewOverrideCallback) = 0;
 

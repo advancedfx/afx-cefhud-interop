@@ -685,6 +685,9 @@ class CEngineInterop : public CInterop, public IEngineInterop {
       m_CommandsCallback->Release();
 
     m_CommandsCallback = commandsCallback;
+
+    if (m_CommandsCallback)
+      m_CommandsCallback->AddRef();
  }
 
   virtual void SetRenderViewBeginCallback(class IRenderViewBeginCallback* renderCallback) {
@@ -692,9 +695,22 @@ class CEngineInterop : public CInterop, public IEngineInterop {
      m_RenderViewBeginCallback->Release();
 
    m_RenderViewBeginCallback = renderCallback;
+
+   if (m_RenderViewBeginCallback)
+     m_RenderViewBeginCallback->AddRef();
   }
 
   virtual void ScheduleCommand(const char* command) { m_Commands.emplace(command);
+  }
+
+  virtual void SetNewConnectionCallback(class IEventCallback* eventCallback) {
+    if (m_NewConnectionCallback)
+      m_NewConnectionCallback->Release();
+
+    m_NewConnectionCallback = eventCallback;
+
+    if (m_NewConnectionCallback)
+      m_NewConnectionCallback->AddRef();
   }
 
   virtual void SetOnViewOverrideCallback(
@@ -703,6 +719,9 @@ class CEngineInterop : public CInterop, public IEngineInterop {
       m_OnViewOverrideCallback->Release();
 
     m_OnViewOverrideCallback = onViewOverrideCallback;
+
+    if (m_OnViewOverrideCallback)
+      m_OnViewOverrideCallback->AddRef();
   }
 
   virtual void SetRenderPassCallback(
@@ -711,6 +730,9 @@ class CEngineInterop : public CInterop, public IEngineInterop {
       m_RenderPassCallback->Release();
 
     m_RenderPassCallback = renderPassCallback;
+
+    if (m_RenderPassCallback)
+      m_RenderPassCallback->AddRef();
   }
 
   virtual void SetHudBeginCallback(class IEventCallback* eventCallback) {
@@ -725,6 +747,9 @@ class CEngineInterop : public CInterop, public IEngineInterop {
       m_HudEndCallback->Release();
 
    m_HudEndCallback = eventCallback;
+
+   if (m_HudEndCallback)
+     m_HudEndCallback->AddRef();
   }
 
   virtual void SetRenderViewEndCallback(class IEventCallback* eventCallback) {
@@ -732,6 +757,9 @@ class CEngineInterop : public CInterop, public IEngineInterop {
       m_RenderViewEndCallback->Release();
 
     m_RenderViewEndCallback = eventCallback;
+
+    if (m_RenderViewEndCallback)
+      m_RenderViewEndCallback->AddRef();
   }
 
   virtual void AddHandleCalcCallback(const char* name,
@@ -800,6 +828,8 @@ class CEngineInterop : public CInterop, public IEngineInterop {
       m_CommandsCallback->Release();
     if (m_RenderViewBeginCallback)
       m_RenderViewBeginCallback->Release();
+    if (m_NewConnectionCallback)
+      m_NewConnectionCallback->Release();
     if (m_OnViewOverrideCallback)
       m_OnViewOverrideCallback->Release();
     if (m_RenderPassCallback)
@@ -1141,6 +1171,9 @@ class CEngineInterop : public CInterop, public IEngineInterop {
     if (!m_PipeServer->Flush())
       return false;
 
+    if (m_NewConnectionCallback)
+      m_NewConnectionCallback->EventCallback();
+
     return true;
   }
 
@@ -1168,6 +1201,7 @@ class CEngineInterop : public CInterop, public IEngineInterop {
 
   std::queue<std::string> m_Commands;
 
+  class IEventCallback* m_NewConnectionCallback = nullptr;
   class IOnViewOverrideCallback* m_OnViewOverrideCallback = nullptr;
   class IRenderPassCallback* m_RenderPassCallback = nullptr;
   class IEventCallback* m_HudBeginCallback = nullptr;
