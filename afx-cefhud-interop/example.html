@@ -136,6 +136,44 @@ AfxAddMirvCalcArgInt {
 
 // For AFX_RENDERPASS_STATE see code bellow.
 
+// For AFX_GAMEVENT_ENRICHMENTS see code bellow.
+
+AfxGameEventKey = {
+	type: Int, // See AFX_GAMEVENT_TYPES
+	value: String|Double|Int|Int|UInt|Bool|Array<UInt,2>, // Types are in this order: AFX_GAMEVENT_TYPES.CString AFX_GAMEVENT_TYPES.Float, AFX_GAMEVENT_TYPES.Long, AFX_GAMEVENT_TYPES.Short, AFX_GAMEVENT_TYPES.Byte, AFX_GAMEVENT_TYPES.Bool, AFX_GAMEVENT_TYPES.Uint64 (0 = lo, 1 = hi). Keys of other types are omitted.
+	[enrichments: {
+		[userIdWithSteamId: Array<UInt,2>,] // 0 = lo, 1 = hi.
+		[entnumWithOrigin: {
+			x: Double,
+			y: Double,
+			z: Double
+		},]
+		[entnumWithAngles: {
+			pitch: Double,
+			yaw: Double,
+			roll: Double
+		},]
+		[useridWithEyePosition: {
+			x: Double,
+			y: Double,
+			z: Double
+		},]
+		[useridWithEyeAngels: {
+			pitch: Double,
+			yaw: Double,
+			roll: Double
+		},]
+	}] // If enriched this is present.
+};
+
+AfxGameEvent = {
+	name: String,
+	[clientTime: Double,] // Only for afxInterop.gameEventSetTransmitClientTime(1).
+	[tick: Int,] // Only for afxInterop.gameEventSetTransmitTick(1).
+	[systemTime: Date,] // Only for afxInterop.gameEventSetTransmitSystemTime(1).
+	keys: Dictionary<key=String,value=AfxGameEventKey>
+};
+
 AfxInterop = {
 	pipeName: String, // name part to use for the pipe (set before re-connecting)
 	connect: Function() => Bool, // interop connection pump, returns true when pump is active
@@ -158,6 +196,15 @@ AfxInterop = {
 	addCalcFov: Function(name=String,Function(null|AfxAddMirvCalcArgFov)) => AfxAddMirvCalcResult, // Get data from a mirv_calc fov calc (can be called with null if not available).
 	addCalcBool: Function(name=String,Function(null|AfxAddMirvCalcArgBool)) => AfxAddMirvCalcResult, // Get data from a mirv_calc bool calc (can be called with null if not available).
 	addCalcInt: Function(name=String,Function(null|AfxAddMirvCalcArgInt)) => AfxAddMirvCalcResult, // Get data from a mirv_calc int calc (can be called with null if not available).
+	gameEventAllowAdd: Function(eventName=String), // SHOULD ONLY BE USED IN THE BEFORE OR AFTER afxInterop.connect() WORKER FUNCTION AND NOT DURING EVENTS OF IT (otherwise side effect hazards ahead). Add event allowed to transferred (if empty all are allowed).
+	gameEventAllowRemove: Function(eventName=String), // SHOULD ONLY BE USED IN THE BEFORE OR AFTER afxInterop.connect() WORKER FUNCTION AND NOT DURING EVENTS OF IT (otherwise side effect hazards ahead). Remove event allowed to transferred (if empty all are allowed).
+	gameEventDenyAdd: Function(eventName=String), // SHOULD ONLY BE USED IN THE BEFORE OR AFTER afxInterop.connect() WORKER FUNCTION AND NOT DURING EVENTS OF IT (otherwise side effect hazards ahead). Add event to deny from transfer.
+	gameEventDenyRemove: Function(eventName=String), // SHOULD ONLY BE USED IN THE BEFORE OR AFTER afxInterop.connect() WORKER FUNCTION AND NOT DURING EVENTS OF IT (otherwise side effect hazards ahead). Remove event to deny from transfer.
+	gameEventSetEnrichment: Function(eventName=String,keyName=String,enrichments=UInt), // SHOULD ONLY BE USED IN THE BEFORE OR AFTER afxInterop.connect() WORKER FUNCTION AND NOT DURING EVENTS OF IT (otherwise side effect hazards ahead). Set enrichment for a key of an event. Set enrichments=0 to remove enrichment, otherwise binary OR of AFX_GAMEVENT_ENRICHMENTS properties.
+	onGameEvent: Function(Function(null|AfxGameEvent)), // Set game event callback.
+	gameEventSetTransmitClientTime: Function(transmit=Bool), // SHOULD ONLY BE USED IN THE BEFORE OR AFTER afxInterop.connect() WORKER FUNCTION AND NOT DURING EVENTS OF IT (otherwise side effect hazards ahead).
+	gameEventSetTransmitTick: Function(transmit=Bool), // SHOULD ONLY BE USED IN THE BEFORE OR AFTER afxInterop.connect() WORKER FUNCTION AND NOT DURING EVENTS OF IT (otherwise side effect hazards ahead).
+	gameEventSetTransmitSystemTime: Function(transmit=Bool), // SHOULD ONLY BE USED IN THE BEFORE OR AFTER afxInterop.connect() WORKER FUNCTION AND NOT DURING EVENTS OF IT (otherwise side effect hazards ahead).
 }
 
 -->
@@ -169,11 +216,34 @@ AfxInterop = {
 </style>
 
 <body>
-<h1 style="background: red; color: yellow">Hello World from afx-cefhud-interop</h1>
+<div style="background: rgba(0,0,0,0.8); color: #fff; padding: 1rem;">
+<h1 style="color: #00ff00">Hello World from afx-cefhud-interop</h1>
+<h2>Last game events:</h2>
+<div id="gameEvents" style="border:1px solid #fff"></div>
+</div>
 </body>
 
 <script>
 	{
+		var AFX_GAMEVENT_ENRICHMENTS = {
+			UserIdWithSteamId: (1 << 0),
+			EntnumWithOrigin: (1 << 1),
+			EntnumWithAngles: (1 << 2),
+			UseridWithEyePosition: (1 << 3),
+			UseridWithEyeAngels: (1<<4)
+		};
+	
+		var AFX_GAMEVENT_TYPES = {
+			Local: 0,
+			CString: 1,
+			Float: 2,
+			Long: 3,
+			Short: 4,
+			Byte: 5,
+			Bool: 6,
+			Uint64: 7
+		}
+
 		var AFX_RENDERPASS_STATE = {
 			BeforeTranslucentShadow: 2,
 			AfterTranslucentShadow: 3,
@@ -182,6 +252,8 @@ AfxInterop = {
 		};
 		var afxInterop = window.afxInterop;
 		var afxRenderInfo;
+		
+		var divGameEvents = document.getElementById('gameEvents');
 		
 		afxInterop.onNewConnection(function(){
 		
@@ -215,7 +287,7 @@ AfxInterop = {
 							}
 							
 							if(handled) continue;
-						}					
+						}
 						afxInterop.scheduleCommand("echo \""+command[0]+" cefhud echo <sText>+ - echo text back to CS:GO.\"");
 					}
 				}
@@ -280,9 +352,9 @@ AfxInterop = {
 		/*
 		afxInterop.onHudBegin(function afxOnHudBegin(){
 			var texWidth = renderView.width - renderView.x;
-			var texHeight = renderView.height - renderView.y;	
+			var texHeight = renderView.height - renderView.y;
 			afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
-			afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);			
+			afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);
 		});
 		*/
 		
@@ -290,21 +362,38 @@ AfxInterop = {
 		afxInterop.onHudEnd(function(){
 		
 			var texWidth = renderView.width - renderView.x;
-			var texHeight = renderView.height - renderView.y;	
+			var texHeight = renderView.height - renderView.y;
 			afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
-			afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);			
+			afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);
 		});
 		*/
 		
 		afxInterop.onRenderViewEnd(function(){
-		
+			while(divGameEvents.childNodes.length > 10) divGameEvents.lastChild.remove();
+			
 			var texWidth = afxRenderInfo.view.width - afxRenderInfo.view.x;
-			var texHeight = afxRenderInfo.view.height - afxRenderInfo.view.y;	
+			var texHeight = afxRenderInfo.view.height - afxRenderInfo.view.y;
 			afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
-			afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);		
+			afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);
 		});
 		
+		//
+		
+		afxInterop.gameEventSetTransmitClientTime(true);
+		afxInterop.gameEventSetTransmitTick(true);
+		
+		afxInterop.onGameEvent(function(e){
+			var docP = document.createElement('p');
+			docP.appendChild(document.createTextNode(JSON.stringify(e)));
+			divGameEvents.insertBefore(docP, divGameEvents.firstChild);
+			//console.log(JSON.stringify(e));
+		});
+		
+		//
+		
 		console.log(window.afxInterop.pipeName);
+		
+		// The worker function:
 
 		setInterval(function(){
 			if(afxInterop.connect())

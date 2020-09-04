@@ -1,5 +1,10 @@
 #pragma once
 
+#include <list>
+#include <string>
+
+#include <malloc.h>
+
 namespace advancedfx {
 namespace interop {
 
@@ -124,19 +129,19 @@ class __declspec(novtable) IEventCallback abstract {
 };
 
 struct HandleCalcResult_s {
-  int IntHandle;
+  int IntHandle = -1;
 };
 
 struct Vector_s {
-  float X;
-  float Y;
-  float Z;
+  float X = 0;
+  float Y = 0;
+  float Z = 0;
 };
 
 struct QAngle_s {
-  float Pitch;
-  float Yaw;
-  float Roll;
+  float Pitch = 0;
+  float Yaw = 0;
+  float Roll = 0;
 };
 
 struct VecAngCalcResult_s {
@@ -147,19 +152,120 @@ struct VecAngCalcResult_s {
 struct CamCalcResult_s {
   struct Vector_s Vector;
   struct QAngle_s QAngle;
-  float Fov;
+  float Fov = 90.0f;
 };
 
 struct FovCalcResult_s {
-  float Fov;
+  float Fov = 90.0f;
 };
 
 struct BoolCalcResult_s {
-  bool Result;
+  bool Result = false;
 };
 
 struct IntCalcResult_s {
-  int Result;
+  int Result = 0;
+};
+
+enum class GameEventFieldType : int {
+  Local = 0,
+  CString = 1,
+  Float = 2,
+  Long = 3,
+  Short = 4,
+  Byte = 5,
+  Bool = 6,
+  Uint64 = 7
+};
+
+struct GameEventField_s {
+  const char* Key = "";
+
+  GameEventFieldType Type = GameEventFieldType::Local;
+
+  union {
+    char* CString;
+    float Float;
+    long Long;
+    short Short;
+    unsigned char Byte;
+    bool Bool;
+    uint64_t UInt64;
+  } Value;
+
+  bool HasEnrichmentUseridWithSteamId = false;
+  uint64_t EnrichmentUseridWithSteamId = 0;
+
+  bool HasEnrichmentEntnumWithOrigin = false;
+  struct Vector_s EnrichmentEntnumWithOrigin;
+
+  bool HasEnrichmentEntnumWithAngles = false;
+  struct QAngle_s EnrichmentEntnumWithAngles;
+
+  bool HasEnrichmentUseridWithEyePosition = false;
+  struct Vector_s EnrichmentUseridWithEyePosition;
+
+  bool HasEnrichmentUseridWithEyeAngels = false;
+  struct QAngle_s EnrichmentUseridWithEyeAngels;
+
+  GameEventField_s(const char* fieldKey, const std::string& fieldValue)
+      : Key(fieldKey), Type(GameEventFieldType::CString) {
+    if (nullptr != (Value.CString = (char*)malloc(sizeof(char) * (fieldValue.length() + 1))))
+      memcpy(Value.CString, fieldValue.c_str(), fieldValue.length() + 1);
+  }
+  GameEventField_s(const char* fieldKey, float fieldValue)
+      : Key(fieldKey), Type(GameEventFieldType::Float) {
+    Value.Float = fieldValue;
+  }
+  GameEventField_s(const char* fieldKey, long fieldValue)
+      : Key(fieldKey), Type(GameEventFieldType::Long) {
+    Value.Long = fieldValue;
+  }
+  GameEventField_s(const char* fieldKey, short fieldValue)
+      : Key(fieldKey), Type(GameEventFieldType::Short) {
+    Value.Short = fieldValue;
+  }
+  GameEventField_s(const char* fieldKey, unsigned char fieldValue)
+      : Key(fieldKey), Type(GameEventFieldType::Byte) {
+    Value.Byte = fieldValue;
+  }
+  GameEventField_s(const char* fieldKey, bool fieldValue)
+      : Key(fieldKey), Type(GameEventFieldType::Bool) {
+    Value.Bool = fieldValue;
+  }
+  GameEventField_s(const char* fieldKey, unsigned __int64 fieldValue)
+      : Key(fieldKey), Type(GameEventFieldType::Uint64) {
+    Value.UInt64 = fieldValue;
+  }
+
+  ~GameEventField_s() {
+    if (Type == GameEventFieldType::CString)
+      free(Value.CString);
+  }
+};
+
+struct GameEvent_s {
+  const char* Name = "";
+
+  bool HasClientTime = false;
+  float ClientTime;
+
+  bool HasTick = false;
+  int Tick;
+
+  bool HasSystemTime = false;
+  uint64_t SystemTime;
+
+  std::list<GameEventField_s> Keys;
+};
+
+class __declspec(novtable) IGameEventCallback abstract {
+ public:
+  virtual void AddRef() = 0;
+
+  virtual void Release() = 0;
+
+  virtual void GameEventCallback(const struct GameEvent_s* result) = 0;
 };
 
 class __declspec(novtable) IHandleCalcCallback abstract {
@@ -311,6 +417,22 @@ class __declspec(novtable) IEngineInterop abstract
                                   class IIntCalcCallback* callback) = 0;
   virtual void RemoveIntCalcCallback(const char* name,
                                   class IIntCalcCallback* callback) = 0;
+
+
+  virtual void GameEvents_AllowAdd(const char* pszEvent) = 0;
+  virtual void GameEvents_AllowRemove(const char* pszEvent) = 0;
+  virtual void GameEvents_DenyAdd(const char* pszEvent) = 0;
+  virtual void GameEvents_DenyRemove(const char* pszEvent) = 0;
+  virtual void GameEvents_SetEnrichment(const char* pszEvent,
+                                        const char* pszProperty,
+                                        unsigned int uiEnrichments) = 0;
+
+  virtual void SetGameEventCallback(
+      class IGameEventCallback* gameEventCallback) = 0;
+
+  virtual void GameEvents_SetTransmitClientTime(bool value) = 0;
+  virtual void GameEvents_SetTransmitTick(bool value) = 0;
+  virtual void GameEvents_SetTransmitSystemTime(bool value) = 0;
 };
 
 class IEngineInterop* CreateEngineInterop(const char * pipeName);

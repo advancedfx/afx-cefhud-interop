@@ -45,6 +45,20 @@ class AfxHandler : public CefV8Accessor,
     fn_add_calc_fov_ = CefV8Value::CreateFunction("addCalcFov", this);
     fn_add_calc_bool_ = CefV8Value::CreateFunction("addCalcBool", this);
     fn_add_calc_int_ = CefV8Value::CreateFunction("addCalcInt", this);
+    fn_game_event_allow_add = CefV8Value::CreateFunction("gameEventAllowAdd", this);
+    fn_game_event_allow_remove = CefV8Value::CreateFunction("gameEventAllowRemove", this);
+    fn_game_event_deny_add = CefV8Value::CreateFunction("gameEventDenyAdd", this);
+    fn_game_event_deny_remove = CefV8Value::CreateFunction("gameEventDenyRemove", this);
+    fn_game_event_set_enrichment_ =
+        CefV8Value::CreateFunction("gameEventSetEnrichment", this);
+    fn_on_game_event_ = CefV8Value::CreateFunction("onGameEvent", this);
+    fn_game_event_set_transmit_client_time_ =
+        CefV8Value::CreateFunction("gameEventSetTransmitClientTime", this);
+    fn_game_event_set_transmit_tick_ =
+        CefV8Value::CreateFunction("gameEventSetTransmitTick", this);
+    fn_game_event_set_transmit_system_time_ =
+        CefV8Value::CreateFunction("gameEventSetTransmitSystemTime", this);
+
 
     auto const obj = CefV8Value::CreateObject(this, nullptr);
     obj->SetValue("pipeName", V8_ACCESS_CONTROL_DEFAULT,
@@ -76,6 +90,36 @@ class AfxHandler : public CefV8Accessor,
     obj->SetValue("scheduleDrawingBeginFrame", V8_ACCESS_CONTROL_DEFAULT,
                   V8_PROPERTY_ATTRIBUTE_NONE);
     obj->SetValue("scheduleDrawingConnect", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("addCalcHandle", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("addCalcVecAng", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("addCalcCam", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("addCalcFov", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("addCalcBool", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("addCalcInt", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("gameEventAllowAdd", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("gameEventAllowRemove", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("gameEventDenyAdd", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("gameEventDenyRemove", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("gameEventSetEnrichment", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("onGameEvent", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("gameEventSetTransmitClientTime", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("gameEventSetTransmitTick", V8_ACCESS_CONTROL_DEFAULT,
+                  V8_PROPERTY_ATTRIBUTE_NONE);
+    obj->SetValue("gameEventSetTransmitSystemTime", V8_ACCESS_CONTROL_DEFAULT,
                   V8_PROPERTY_ATTRIBUTE_NONE);
 
     auto window = context->GetGlobal();
@@ -340,6 +384,109 @@ class AfxHandler : public CefV8Accessor,
       }
     }
 
+    if (name == "gameEventAllowAdd") {
+      if (1 == arguments.size() && arguments[0] &&
+        arguments[0]->IsString()) {
+        AfxEnsureEngineInterop();
+
+        std::string valName = arguments[0]->GetStringValue().ToString();
+        engine_interop_->GameEvents_AllowAdd(valName.c_str());
+
+        return true;
+      }
+    }
+
+    if (name == "gameEventAllowRemove") {
+      if (1 == arguments.size() && arguments[0] && arguments[0]->IsString()) {
+        AfxEnsureEngineInterop();
+
+        std::string valName = arguments[0]->GetStringValue().ToString();
+        engine_interop_->GameEvents_AllowRemove(valName.c_str());
+
+        return true;
+      }
+    }
+
+    if (name == "gameEventDenyAdd") {
+      if (1 == arguments.size() && arguments[0] && arguments[0]->IsString()) {
+        AfxEnsureEngineInterop();
+
+        std::string valName = arguments[0]->GetStringValue().ToString();
+        engine_interop_->GameEvents_DenyAdd(valName.c_str());
+
+        return true;
+      }
+    }
+
+    if (name == "gameEventDenyRemove") {
+      if (1 == arguments.size() && arguments[0] && arguments[0]->IsString()) {
+        AfxEnsureEngineInterop();
+
+        std::string valName = arguments[0]->GetStringValue().ToString();
+        engine_interop_->GameEvents_DenyRemove(valName.c_str());
+
+        return true;
+      }
+    }
+
+    if (name == "gameEventSetEnrichment") {
+      if (3 == arguments.size() && arguments[0] && arguments[1] &&
+          arguments[2] && arguments[0]->IsString() &&
+          arguments[1]->IsString() && arguments[2]->IsUInt()) {
+        AfxEnsureEngineInterop();
+
+        std::string strEvent = arguments[0]->GetStringValue().ToString();
+        std::string strProperty = arguments[1]->GetStringValue().ToString();
+        engine_interop_->GameEvents_SetEnrichment(strEvent.c_str(),
+                                                  strProperty.c_str(), arguments[2]->GetUIntValue());
+
+        return true;
+      }
+    }
+
+    if (name == "onGameEvent") {
+      if (1 == arguments.size() && arguments[0] && arguments[0]->IsFunction()) {
+        AfxEnsureEngineInterop();
+
+        auto callback = new AfxGameEventCallback(arguments[0], context_);
+        engine_interop_->SetGameEventCallback(callback);
+        callback->Release();
+
+        return true;
+      }
+    }
+
+    if (name == "gameEventSetTransmitClientTime") {
+      if (1 == arguments.size() && arguments[0] && arguments[0]->IsBool()) {
+        AfxEnsureEngineInterop();
+
+        bool bVal = arguments[0]->GetBoolValue();
+        engine_interop_->GameEvents_SetTransmitClientTime(bVal);
+
+        return true;
+      }
+    }
+    if (name == "gameEventSetTransmitTick") {
+      if (1 == arguments.size() && arguments[0] && arguments[0]->IsBool()) {
+        AfxEnsureEngineInterop();
+
+        bool bVal = arguments[0]->GetBoolValue();
+        engine_interop_->GameEvents_SetTransmitTick(bVal);
+
+        return true;
+      }
+    }
+    if (name == "gameEventSetTransmitSystemTime") {
+      if (1 == arguments.size() && arguments[0] && arguments[0]->IsBool()) {
+        AfxEnsureEngineInterop();
+
+        bool bVal = arguments[0]->GetBoolValue();
+        engine_interop_->GameEvents_SetTransmitSystemTime(bVal);
+
+        return true;
+      }
+    }
+
     return false;
   }
 
@@ -431,6 +578,42 @@ class AfxHandler : public CefV8Accessor,
       retval = fn_add_calc_int_;
       return true;
     }
+    if (name == "gameEventAllowAdd") {
+      retval = fn_game_event_allow_add;
+      return true;
+    }
+    if (name == "gameEventAllowRemove") {
+      retval = fn_game_event_allow_remove;
+      return true;
+    }
+    if (name == "gameEventDenyAdd") {
+      retval = fn_game_event_deny_add;
+      return true;
+    }
+    if (name == "gameEventDenyRemove") {
+      retval = fn_game_event_deny_remove;
+      return true;
+    }
+    if (name == "gameEventSetEnrichment") {
+      retval = fn_game_event_set_enrichment_;
+      return true;
+    }
+    if (name == "onGameEvent") {
+      retval = fn_on_game_event_;
+      return true;
+    }
+    if (name == "gameEventSetTransmitClientTime") {
+      retval = fn_game_event_set_transmit_client_time_;
+      return true;
+    }
+    if (name == "gameEventSetTransmitTick") {
+      retval = fn_game_event_set_transmit_tick_;
+      return true;
+    }
+    if (name == "gameEventSetTransmitSystemTime") {
+      retval = fn_game_event_set_transmit_system_time_;
+      return true;
+    }
 
     // Value does not exist.
     return false;
@@ -457,27 +640,37 @@ class AfxHandler : public CefV8Accessor,
 
  protected:
   virtual ~AfxHandler() override {
-      if(engine_interop_) engine_interop_->Release();
-      fn_connect_ = nullptr;
-      fn_get_connected_ = nullptr;
-      fn_close_ = nullptr;
-      fn_on_commands_ = nullptr;
-      fn_on_new_connection_ = nullptr;
-      fn_on_render_ = nullptr;
-      fn_on_view_override_ = nullptr;
-      fn_on_render_pass_ = nullptr;
-      fn_on_hud_begin_ = nullptr;
-      fn_on_hud_end_ = nullptr;
-      fn_on_render_view_end_ = nullptr;
-      fn_schedule_command_ = nullptr;
-      fn_schedule_drawing_begin_frame_ = nullptr;
-      fn_schedule_drawing_connect_ = nullptr;
-      fn_add_calc_handle_ = nullptr;
-      fn_add_calc_vecang_ = nullptr;
-      fn_add_calc_cam_ = nullptr;
-      fn_add_calc_fov_ = nullptr;
-      fn_add_calc_bool_ = nullptr;
-      fn_add_calc_int_ = nullptr;
+    if (engine_interop_)
+      engine_interop_->Release();
+    fn_connect_ = nullptr;
+    fn_get_connected_ = nullptr;
+    fn_close_ = nullptr;
+    fn_on_commands_ = nullptr;
+    fn_on_new_connection_ = nullptr;
+    fn_on_render_ = nullptr;
+    fn_on_view_override_ = nullptr;
+    fn_on_render_pass_ = nullptr;
+    fn_on_hud_begin_ = nullptr;
+    fn_on_hud_end_ = nullptr;
+    fn_on_render_view_end_ = nullptr;
+    fn_schedule_command_ = nullptr;
+    fn_schedule_drawing_begin_frame_ = nullptr;
+    fn_schedule_drawing_connect_ = nullptr;
+    fn_add_calc_handle_ = nullptr;
+    fn_add_calc_vecang_ = nullptr;
+    fn_add_calc_cam_ = nullptr;
+    fn_add_calc_fov_ = nullptr;
+    fn_add_calc_bool_ = nullptr;
+    fn_add_calc_int_ = nullptr;
+    fn_game_event_allow_add = nullptr;
+    fn_game_event_allow_remove = nullptr;
+    fn_game_event_deny_add = nullptr;
+    fn_game_event_deny_remove = nullptr;
+    fn_game_event_set_enrichment_ = nullptr;
+    fn_on_game_event_ = nullptr;
+    fn_game_event_set_transmit_client_time_ = nullptr;
+    fn_game_event_set_transmit_tick_ = nullptr;
+    fn_game_event_set_transmit_system_time_ = nullptr;
   }
 
  private:
@@ -1280,6 +1473,226 @@ class AfxFovCalcCallback : public AfxMirvCalcCallback,
     CefRefPtr<CefV8Context> m_CallbackContext;
   };
 
+  class AfxGameEventCallback : public advancedfx::interop::CRefCounted,
+                               public advancedfx::interop ::IGameEventCallback {
+   public:
+    AfxGameEventCallback(CefRefPtr<CefV8Value> callbackFunc,
+                         CefRefPtr<CefV8Context> callbackContext)
+        : m_CallbackFunc(callbackFunc), m_CallbackContext(callbackContext) {}
+
+    virtual void AddRef() override {
+      advancedfx::interop::CRefCounted::AddRef();
+    }
+
+    virtual void Release() override {
+      advancedfx::interop::CRefCounted::Release();
+    }
+
+    virtual void GameEventCallback(
+        const struct advancedfx::interop::GameEvent_s* result) override {
+
+
+      CefRefPtr<CefV8Value> objEvent =
+          result ? CefV8Value::CreateObject(nullptr, nullptr) : nullptr;
+
+      if (result) {
+        objEvent->SetValue("name", CefV8Value::CreateString(result->Name),
+                           V8_PROPERTY_ATTRIBUTE_NONE);
+        if (result->HasClientTime)
+          objEvent->SetValue("clientTime",
+                             CefV8Value::CreateDouble(result->ClientTime),
+                             V8_PROPERTY_ATTRIBUTE_NONE);
+        if (result->HasTick)
+          objEvent->SetValue("tick", CefV8Value::CreateInt(result->Tick),
+                             V8_PROPERTY_ATTRIBUTE_NONE);
+        if (result->HasSystemTime) {
+          CefTime time((time_t)result->SystemTime);
+          objEvent->SetValue("systemTime", CefV8Value::CreateDate(time),
+                             V8_PROPERTY_ATTRIBUTE_NONE);
+        }
+
+        CefRefPtr<CefV8Value> objKeys =
+            CefV8Value::CreateObject(nullptr, nullptr);
+
+        for (auto it = result->Keys.begin(); it != result->Keys.end(); ++it) {
+          CefRefPtr<CefV8Value> objKey =
+              CefV8Value::CreateObject(nullptr, nullptr);
+
+          objKey->SetValue("type", CefV8Value::CreateInt((int)(it->Type)),
+                           V8_PROPERTY_ATTRIBUTE_NONE);
+
+          switch (it->Type) {
+            case advancedfx::interop::GameEventFieldType::CString:
+              objKey->SetValue("value",
+                               CefV8Value::CreateString(it->Value.CString),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+              break;
+            case advancedfx::interop::GameEventFieldType::Float:
+              objKey->SetValue("value",
+                               CefV8Value::CreateDouble(it->Value.Float),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+              break;
+            case advancedfx::interop::GameEventFieldType::Long:
+              objKey->SetValue("value", CefV8Value::CreateInt(it->Value.Long),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+              break;
+            case advancedfx::interop::GameEventFieldType::Short:
+              objKey->SetValue("value", CefV8Value::CreateInt(it->Value.Short),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+              break;
+            case advancedfx::interop::GameEventFieldType::Byte:
+              objKey->SetValue("value", CefV8Value::CreateUInt(it->Value.Byte),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+              break;
+            case advancedfx::interop::GameEventFieldType::Bool:
+              objKey->SetValue("value", CefV8Value::CreateBool(it->Value.Bool),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+              break;
+            case advancedfx::interop::GameEventFieldType::Uint64: {
+              CefRefPtr<CefV8Value> objValue = CefV8Value::CreateArray(2);
+              objValue->SetValue(
+                  0, CefV8Value::CreateUInt(
+                         (unsigned int)(it->Value.UInt64 & 0x0ffffffff)));
+              objValue->SetValue(
+                  1,
+                  CefV8Value::CreateUInt(
+                      (unsigned int)((it->Value.UInt64 >> 32) & 0x0ffffffff)));
+              objKey->SetValue("value", objValue, V8_PROPERTY_ATTRIBUTE_NONE);
+            } break;
+            default:
+              objKey->SetValue("value", CefV8Value::CreateNull(),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+              break;
+          }
+
+          CefRefPtr<CefV8Value> objEnrichments = nullptr;
+
+          if (it->HasEnrichmentUseridWithSteamId) {
+            if (nullptr == objEnrichments)
+              objEnrichments = CefV8Value::CreateObject(nullptr, nullptr);
+
+            CefRefPtr<CefV8Value> objValue = CefV8Value::CreateArray(2);
+            objValue->SetValue(
+                0, CefV8Value::CreateUInt(
+                       (unsigned int)(it->EnrichmentUseridWithSteamId &
+                                      0x0ffffffff)));
+            objValue->SetValue(
+                1, CefV8Value::CreateUInt(
+                       (unsigned int)((it->EnrichmentUseridWithSteamId >> 32) &
+                                      0x0ffffffff)));
+
+            objEnrichments->SetValue("userIdWithSteamId", objValue,
+                                     V8_PROPERTY_ATTRIBUTE_NONE);
+          }
+
+          if (it->HasEnrichmentEntnumWithOrigin) {
+            if (nullptr == objEnrichments)
+              objEnrichments = CefV8Value::CreateObject(nullptr, nullptr);
+
+            CefRefPtr<CefV8Value> objValue =
+                CefV8Value::CreateObject(nullptr, nullptr);
+            objValue->SetValue(
+                "x", CefV8Value::CreateDouble(it->EnrichmentEntnumWithOrigin.X),
+                V8_PROPERTY_ATTRIBUTE_NONE);
+            objValue->SetValue(
+                "y", CefV8Value::CreateDouble(it->EnrichmentEntnumWithOrigin.Y),
+                V8_PROPERTY_ATTRIBUTE_NONE);
+            objValue->SetValue(
+                "z", CefV8Value::CreateDouble(it->EnrichmentEntnumWithOrigin.Z),
+                V8_PROPERTY_ATTRIBUTE_NONE);
+            objEnrichments->SetValue("entnumWithOrigin", objValue,
+                                     V8_PROPERTY_ATTRIBUTE_NONE);
+          }
+
+          if (it->HasEnrichmentEntnumWithAngles) {
+            if (nullptr == objEnrichments)
+              objEnrichments = CefV8Value::CreateObject(nullptr, nullptr);
+
+            CefRefPtr<CefV8Value> objValue =
+                CefV8Value::CreateObject(nullptr, nullptr);
+            objValue->SetValue(
+                "pitch",
+                CefV8Value::CreateDouble(it->EnrichmentEntnumWithAngles.Pitch),
+                V8_PROPERTY_ATTRIBUTE_NONE);
+            objValue->SetValue(
+                "yaw",
+                CefV8Value::CreateDouble(it->EnrichmentEntnumWithAngles.Yaw),
+                V8_PROPERTY_ATTRIBUTE_NONE);
+            objValue->SetValue(
+                "roll",
+                CefV8Value::CreateDouble(it->EnrichmentEntnumWithAngles.Roll),
+                V8_PROPERTY_ATTRIBUTE_NONE);
+
+            objEnrichments->SetValue("entnumWithAngles", objValue,
+                                     V8_PROPERTY_ATTRIBUTE_NONE);
+          }
+
+          if (it->HasEnrichmentUseridWithEyePosition) {
+            if (nullptr == objEnrichments)
+              objEnrichments = CefV8Value::CreateObject(nullptr, nullptr);
+
+            CefRefPtr<CefV8Value> objValue =
+                CefV8Value::CreateObject(nullptr, nullptr);
+            objValue->SetValue(
+                "x",
+                CefV8Value::CreateDouble(it->EnrichmentUseridWithEyePosition.X),
+                V8_PROPERTY_ATTRIBUTE_NONE);
+            objValue->SetValue(
+                "y",
+                CefV8Value::CreateDouble(it->EnrichmentUseridWithEyePosition.Y),
+                V8_PROPERTY_ATTRIBUTE_NONE);
+            objValue->SetValue(
+                "z",
+                CefV8Value::CreateDouble(it->EnrichmentUseridWithEyePosition.Z),
+                V8_PROPERTY_ATTRIBUTE_NONE);
+            objEnrichments->SetValue("useridWithEyePosition", objValue,
+                                     V8_PROPERTY_ATTRIBUTE_NONE);
+          }
+
+          if (it->HasEnrichmentUseridWithEyeAngels) {
+            if (nullptr == objEnrichments)
+              objEnrichments = CefV8Value::CreateObject(nullptr, nullptr);
+
+            CefRefPtr<CefV8Value> objValue =
+                CefV8Value::CreateObject(nullptr, nullptr);
+            objValue->SetValue("pitch",
+                               CefV8Value::CreateDouble(
+                                   it->EnrichmentUseridWithEyeAngels.Pitch),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+            objValue->SetValue(
+                "yaw",
+                CefV8Value::CreateDouble(it->EnrichmentUseridWithEyeAngels.Yaw),
+                V8_PROPERTY_ATTRIBUTE_NONE);
+            objValue->SetValue("roll",
+                               CefV8Value::CreateDouble(
+                                   it->EnrichmentUseridWithEyeAngels.Roll),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+
+            objEnrichments->SetValue("useridWithEyeAngels", objValue,
+                                     V8_PROPERTY_ATTRIBUTE_NONE);
+          }
+
+          if (nullptr != objEnrichments)
+            objKey->SetValue("enrichments", objEnrichments,
+                             V8_PROPERTY_ATTRIBUTE_NONE);
+
+          objKeys->SetValue(it->Key, objKey, V8_PROPERTY_ATTRIBUTE_NONE);
+        }
+
+        objEvent->SetValue("keys", objKeys, V8_PROPERTY_ATTRIBUTE_NONE);
+      }
+
+      CefV8ValueList args;
+      args.push_back(objEvent);
+
+      m_CallbackFunc->ExecuteFunctionWithContext(m_CallbackContext, NULL, args);
+    }
+
+   private:
+    CefRefPtr<CefV8Value> m_CallbackFunc;
+    CefRefPtr<CefV8Context> m_CallbackContext;
+  };
+
   CefRefPtr<CefBrowser> const browser_;
   CefRefPtr<CefFrame> const frame_;
   CefRefPtr<CefV8Context> const context_;
@@ -1305,6 +1718,15 @@ class AfxFovCalcCallback : public AfxMirvCalcCallback,
   CefRefPtr<CefV8Value> fn_add_calc_fov_;
   CefRefPtr<CefV8Value> fn_add_calc_bool_;
   CefRefPtr<CefV8Value> fn_add_calc_int_;
+  CefRefPtr<CefV8Value> fn_game_event_allow_add;
+  CefRefPtr<CefV8Value> fn_game_event_allow_remove;
+  CefRefPtr<CefV8Value> fn_game_event_deny_add;
+  CefRefPtr<CefV8Value> fn_game_event_deny_remove;
+  CefRefPtr<CefV8Value> fn_game_event_set_enrichment_;
+  CefRefPtr<CefV8Value> fn_on_game_event_;
+  CefRefPtr<CefV8Value> fn_game_event_set_transmit_client_time_;
+  CefRefPtr<CefV8Value> fn_game_event_set_transmit_tick_;
+  CefRefPtr<CefV8Value> fn_game_event_set_transmit_system_time_;
 
   void AfxEnsureEngineInterop() {
     if (nullptr == engine_interop_) {
