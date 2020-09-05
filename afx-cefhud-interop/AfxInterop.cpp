@@ -315,7 +315,7 @@ class CNamedPipeServer {
 
   bool WriteSingle(FLOAT value) { return WriteBytes(&value, 0, sizeof(value)); }
 
-  bool WriteStringUTF8(const std::string value) {
+  bool WriteStringUTF8(const std::string &value) {
     UINT32 length = (UINT32)value.length();
 
     return WriteCompressedUInt32(length) &&
@@ -853,7 +853,7 @@ class CEngineInterop : public CInterop, public IEngineInterop {
   virtual void GameEvents_SetEnrichment(const char* pszEvent,
                                const char* pszProperty,
                                         unsigned int uiEnrichments) {
-    m_GameEventsEnrichmentsChanges[pszEvent][pszProperty] = uiEnrichments;
+    m_GameEventsEnrichmentsChanges[GameEventEnrichmentKey_s(pszEvent,pszProperty)] = uiEnrichments;
   }
   virtual void SetGameEventCallback(
       class IGameEventCallback* gameEventCallback) {
@@ -1372,15 +1372,34 @@ class CEngineInterop : public CInterop, public IEngineInterop {
 
   class IGameEventCallback* m_GameEventCallback = nullptr;
 
+  struct GameEventEnrichmentKey_s {
+    std::string EventName;
+    std::string EventPropertyName;
+
+    GameEventEnrichmentKey_s(const std::string& eventName,
+        const std::string& evenPropertyName) : EventName(eventName), EventPropertyName(evenPropertyName){
+
+    }
+
+    bool operator<(const struct GameEventEnrichmentKey_s& other) const {
+      int cmp = EventName.compare(other.EventName);
+      if (cmp < 0)
+        return true;
+      else if (0 == cmp)
+         return EventPropertyName.compare(other.EventPropertyName) < 0;
+      return false;
+    }
+  };
+
   std::set<std::string> m_GameEventsAllow;
   std::set<std::string> m_GameEventsAllowDeletions;
   std::set<std::string> m_GameEventsAllowAdditions;
   std::set<std::string> m_GameEventsDeny;
   std::set<std::string> m_GameEventsDenyDeletions;
   std::set<std::string> m_GameEventsDenyAdditions;
-  std::map<std::string, std::map<std::string, unsigned int>>
+  std::map<GameEventEnrichmentKey_s, unsigned int>
       m_GameEventsEnrichments;
-  std::map<std::string, std::map<std::string, unsigned int>>
+  std::map<GameEventEnrichmentKey_s, unsigned int>
       m_GameEventsEnrichmentsChanges;
 
   bool m_GameEventsTransmitChanged = false;
@@ -1484,8 +1503,7 @@ class CEngineInterop : public CInterop, public IEngineInterop {
     unsigned __int64 tmpUint64;
 
     for (auto itKey = itKnown->second.Keys.begin();
-         itKey != itKnown->second.Keys.end(); ++itKey)
-    {
+         itKey != itKnown->second.Keys.end(); ++itKey) {
       switch (itKey->Type) {
         case GameEventFieldType::CString:
           if (!m_PipeServer->ReadStringUTF8(tmpString))
@@ -1512,13 +1530,13 @@ class CEngineInterop : public CInterop, public IEngineInterop {
         case GameEventFieldType::Byte:
           if (!m_PipeServer->ReadByte(tmpByte))
             return false;
-          gameEvent.Keys.emplace_back(itKey->Key.c_str(), (unsigned char)tmpByte);
+          gameEvent.Keys.emplace_back(itKey->Key.c_str(),
+                                      (unsigned char)tmpByte);
           break;
         case GameEventFieldType::Bool:
           if (!m_PipeServer->ReadBoolean(tmpBool))
             return false;
-          gameEvent.Keys.emplace_back(itKey->Key.c_str(),
-                                      (bool)tmpBool);
+          gameEvent.Keys.emplace_back(itKey->Key.c_str(), (bool)tmpBool);
           break;
         case GameEventFieldType::Uint64:
           if (!m_PipeServer->ReadUInt64(tmpUint64))
@@ -1527,63 +1545,61 @@ class CEngineInterop : public CInterop, public IEngineInterop {
           break;
       }
 
-      auto itEnrichEnvent = m_GameEventsEnrichments.find(itKnown->second.Name);
-      if (itEnrichEnvent != m_GameEventsEnrichments.end()) {
-        auto itEnrichKey = itEnrichEnvent->second.find(itKey->Key);
-        if (itEnrichKey != itEnrichEnvent->second.end()) {
+      auto itEnrichment = m_GameEventsEnrichments.find(
+          GameEventEnrichmentKey_s(itKnown->second.Name, itKey->Key));
+      if (itEnrichment != m_GameEventsEnrichments.end()) {
+        int enrichmentType = itEnrichment->second;
 
-          int enrichmentType = itEnrichKey->second;
+        if (enrichmentType & (1 << 0)) {
+          gameEvent.Keys.back().HasEnrichmentUseridWithSteamId = true;
+          if (!m_PipeServer->ReadUInt64(
+                  gameEvent.Keys.back().EnrichmentUseridWithSteamId))
+            return false;
+        }
 
-          if (enrichmentType & (1<<0)) {
-            gameEvent.Keys.back().HasEnrichmentUseridWithSteamId = true;
-            if (!m_PipeServer->ReadUInt64(
-                    gameEvent.Keys.back().EnrichmentUseridWithSteamId))
-              return false;
-          }
-        
-          if (enrichmentType & (1 << 1)) {
-            gameEvent.Keys.back().HasEnrichmentEntnumWithOrigin = true;
-            Vector_s& value = gameEvent.Keys.back().EnrichmentEntnumWithOrigin;
-            if (!m_PipeServer->ReadSingle(value.X))
-              return false;
-            if (!m_PipeServer->ReadSingle(value.Y))
-              return false;
-            if (!m_PipeServer->ReadSingle(value.Z))
-              return false;
-          }
+        if (enrichmentType & (1 << 1)) {
+          gameEvent.Keys.back().HasEnrichmentEntnumWithOrigin = true;
+          Vector_s& value = gameEvent.Keys.back().EnrichmentEntnumWithOrigin;
+          if (!m_PipeServer->ReadSingle(value.X))
+            return false;
+          if (!m_PipeServer->ReadSingle(value.Y))
+            return false;
+          if (!m_PipeServer->ReadSingle(value.Z))
+            return false;
+        }
 
-          if (enrichmentType & (1 << 2)) {
-            gameEvent.Keys.back().HasEnrichmentEntnumWithAngles = true;
-            QAngle_s & value = gameEvent.Keys.back().EnrichmentEntnumWithAngles;
-            if (!m_PipeServer->ReadSingle(value.Pitch))
-              return false;
-            if (!m_PipeServer->ReadSingle(value.Yaw))
-              return false;
-            if (!m_PipeServer->ReadSingle(value.Roll))
-              return false;
-          }
+        if (enrichmentType & (1 << 2)) {
+          gameEvent.Keys.back().HasEnrichmentEntnumWithAngles = true;
+          QAngle_s& value = gameEvent.Keys.back().EnrichmentEntnumWithAngles;
+          if (!m_PipeServer->ReadSingle(value.Pitch))
+            return false;
+          if (!m_PipeServer->ReadSingle(value.Yaw))
+            return false;
+          if (!m_PipeServer->ReadSingle(value.Roll))
+            return false;
+        }
 
-          if (enrichmentType & (1 << 3)) {
-            gameEvent.Keys.back().HasEnrichmentUseridWithEyePosition = true;
-            Vector_s& value = gameEvent.Keys.back().EnrichmentUseridWithEyePosition;
-            if (!m_PipeServer->ReadSingle(value.X))
-              return false;
-            if (!m_PipeServer->ReadSingle(value.Y))
-              return false;
-            if (!m_PipeServer->ReadSingle(value.Z))
-              return false;
-          }
+        if (enrichmentType & (1 << 3)) {
+          gameEvent.Keys.back().HasEnrichmentUseridWithEyePosition = true;
+          Vector_s& value =
+              gameEvent.Keys.back().EnrichmentUseridWithEyePosition;
+          if (!m_PipeServer->ReadSingle(value.X))
+            return false;
+          if (!m_PipeServer->ReadSingle(value.Y))
+            return false;
+          if (!m_PipeServer->ReadSingle(value.Z))
+            return false;
+        }
 
-          if (enrichmentType & (1 << 4)) {
-            gameEvent.Keys.back().HasEnrichmentUseridWithEyeAngels = true;
-            QAngle_s& value = gameEvent.Keys.back().EnrichmentUseridWithEyeAngels;
-            if (!m_PipeServer->ReadSingle(value.Pitch))
-              return false;
-            if (!m_PipeServer->ReadSingle(value.Yaw))
-              return false;
-            if (!m_PipeServer->ReadSingle(value.Roll))
-              return false;
-          }
+        if (enrichmentType & (1 << 4)) {
+          gameEvent.Keys.back().HasEnrichmentUseridWithEyeAngels = true;
+          QAngle_s& value = gameEvent.Keys.back().EnrichmentUseridWithEyeAngels;
+          if (!m_PipeServer->ReadSingle(value.Pitch))
+            return false;
+          if (!m_PipeServer->ReadSingle(value.Yaw))
+            return false;
+          if (!m_PipeServer->ReadSingle(value.Roll))
+            return false;
         }
       }
     }
@@ -1650,13 +1666,13 @@ class CEngineInterop : public CInterop, public IEngineInterop {
       return false;
     if (!delta) {
       for (auto it = m_GameEventsAllow.begin(); it != m_GameEventsAllow.end(); ++it) {
-        if (m_PipeServer->WriteStringUTF8(*it))
+        if (!m_PipeServer->WriteStringUTF8(*it))
           return false;
       }
     }
     while (!m_GameEventsAllowAdditions.empty()) {
       auto it = m_GameEventsAllowAdditions.begin();
-      if (!(!delta || m_PipeServer->WriteStringUTF8(*it)))
+      if (!m_PipeServer->WriteStringUTF8(*it))
         return false;
       m_GameEventsAllow.insert(*it);
       m_GameEventsAllowAdditions.erase(it);
@@ -1684,13 +1700,13 @@ class CEngineInterop : public CInterop, public IEngineInterop {
     if (!delta) {
       for (auto it = m_GameEventsDeny.begin();
            it != m_GameEventsDeny.end(); ++it) {
-        if (m_PipeServer->WriteStringUTF8(*it))
+        if (!m_PipeServer->WriteStringUTF8(*it))
           return false;
       }
     }
     while (!m_GameEventsDenyAdditions.empty()) {
       auto it = m_GameEventsDenyAdditions.begin();
-      if (!(!delta || m_PipeServer->WriteStringUTF8(*it)))
+      if (!m_PipeServer->WriteStringUTF8(*it))
         return false;
       m_GameEventsDeny.insert(*it);
       m_GameEventsDenyAdditions.erase(it);
@@ -1699,56 +1715,42 @@ class CEngineInterop : public CInterop, public IEngineInterop {
     // Write enrichments:
     if (!m_PipeServer->WriteCompressedUInt32(
             (UINT32)(m_GameEventsEnrichmentsChanges.size() +
-                     (delta ? m_GameEventsEnrichments.size() : 0))))
+                     (delta ? 0 : m_GameEventsEnrichments.size()))))
       return false;
     if (!delta) {
-      for (auto itEvent = m_GameEventsEnrichments.begin();
-           itEvent != m_GameEventsEnrichments.end(); ++itEvent) {
-        for (auto itProperty = itEvent->second.begin();
-             itProperty != itEvent->second.end(); ++itProperty) {
-          if (!m_PipeServer->WriteStringUTF8(itEvent->first.c_str()))
-            return false;
-          if (!m_PipeServer->WriteStringUTF8(itProperty->first.c_str()))
-            return false;
-          if (!m_PipeServer->WriteUInt32(itProperty->second))
-            return false;
-        }
+      for (auto itEnrichment = m_GameEventsEnrichments.begin();
+           itEnrichment != m_GameEventsEnrichments.end(); ++itEnrichment) {
+        if (!m_PipeServer->WriteStringUTF8(itEnrichment->first.EventName.c_str()))
+          return false;
+        if (!m_PipeServer->WriteStringUTF8(itEnrichment->first.EventPropertyName.c_str()))
+          return false;
+        if (!m_PipeServer->WriteUInt32(itEnrichment->second))
+          return false;
       }
     }
     while (!m_GameEventsEnrichmentsChanges.empty()) {
-      auto itEvent = m_GameEventsEnrichmentsChanges.begin();
-      while (!itEvent->second.empty()) {
-        auto itProperty = itEvent->second.begin();
+      auto itEnrichment = m_GameEventsEnrichmentsChanges.begin();
 
-        unsigned int enrichmentType = itProperty->second;
+      unsigned int enrichmentType = itEnrichment->second;
 
-        if (delta || enrichmentType) {
-          if (!m_PipeServer->WriteStringUTF8(itEvent->first.c_str()))
-            return false;
-          if (!m_PipeServer->WriteStringUTF8(itProperty->first.c_str()))
-            return false;
-          if (!m_PipeServer->WriteUInt32(itProperty->second))
-            return false;
-        }
+      if (!m_PipeServer->WriteStringUTF8(itEnrichment->first.EventName.c_str()))
+        return false;
+      if (!m_PipeServer->WriteStringUTF8(
+              itEnrichment->first.EventPropertyName.c_str()))
+        return false;
+      if (!m_PipeServer->WriteUInt32(itEnrichment->second))
+        return false;
 
-        if (0 == enrichmentType) {
-          auto targetEvent = m_GameEventsEnrichments.find(itEvent->first);
-          if (targetEvent != m_GameEventsEnrichments.end()) {
-            auto targetProperty = targetEvent->second.find(itProperty->first);
-            if (targetProperty != targetEvent->second.end()) {
-              targetEvent->second.erase(targetProperty);
-              if (0 == targetEvent->second.size())
-                m_GameEventsEnrichments.erase(targetEvent);
-            }
-          }
-        }
-        else {
-          m_GameEventsEnrichments[itEvent->first][itProperty->first] = enrichmentType;
-        }
-
-        itEvent->second.erase(itProperty);
+      if (0 == enrichmentType) {
+        auto targetEnrichment =
+            m_GameEventsEnrichments.find(itEnrichment->first);
+        if (targetEnrichment != m_GameEventsEnrichments.end())
+          m_GameEventsEnrichments.erase(targetEnrichment);
+      } else {
+        m_GameEventsEnrichments[itEnrichment->first] = enrichmentType;
       }
-      m_GameEventsEnrichmentsChanges.erase(itEvent);
+
+      m_GameEventsEnrichmentsChanges.erase(itEnrichment);
     }
 
     return true;

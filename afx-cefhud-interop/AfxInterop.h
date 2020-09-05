@@ -248,13 +248,13 @@ struct GameEvent_s {
   const char* Name = "";
 
   bool HasClientTime = false;
-  float ClientTime;
+  float ClientTime = 0;
 
   bool HasTick = false;
-  int Tick;
+  int Tick = 0;
 
   bool HasSystemTime = false;
-  uint64_t SystemTime;
+  uint64_t SystemTime = 0;
 
   std::list<GameEventField_s> Keys;
 };
