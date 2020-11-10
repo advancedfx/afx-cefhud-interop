@@ -133,8 +133,7 @@ class SimpleHandler : public CefClient,
   bool AfxDrawingInteropConnection(int frameCount) {
     EnsureDrawingInterop();
 
-    return drawing_interop_->Connection(frameCount, shared_handle_, width_,
-                                        height_);
+    return drawing_interop_->Connection(frameCount);
   }
 
   void AfxDrawingInteropClose() {

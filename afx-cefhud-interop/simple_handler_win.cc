@@ -22,7 +22,7 @@ void SimpleHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> /*browser*/,
 
   switch (type) {
         case PET_VIEW:
-            shared_handle_ = share_handle;
+            drawing_interop_->SetSharedHandle(share_handle);
             break;
         case PET_POPUP:
             break;
