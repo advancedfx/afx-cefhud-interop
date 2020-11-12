@@ -19,6 +19,18 @@
 namespace advancedfx {
 namespace interop {
 
+
+enum class GameEventFieldType : int {
+  Local = 0,
+  CString = 1,
+  Float = 2,
+  Long = 3,
+  Short = 4,
+  Byte = 5,
+  Bool = 6,
+  Uint64 = 7
+};
+
 enum class EngineMessage : unsigned int {
   Invalid = 0,
   LevelInitPreEntity = 1,
@@ -965,7 +977,7 @@ class CIntCalcCallbacks
   }
 };
 
-class CInterop : public CefBaseRefCounted {
+class CInterop {
  public:
   const INT32 Version = 7;
 
@@ -1036,189 +1048,21 @@ class CInterop : public CefBaseRefCounted {
   bool m_Connecting = false;
 };
 
-
-class CManagedD3d9Object : public IManagedD3d9Object {
+class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
  public:
-  virtual void InterlockedAddRef() { ++m_RefCount; }
+  IMPLEMENT_REFCOUNTING(CDrawingInteropImpl);
 
-  virtual void InterlockedRelease() {
-    if (0 == --m_RefCount) {
-      Forget();
-      delete this;
-    }
+  CDrawingInteropImpl()
+      : CInterop("advancedfxInterop_drawing") {
+  
   }
 
- virtual bool OnDeviceRestored(CNamedPipeServer* pipeServer) {}
-
- protected:
-  virtual ~CManagedD3d9Object() {}
-
- private:
-  std::atomic_uint m_RefCount = 0;
-};
-
-class CManagedD3d9DataObject : public CManagedD3d9Object,
-                               public IManagedD3d9DataObject {
- public:
-  CManagedD3d9DataObject() : m_Data(nullptr), m_Size(0) {}
-
-  virtual void* GetData() { return m_Data; }
-
-  virtual size_t GetDataSize() { return m_Size; }
-
-  virtual void SetData(void* value) { m_Data = value; }
-
-  virtual void SetDataSize(size_t value) { m_Size = value; }
-
- protected:
-  virtual ~CManagedD3d9DataObject() { free(m_Data); }
-
- private:
-  void* m_Data;
-  size_t m_Size;
-};
-
-class CManagedD3d9TextureDataObject : public CManagedD3d9Object,
-                                      public IManagedD3d9TextureDataObject {
- public:
-  CManagedD3d9TextureDataObject(
-      UINT Width,
-      UINT Height,
-      UINT Levels,
-      DWORD Usage,
-      D3DFORMAT Format,
-      D3DPOOL Pool,
-      IDrawingSharedHandle* pSharedHandle,
-      void (*callBack)(IManagedD3d9TextureDataObject* obj))
-      : m_Width(Width),
-        m_Height(Height),
-        m_Levels(Levels),
-        m_Usage(Usage),
-        m_Pool(Pool),
-        m_pSharedHandle(pSharedHandle) {
-    if (m_pSharedHandle)
-      m_pSharedHandle->InterlockedAddRef();
-
-    if (callBack)
-      callBack(this);
-
-    Finalize();
+  virtual void OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                        CefRefPtr<CefFrame> frame,
+                                        CefProcessId source_process,
+                                        CefRefPtr<CefProcessMessage> message,
+                                        CefRefPtr<CefListValue> args) override {
   }
-
-  virtual void* GetData(unsigned int level) { return m_Datas[level].Data; }
-
-  virtual size_t GetDataRowCount(unsigned int level) {
-    m_Datas[level].RowCount;
-  }
-
-  virtual size_t GetDataRowBytes(unsigned int level) {
-    m_Datas[level].RowBytes;
-  }
-
-  virtual void SetData(unsigned int level, void* value) {
-    m_Datas[level].Data = value;
-  }
-
-  virtual void SetDataRowCount(unsigned int level, size_t value) {
-    m_Datas[level].RowCount = value;
-  }
-
-  virtual void SetDataRowBytes(unsigned int level, size_t value) {
-    m_Datas[level].RowBytes = value;
-  }
-
- protected:
-  virtual ~CManagedD3d9TextureDataObject() {
-    if (m_pSharedHandle)
-      m_pSharedHandle->InterlockedRelease();
-  }
-
-  virtual bool OnDeviceRestored(CNamedPipeServer* pipeServer) {
-    // Create texture object:
-
-    if (!pipeServer->WriteUInt32((UINT32)DrawingReply::D3d9CreateTexture))
-      return false;
-
-    if (!pipeServer->WriteUInt64((UINT64) static_cast<IManagedD3d9Object*>(
-            static_cast<CManagedD3d9Object*>(this))))
-      return false;
-    if (!pipeServer->WriteUInt32((UINT32)m_Width))
-      return false;
-    if (!pipeServer->WriteUInt32((UINT32)m_Height))
-      return false;
-    if (!pipeServer->WriteUInt32((UINT32)m_Levels))
-      return false;
-    if (!pipeServer->WriteUInt32((UINT32)m_Usage))
-      return false;
-    if (!pipeServer->WriteUInt32((UINT32)m_Format))
-      return false;
-    if (!pipeServer->WriteUInt32((UINT32)m_Pool))
-      return false;
-
-    HANDLE handle;
-
-    if (m_pSharedHandle && m_pSharedHandle->GetSharedHandle(handle)) {
-      if (!pipeServer->WriteBoolean(true))
-        return false;
-      if (!pipeServer->WriteHandle(handle))
-        return false;
-    } else {
-      if (!pipeServer->WriteBoolean(false))
-        return false;
-    }
-
-    // Send texture data:
-
-    for (auto it = m_Datas.begin(); it != m_Datas.end(); ++it) {
-      if (!pipeServer->WriteUInt32((UINT32)DrawingReply::UpdateD3d9Texture))
-        return false;
-
-      if (!pipeServer->WriteUInt32((UINT32)it->first))
-        return false;
-
-      if (!pipeServer->WriteBoolean(false))
-        return false;
-
-      if (!pipeServer->WriteUInt32((UINT32)it->second.RowCount))
-        return false;
-
-      if (!pipeServer->WriteUInt32((UINT32)it->second.RowBytes))
-        return false;
-
-      if (!pipeServer->WriteBytes(it->second.Data, 0,
-                                  it->second.RowCount * it->second.RowBytes))
-        return false;
-    }
-
-    return true;
-  }
-
-  struct CData {
-    void* Data = 0;
-    size_t RowCount = 0;
-    size_t RowBytes = 0;
-
-    ~CData() { free(Data); }
-  };
-
-  UINT m_Width;
-  UINT m_Height;
-  UINT m_Levels;
-  DWORD m_Usage;
-  D3DFORMAT m_Format;
-  D3DPOOL m_Pool;
-  IDrawingSharedHandle* m_pSharedHandle;
-  std::map<unsigned int, CData> m_Datas;
-};
-
-
-class CDrawingInterop : public CInterop, public IDrawingInterop {
- public:
-  CDrawingInterop(const char* pipeName) : CInterop(pipeName) {}
-
-  virtual void AddRef() override { CInterop::AddRef(); }
-
-  virtual void Release() override { CInterop::Release(); }
 
   virtual bool Connection() override { return CInterop::Connection(); }
 
@@ -1378,19 +1222,25 @@ class CDrawingInterop : public CInterop, public IDrawingInterop {
   }
 };
 
-class IDrawingInterop* CreateDrawingInterop(const char* pipeName) {
-  return new CDrawingInterop(pipeName);
+class CDrawingInterop* CreateDrawingInterop(const char* pipeName) {
+  return new CDrawingInteropImpl(pipeName);
 }
 
+class CInteropJsGuts : public virtual CefBaseRefCounted {
+
+};
+
 class CEngineInteropImpl : public CEngineInterop, public CInterop {
- public:
   IMPLEMENT_REFCOUNTING(CEngineInteropImpl);
 
+ public:
   CEngineInteropImpl(CefRefPtr<CefBrowser> const& browser,
                      CefRefPtr<CefFrame> const& frame,
-                     CefRefPtr<CefV8Context> const& context,
-                     const char* pipeName)
-      : CInterop(pipeName), m_Browser(browser), m_Frame(frame), m_Context(context) {
+                     CefRefPtr<CefV8Context> const& context)
+      : CInterop("advancedfxInterop"),
+        m_Browser(browser),
+        m_Frame(frame),
+        m_Context(context) {
 
     auto const object = CefV8Value::CreateObject(this, nullptr);
 
@@ -2243,8 +2093,6 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
   };
 
   class CAfxInteropUserData : public CefBaseRefCounted {
-    IMPLEMENT_REFCOUNTING(CAfxInteropUserData);
-
    public:
     CAfxInteropUserData(AfxUserDataType userDataType)
         : m_UserDataType(userDataType) {}
@@ -2291,6 +2139,9 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
   class CAfxDrawingHandle : public CAfxInteropImpl,
                             public CefV8Accessor,
                             public CefV8Handler {
+
+    IMPLEMENT_REFCOUNTING(CAfxDrawingHandle);
+
    public:
     CAfxDrawingHandle(CEngineInteropImpl* engineInteropImpl)
         : CAfxInteropImpl(AfxUserDataType::AfxDrawingHandle,
@@ -2373,6 +2224,9 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
   class CAfxDrawingData : public CAfxInteropImpl,
                             public CefV8Accessor,
                             public CefV8Handler, public CefV8ArrayBufferReleaseCallback {
+ 
+     IMPLEMENT_REFCOUNTING(CAfxDrawingData);
+
    public:
     CAfxDrawingData(CEngineInteropImpl* engineInteropImpl,
                     unsigned int size,
@@ -2519,6 +2373,9 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
  class CAfxD3d9VertexDeclaration : public CAfxInteropImpl,
                             public CefV8Accessor,
                             public CefV8Handler {
+
+     IMPLEMENT_REFCOUNTING(CAfxD3d9VertexDeclaration);
+
    public:
    CAfxD3d9VertexDeclaration(CEngineInteropImpl* engineInteropImpl)
         : CAfxInteropImpl(AfxUserDataType::AfxD3d9VertexDeclaration,
@@ -2599,6 +2456,9 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
  class CAfxD3d9IndexBuffer : public CAfxInteropImpl,
                             public CefV8Accessor,
                             public CefV8Handler {
+
+     IMPLEMENT_REFCOUNTING(CAfxD3d9IndexBuffer);
+
    public:
    CAfxD3d9IndexBuffer(CEngineInteropImpl* engineInteropImpl)
         : CAfxInteropImpl(AfxUserDataType::AfxD3d9IndexBuffer,
@@ -2715,6 +2575,9 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 class CAfxD3d9VertexBuffer : public CAfxInteropImpl,
                               public CefV8Accessor,
                               public CefV8Handler {
+
+     IMPLEMENT_REFCOUNTING(CAfxD3d9VertexBuffer);
+
    public:
   CAfxD3d9VertexBuffer(CEngineInteropImpl* engineInteropImpl)
         : CAfxInteropImpl(AfxUserDataType::AfxD3d9VertexBuffer,
@@ -2832,6 +2695,8 @@ class CAfxD3d9VertexBuffer : public CAfxInteropImpl,
 class CAfxD3d9Texture : public CAfxInteropImpl,
                                public CefV8Accessor,
                                public CefV8Handler {
+    IMPLEMENT_REFCOUNTING(CAfxD3d9Texture);
+
    public:
   CAfxD3d9Texture(CEngineInteropImpl* engineInteropImpl)
         : CAfxInteropImpl(AfxUserDataType::AfxD3d9Texture,
@@ -2973,6 +2838,8 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
   class CAfxD3d9PixelShader : public CAfxInteropImpl,
                                     public CefV8Accessor,
                                     public CefV8Handler {
+    IMPLEMENT_REFCOUNTING(CAfxD3d9PixelShader);
+
    public:
     CAfxD3d9PixelShader(CEngineInteropImpl* engineInteropImpl)
         : CAfxInteropImpl(AfxUserDataType::AfxD3d9PixelShader,
@@ -3054,6 +2921,9 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
   class CAfxD3d9VertexShader : public CAfxInteropImpl,
                               public CefV8Accessor,
                               public CefV8Handler {
+
+    IMPLEMENT_REFCOUNTING(CAfxD3d9VertexShader);
+
    public:
     CAfxD3d9VertexShader(CEngineInteropImpl* engineInteropImpl)
         : CAfxInteropImpl(AfxUserDataType::AfxD3d9VertexShader,
@@ -3752,13 +3622,18 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
       CefString& exception) {
 
       if (value && value->IsString()) {
-        CInterop::SetPipeName(value->GetStringValue().ToString().c_str());
+
+        std::string pipeName(value->GetStringValue().ToString());
+
+        CInterop::SetPipeName(pipeName.c_str());
+
+        pipeName.append("_drawing");
 
         auto message = CefProcessMessage::Create("afx-interop");
         auto args = message->GetArgumentList();
         args->SetSize(2);
         args->SetInt(0, (int)CefDrawingInteropMessage::SetPipeName);
-        args->SetString(1, value->GetStringValue());
+        args->SetString(1, pipeName);
         SendProcessMessage(PID_BROWSER, message);
         return true;
       }
@@ -4247,7 +4122,8 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
           static_cast<CAfxInteropUserData*>(arguments[1]->GetUserData().get()));
 
       if(nullptr != drawingData) {
-        CefRefPtr<CAfxD3d9IndexBuffer> val = new CAfxD3d9VertexDeclaration(this);
+        CefRefPtr<CAfxD3d9VertexDeclaration> val =
+            new CAfxD3d9VertexDeclaration(this);
         retval = val;
 
         auto message = CefProcessMessage::Create("afx-interop");
@@ -4358,7 +4234,7 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
                               CefRefPtr<CefV8Value>& retval,
                               CefString& exceptionoverride) {
     if (6 == arguments.size() && arguments[0] && arguments[1] && arguments[2] &&
-        arguments[3] && arguments[4] && arguments[5&& arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
+        arguments[3] && arguments[4] && arguments[5] && arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
         arguments[2]->IsUInt() && arguments[3]->IsUInt() && arguments[4]->IsUInt()) {
       CAfxDrawingHandle* drawingHandle = nullptr;
 
@@ -4407,7 +4283,7 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
           static_cast<CAfxInteropUserData*>(arguments[0]->GetUserData().get()));
 
       if(drawingData) {
-        CefRefPtr<CAfxD3d9IndexBuffer> val = new CAfxD3d9PixelShader(this);
+        CefRefPtr<CAfxD3d9PixelShader> val = new CAfxD3d9PixelShader(this);
         retval = val;
 
         auto message = CefProcessMessage::Create("afx-interop");
@@ -4440,7 +4316,7 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
           static_cast<CAfxInteropUserData*>(arguments[0]->GetUserData().get()));
 
       if (drawingData) {
-        CefRefPtr<CAfxD3d9IndexBuffer> val = new CAfxD3d9VertexShader(this);
+        CefRefPtr<CAfxD3d9VertexShader> val = new CAfxD3d9VertexShader(this);
         retval = val;
 
         auto message = CefProcessMessage::Create("afx-interop");
@@ -5227,9 +5103,10 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
         CefRefPtr<CAfxDrawingData> val = new CAfxDrawingData(this,size,pData);
         retval = val;
 
-        args->SetSize(3);
+        args->SetSize(4);
         args->SetInt(0, (int)CefDrawingInteropMessage::CreateDrawingData);
-        val->InsertIdAsTwoInts(args, 1, 2);
+        args->SetInt(1, (int)arguments[0]->GetUIntValue());
+        val->InsertIdAsTwoInts(args, 2, 3);
         
         SendProcessMessage(PID_BROWSER, message);
         return true;
@@ -5240,7 +5117,7 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
   }
 };
 
-class IEngineInterop* CreateEngineInterop(
+class CEngineInterop* CreateEngineInterop(
     CefRefPtr<CefBrowser> const& browser,
     CefRefPtr<CefFrame> const& frame,
     CefRefPtr<CefV8Context> const& context) {
