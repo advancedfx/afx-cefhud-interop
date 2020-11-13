@@ -183,17 +183,23 @@ AfxD3d9VertexDeclaration = {
 
 AfxD3d9IndexBuffer = {
 	release: Function(), // Actively release the index buffer on the client. Strongly recommended if you don't need it anymore to save resources.
+	
+	// WARNING: Input is currently not fully sanitized and validated, providing bogous values might cause CEF or CS:GO to crash!
 	update: Function(data: AfxDrawingData, offset: UInt, size: UInt)
 };
 
 AfxD3d9VertexBuffer= {
 	release: Function(), // Actively release the vertex buffer on the client. Strongly recommended if you don't need it anymore to save resources.
+	
+	// WARNING: Input is currently not fully sanitized and validated, providing bogous values might cause CEF or CS:GO to crash!
 	update: Function(data: AfxDrawingData, offset: UInt, size: UInt)
 };
 
 AfxD3d9Texture: {
 	release: Function(), // Actively release the texture on the client. Strongly recommended if you don't need it anymore to save resources.
-	update: Function(level: UInt, rect: null|AfxRect, data: AfxDrawingData, offset: UInt, numRowBytes: UInt, numRows: UInt) // The texture data supplied must be without padding!
+	
+	// WARNING: Input is currently not fully sanitized and validated, providing bogous values might cause CEF or CS:GO to crash!
+	update: Function(level: UInt, rect: null|AfxRect, data: AfxDrawingData, rowOffsetBytes: UInt, columnOffsetBytes: UInt, dataBytesPerRow: UInt, totalBytesPerRow: UInt, numRows: UInt) // The texture data supplied must be without padding!
 };
 
 AfxD3d9PixelShader: {
@@ -261,10 +267,10 @@ AfxInterop = {
 	d3d9CreateVertexBuffer: Function(length: UInt, usage: UInt, fvf: UInt, pool: UInt, pSharedHandle: null|AfxDrawingHandle) => AfxD3d9VertexBuffer, // Pool D3DPOOL_DEFAULT is strongly recommended. https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-createvertexbuffer
 	d3d9CreateTexture: Function(width: UInt, height: UInt, levels: UInt, usage: UInt, format: UInt, pool: UInt, pSharedHandle: null|AfxDrawingHandle) => AfxD3d9Texture, // Pool D3DPOOL_DEFAULT is strongly recommended. https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-createtexture
 	
-	d3d9CreateVertexShader: Function(data: AfxDrawingData) => AfxD3d9PixelShader, // https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-createvertexshader
-	d3d9CreatePixelShader: Function(data: AfxDrawingData) => AfxD3d9VertexShader, // https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-createpixelshader
+	d3d9CreateVertexShader: Function(data: AfxDrawingData) => AfxD3d9PixelShader, // https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-createvertexshader // WARNING: Input is currently not fully sanitized and validated, providing bogous values might cause CS:GO to crash!
+	d3d9CreatePixelShader: Function(data: AfxDrawingData) => AfxD3d9VertexShader, // https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-createpixelshader // WARNING: Input is currently not fully sanitized and validated, providing bogous values might cause CS:GO to crash!
 	
-	d3d9UpdateTexture: Function(bootstrap: Bool, pSourceTexture: null|AfxD3d9Texture, pDestinationTexture: null|AfxD3d9Texture), // https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-updatetexture
+	d3d9UpdateTexture: Function(pSourceTexture: null|AfxD3d9Texture, pDestinationTexture: null|AfxD3d9Texture), // https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-updatetexture
 	d3d9SetViewport: Function(null|AfxD3d9Viewport), // https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-setviewport
 	d3d9SetRenderState: Function(state: UInt, value: UInt), // https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-setrenderstate
 	d3d9SetSamplerState: Function(sampler: UInt, type: UInt, value: UInt), // https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-setsamplerstate
@@ -284,7 +290,7 @@ AfxInterop = {
 	d3d9SetPixelShaderConstantF: Function(startRegister: UInt, Array<Double>), // https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-setpixelshaderconstantf
 	d3d9SetPixelShaderConstantI: Function(startRegister: UInt, Array<Int>), // https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-setpixelshaderconstanti
 	d3d9DrawPrimitive: Function(primitiveType: UInt, startVertex: UInt, primitiveCount: UInt), // https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-drawprimitive
-	d3d9DrawIndexedPrimitive: Function(primitiveType: UInt, baseVertexIndex: Int, MinVertexIndex: UInt, NumVertices: UInt, startIndex: UInt, primCount: UInt), // https://docs.microsoft.com/en-us/windows/win32/api/d3d9helper/nf-d3d9helper-idirect3ddevice9-drawindexedprimitive
+	d3d9DrawIndexedPrimitive: Function(primitiveType: UInt, baseVertexIndex: Int, minVertexIndex: UInt, numVertices: UInt, startIndex: UInt, primCount: UInt), // https://docs.microsoft.com/en-us/windows/win32/api/d3d9helper/nf-d3d9helper-idirect3ddevice9-drawindexedprimitive
 	
 	waitForGpu: Function(), // Waits for the GPU before continuing, this is important when using shared resources (e.g. textures).
 	beginCleanState: Function(), // Puts the 3D state into a safe initial state, recommended. Must not be nested.

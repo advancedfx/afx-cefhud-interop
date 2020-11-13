@@ -25,22 +25,25 @@ class CEngineInterop : public CefV8Accessor, public CefV8Handler {
 class CEngineInterop* CreateEngineInterop(
       CefRefPtr<CefBrowser> const& browser,
       CefRefPtr<CefFrame> const& frame,
-    CefRefPtr<CefV8Context> const& context,
-    const char* pipeName);
+    CefRefPtr<CefV8Context> const& context);
 
 
 class CDrawingInterop : public CefBaseRefCounted {
  public:
-  virtual void OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+  virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                         CefRefPtr<CefFrame> frame,
                                         CefProcessId source_process,
                                         CefRefPtr<CefProcessMessage> message,
                                         CefRefPtr<CefListValue> args) = 0;
+  
+  virtual void GetViewRect(CefRefPtr<CefBrowser> browser,
+                           CefRect& rect) = 0;
 
-  virtual void SetShardHandle(void * handle) = 0;
+  virtual void SetSharedHandle(void * handle) = 0;
 };
 
-class IDrawingInterop* CreateDrawingInterop(const char* pipeName);
+class CDrawingInterop* CreateDrawingInterop(
+    CefRefPtr<CefBrowser> const& browser);
 
 }  // namespace interop
 }  // namespace advancedfx
