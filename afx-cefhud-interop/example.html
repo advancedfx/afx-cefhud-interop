@@ -257,11 +257,12 @@ AfxInterop = {
 	
 	onDeviceReset: Function(Function()), // Use this event to restore resources after device reset (e.g. for D3DPOOL_DEFAULT).
 	
-	drawingConnect: Function([frameCount=Int]), // schedule drawing connection, for the drawing to work / do anything useful beyond connecting you will need to pass on the frameCount you get from on onRenderViewBegin (it's required for synchronization).
-	drawingFinish: Function(), // Signal we are finished with the current pass.
+	drawingConnect: Function(), // schedule drawing connection.
+	drawingPumpBegin: Function(frameCount=Int), // Begin render pass / pumping messages.
+	drawingPumpEnd: Function(), // End render pass / pumping messages.
 	drawingBeginFrame: Function([width=Int,height=Int]), // schedule drawing of a Cef window frame, with optional width and height (e.g. from onRenderViewBegin to match the client size).
 	
-	d3d9CreateVertexDecalaration: Function(count: UInt, data: AfxDrawingData) => AfxD3d9VertexDeclaration, // https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-createvertexdeclaration
+	d3d9CreateVertexDeclaration: Function(count: UInt, data: AfxDrawingData) => AfxD3d9VertexDeclaration, // https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-createvertexdeclaration
 	
 	d3d9CreateIndexBuffer: Function(length: UInt, usage: UInt, format: UInt, pool: UInt, pSharedHandle: null|AfxDrawingHandle) => AfxD3d9IndexBuffer, // Pool D3DPOOL_DEFAULT is strongly recommended. https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-createindexbuffer
 	d3d9CreateVertexBuffer: Function(length: UInt, usage: UInt, fvf: UInt, pool: UInt, pSharedHandle: null|AfxDrawingHandle) => AfxD3d9VertexBuffer, // Pool D3DPOOL_DEFAULT is strongly recommended. https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-createvertexbuffer
@@ -351,22 +352,11 @@ AfxInterop = {
 		};
 		
 		var afxInterop = window.afxInterop;
+		var afxPass = null;
 		var afxRenderInfo = null;
-		var afxDrawingConnectCalled = false;
 		
 		var divGameEvents = document.getElementById('gameEvents');
-		
-		function afxAutoDrawingConnect() {
-			if(!afxDrawingConnectCalled)
-			{
-				afxDrawingConnectCalled = true;
-				if(afxRenderInfo)
-					afxInterop.Connect(afxRenderInfo.frameCount);
-				else
-					afxInterop.Connect();
-			}
-		}
-		
+		/*
 		function afxDrawCefWindowOnScreen(width,height) {
 			var afxCefWindowTextureSharedHandle;
 			var afxCefWindowTexture;
@@ -379,6 +369,7 @@ AfxInterop = {
 				afxCefWindowTextureSharedHandle = currentCefWindowTextureSharedHandle;
 			}
 		}
+		*/
 		
 		afxInterop.onNewConnection(function(){
 		
@@ -437,6 +428,10 @@ AfxInterop = {
 		
 		afxInterop.onRenderViewBegin(function(renderInfo){
 		
+			
+			afxRenderInfo = renderInfo;
+			afxPass = 0;
+			
 			var passes = {};
 			
 			// Select passes you want here:
@@ -448,16 +443,17 @@ AfxInterop = {
 			//passes["afterTranslucent"] = true;
 			//passes["beforeHud"] = true;
 			//passes["afterHud"] = true;
-			passes["afterRenderView"] = true;
+			//passes["afterRenderView"] = true;
 			
-			afxRenderInfo = renderInfo;
-			
-			afxAutoDrawingConnect();
+			afxInterop.drawingPumpBegin(afxRenderInfo.frameCount, afxPass++);
+			afxInterop.drawingPumpEnd();
 			
 			return passes;
 		});
 		
 		afxInterop.onRenderPass(function(renderPassState, renderView){
+			
+			afxInterop.drawingPumpBegin(afxRenderInfo.frameCount, afxPass++);
 			
 			var texWidth = renderView.width - afxRenderInfo.renderView.x;
 			var texHeight = renderView.height - afxRenderInfo.renderView.y;
@@ -466,34 +462,48 @@ AfxInterop = {
 			{
 				// Draw 3D rectangle:
 			}
+			
+			afxInterop.drawingPumpEnd();
 		});
 		
 		/*
 		afxInterop.onHudBegin(function afxOnHudBegin(){
+			
+			afxInterop.drawingPumpBegin(afxRenderInfo.afxRenderInfo, afxPass);
+
 			var texWidth = renderView.width - renderView.x;
 			var texHeight = renderView.height - renderView.y;
 			afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
-			afxInterop.scheduleDrawingConnect(afxRenderInfo.frameCount);
+			afxInterop.scheduleDrawingConnect(afxFrameCount);
+
+			++afxPass;
 		});
 		*/
 		
 		/*
 		afxInterop.onHudEnd(function(){
-		
+			
+			afxInterop.drawingPumpBegin(afxRenderInfo.afxRenderInfo, afxPass);
+			
 			var texWidth = renderView.width - renderView.x;
 			var texHeight = renderView.height - renderView.y;
-			afxInterop.drawingConnect(afxRenderInfo.frameCount); afxDrawingConnectCalled = true;
+			afxInterop.drawingConnect(afxFrameCount); afxDrawingConnectCalled = true;
 			afxInterop.drawingBeginFrame(texWidth, texHeight);
+
+			++afxPass;
 		});
 		*/
 		
 		afxInterop.onRenderViewEnd(function(){
-			while(divGameEvents.childNodes.length > 10) divGameEvents.lastElementChild.remove();
+			
+			afxInterop.drawingPumpBegin(afxRenderInfo.afxRenderInfo, afxPass);
 			
 			var texWidth = afxRenderInfo.view.width - afxRenderInfo.view.x;
 			var texHeight = afxRenderInfo.view.height - afxRenderInfo.view.y;
 			
 			afxInterop.drawingBeginFrame(texWidth, texHeight);
+
+			++afxPass;
 		});
 		
 		// GameEvents:
@@ -615,7 +625,7 @@ AfxInterop = {
 		
 		//
 		
-		console.log(window.afxInterop.pipeName);
+		console.log(afxInterop.pipeName);
 		
 		// The worker function:
 
@@ -624,14 +634,12 @@ AfxInterop = {
 			{
 				if(afxInterop.getConnected())
 				{
+					while(divGameEvents.childNodes.length > 10) divGameEvents.lastElementChild.remove();
 				}
-				
-				if(!afxDrawingConnectCalled)
+				else
 				{
-					afxDrawingConnectCalled.drawingConnect();
+					afxInterop.drawingConnect();
 				}
-				afxDrawingConnectCalled = false;
-				afxRenderInfo = null;
 			}
 		},0 );
 	}

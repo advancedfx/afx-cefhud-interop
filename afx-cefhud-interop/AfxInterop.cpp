@@ -61,7 +61,11 @@ enum class DrawingMessage : unsigned int {
   AfterTranslucent = 5,
   BeforeHud = 6,
   AfterHud = 7,
-  OnRenderViewEnd = 8
+  OnRenderViewEnd = 8,
+
+  DeviceLost = 9,
+  DeviceRestored = 10,
+  NOP = 11
 };
 
 enum class PrepareDrawReply : unsigned int {
@@ -134,7 +138,8 @@ enum class CefDrawingInteropMessage : int {
   Close,
 
   Connect,
-  Finish,
+  PumpBegin,
+  PumpEnd,
   BeginFrame,
 	
   D3d9CreateVertexDecalaration,
@@ -993,9 +998,9 @@ class CInterop {
       m_Connecting = true;
     }
 
-    CNamedPipeServer::State drawingState = m_PipeServer->Connect();
+    CNamedPipeServer::State state = m_PipeServer->Connect();
 
-    switch (drawingState) {
+    switch (state) {
       case CNamedPipeServer::State_Connected:
         if (m_Connecting) {
           m_Connecting = false;
@@ -1083,15 +1088,16 @@ class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
                         base::Bind(&CDrawingInteropImpl::DoClose, this));
             return true;
           case CefDrawingInteropMessage::Connect:
-            if (1 == argC)
               CefPostTask(TID_UI,
                           base::Bind(&CDrawingInteropImpl::DoConnect, this));
-            else
-              CefPostTask(TID_UI,
-                          base::Bind(&CDrawingInteropImpl::DoConnect2, this, args->GetInt(1)));          
             return true;
-          case CefDrawingInteropMessage::Finish:
-            CefPostTask(TID_UI, base::Bind(&CDrawingInteropImpl::DoFinish,
+          case CefDrawingInteropMessage::PumpBegin:
+            CefPostTask(TID_UI,
+                             base::Bind(&CDrawingInteropImpl::DoPumpBegin, this,
+                                   args->GetInt(1), (unsigned int)args->GetInt(2)));
+            return true;
+          case CefDrawingInteropMessage::PumpEnd:
+            CefPostTask(TID_UI, base::Bind(&CDrawingInteropImpl::DoPumpEnd,
                                            this));              
 
             return true;
@@ -1566,22 +1572,21 @@ class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
   CefRefPtr<CefBrowser> m_Browser;
 
   bool m_InFlow = false;
-  bool m_HasData = false;
-  int m_FrameCount = -1;
 
   HANDLE m_ShareHandle = INVALID_HANDLE_VALUE;
   int m_Width = 640;
   int m_Height = 480;
 
-  virtual bool OnNewConnection() {
-    return m_PipeServer->WriteUInt32((UINT32)DrawingReply::Finished);
-  }
+  bool DoThePumping(int frameCount, unsigned int pass) {
 
-  virtual bool OnConnection() {
+    m_InFlow = false;
+
     while (true) {
       INT32 drawingMessage;
       if (!m_PipeServer->ReadInt32(drawingMessage))
         return false;
+
+      bool bContinue = false;
 
       switch ((DrawingMessage)drawingMessage) {
         case DrawingMessage::BeforeTranslucentShadow:
@@ -1591,28 +1596,39 @@ class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
         case DrawingMessage::BeforeHud:
         case DrawingMessage::AfterHud:
         case DrawingMessage::OnRenderViewEnd:
+        case DrawingMessage::NOP:
+          break;
+        case DrawingMessage::DeviceLost:
+          bContinue = true;
+          break;
+        case DrawingMessage::DeviceRestored: {
+          auto browserMessage = CefProcessMessage::Create("afx-interop");
+          auto args = browserMessage->GetArgumentList();
+          args->SetSize(1);
+          args->SetInt(0, (int)CefEngineInteropMessage::DeviceReset);
+          m_Browser->GetMainFrame()->SendProcessMessage(PID_BROWSER,
+                                                        browserMessage);
+        }
+          bContinue = true;
           break;
 
         default:
           return false;  // Unsupported event
       }
 
+      if (bContinue) continue;
+
       INT32 clientFrameCount;
       if (!m_PipeServer->ReadInt32(clientFrameCount))
         return false;
 
-      if (!m_HasData) {
-        if (!m_PipeServer->WriteInt32((INT32)PrepareDrawReply::Skip))
-          return false;
-        if (!m_PipeServer->Flush())
-          return false;
+      UINT32 clientPass;
+      if (!m_PipeServer->ReadUInt32(clientPass))
+        return false;
 
-        return true;
-      }
+      INT32 frameDiff = frameCount - clientFrameCount;
 
-      INT32 frameDiff = m_FrameCount - clientFrameCount;
-
-      if (frameDiff < 0) {
+      if (frameDiff < 0 || frameDiff == 0 && pass < clientPass) {
         // Error: client is ahead, otherwise we would have correct data
         // by now.
 
@@ -1622,7 +1638,7 @@ class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
           return false;
 
         return true;
-      } else if (frameDiff > 0) {
+      } else if (frameDiff > 0 || frameDiff == 0 && pass > clientPass) {
         // client is behind.
 
         if (!m_PipeServer->WriteInt32((INT32)PrepareDrawReply::Skip))
@@ -1650,13 +1666,12 @@ class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
 
   void DoConnect() { CInterop::Connection(); }
 
-  void DoConnect2(int frameCount) {
-    m_HasData = true;
-    m_FrameCount = frameCount;
-    CInterop::Connection();
+  void DoPumpBegin(int frameCount, unsigned int pass) {
+    if(!DoThePumping(frameCount, pass))
+      Close();
   }
 
-  void DoFinish() {
+  void DoPumpEnd() {
     if (!m_InFlow)
       return;
 
@@ -2700,6 +2715,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
     auto window = context->GetGlobal();
     window->SetValue("afxInterop", object, V8_PROPERTY_ATTRIBUTE_NONE);
 
+    object->SetValue("pipeName", V8_ACCESS_CONTROL_DEFAULT,
+                     V8_PROPERTY_ATTRIBUTE_NONE);
     m_GetMap.emplace("pipeName",
         std::bind<bool>(&CEngineInteropImpl::GetPipeName, this,
                         std::placeholders::_1, std::placeholders::_2,
@@ -2854,7 +2871,223 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
     m_OnDeviceReset.InitCallback(context, object, this, m_ExecuteMap,
                                      m_GetMap, "onDeviceReset");
-
+    m_DrawingConnect.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "drawingConnect",
+        std::bind<bool>(&CEngineInteropImpl::DrawingConnect,
+                        this, std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_DrawingPumpBegin.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "drawingPumpBegin",
+        std::bind<bool>(&CEngineInteropImpl::DrawingPumpBegin, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_DrawingPumpEnd.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "drawingPumpEnd",
+        std::bind<bool>(&CEngineInteropImpl::DrawingPumpEnd, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_DrawingBeginFrame.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "drawingBeginFrame",
+        std::bind<bool>(&CEngineInteropImpl::DrawingBeginFrame, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9CreateVertexDecalaration.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9CreateVertexDeclaration",
+        std::bind<bool>(&CEngineInteropImpl::D3d9CreateVertexDeclaration, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9CreateIndexBuffer.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9CreateIndexBuffer",
+        std::bind<bool>(&CEngineInteropImpl::D3d9CreateIndexBuffer, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9CreateVertexBuffer.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9CreateVertexBuffer",
+        std::bind<bool>(&CEngineInteropImpl::D3d9CreateVertexBuffer, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9CreateTexture.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9CreateTexture",
+        std::bind<bool>(&CEngineInteropImpl::D3d9CreateTexture, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9CreateVertexShader.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9CreateVertexShader",
+        std::bind<bool>(&CEngineInteropImpl::D3d9CreateVertexShader, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9CreatePixelShader.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9CreatePixelShader",
+        std::bind<bool>(&CEngineInteropImpl::D3d9CreatePixelShader, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9UpdateTexture.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9UpdateTexture",
+        std::bind<bool>(&CEngineInteropImpl::D3d9UpdateTexture, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetViewport.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetViewport",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetViewport, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetRenderState.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetRenderState",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetRenderState, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetSamplerState.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetSamplerState",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetSamplerState, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetTexture.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetTexture",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetTexture, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetTextureStageState.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetTextureStageState",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetTextureStageState, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetTransform.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetTransform",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetTransform, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetIndices.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetIndices",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetIndices, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetStreamSource.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetStreamSource",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetStreamSource, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetStreamSourceFreq.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetStreamSourceFreq",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetStreamSourceFreq, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetVertexDeclaration.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexDeclaration",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetVertexDeclaration, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetVertexShader.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShader",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetVertexShader, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetVertexShaderConstantB.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShaderConstantB",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetVertexShaderConstantB, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetVertexShaderConstantF.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShaderConstantF",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetVertexShaderConstantF, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetVertexShaderConstantI.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShaderConstantI",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetVertexShaderConstantI, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetPixelShader.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShader",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetPixelShader, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetPixelShaderConstantB.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShaderConstantB",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetPixelShaderConstantB, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetPixelShaderConstantF.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShaderConstantF",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetPixelShaderConstantF, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9SetPixelShaderConstantI.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShaderConstantI",
+        std::bind<bool>(&CEngineInteropImpl::D3d9SetPixelShaderConstantI, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9DrawPrimitive.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9DrawPrimitive",
+        std::bind<bool>(&CEngineInteropImpl::D3d9DrawPrimitive, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_D3d9DrawIndexedPrimitive.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "d3d9DrawIndexedPrimitive",
+        std::bind<bool>(&CEngineInteropImpl::D3d9DrawIndexedPrimitive, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_WaitForGpu.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "waitForGpu",
+        std::bind<bool>(&CEngineInteropImpl::WaitForGpu, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_BeginCleanState.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "beginCleanState",
+        std::bind<bool>(&CEngineInteropImpl::BeginCleanState, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_EndCleanState.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "endCleanState",
+        std::bind<bool>(&CEngineInteropImpl::EndCleanState, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_CreateCefWindowTextureSharedHandle.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "createCefWindowTextureSharedHandle",
+        std::bind<bool>(&CEngineInteropImpl::CreateCefWindowTextureSharedHandle,
+                        this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
+    m_CreateDrawingData.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "createDrawingData",
+        std::bind<bool>(&CEngineInteropImpl::CreateDrawingData, this,
+                        std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3, std::placeholders::_4,
+                        std::placeholders::_5));
   }
 
   virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
@@ -3526,7 +3759,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
                   GetMap_t& getMap,
                   const char* name,
                   Execute_t execute) {
-      m_Fn = CefV8Value::CreateFunction("connect", handler);
+      m_Fn = CefV8Value::CreateFunction(name, handler);
 
       executeMap.emplace(name, execute);
 
@@ -3546,7 +3779,9 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
              const CefRefPtr<CefV8Value> object,
              CefRefPtr<CefV8Value>& retval,
              CefString& exception) {
-      return m_Fn;
+
+      retval = m_Fn;
+      return true;;
     }
 
    protected:
@@ -4565,6 +4800,41 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
   CCallback m_OnDeviceReset;
 
   CFunc m_DrawingConnect;
+  CFunc m_DrawingPumpBegin;
+  CFunc m_DrawingPumpEnd;
+  CFunc m_DrawingBeginFrame;
+  CFunc m_D3d9CreateVertexDecalaration;
+  CFunc m_D3d9CreateIndexBuffer;
+  CFunc m_D3d9CreateVertexBuffer;
+  CFunc m_D3d9CreateTexture;
+  CFunc m_D3d9CreateVertexShader;
+  CFunc m_D3d9CreatePixelShader;
+  CFunc m_D3d9UpdateTexture;
+  CFunc m_D3d9SetViewport;
+  CFunc m_D3d9SetRenderState;
+  CFunc m_D3d9SetSamplerState;
+  CFunc m_D3d9SetTexture;
+  CFunc m_D3d9SetTextureStageState;
+  CFunc m_D3d9SetTransform;
+  CFunc m_D3d9SetIndices;
+  CFunc m_D3d9SetStreamSource;
+  CFunc m_D3d9SetStreamSourceFreq;
+  CFunc m_D3d9SetVertexDeclaration;
+  CFunc m_D3d9SetVertexShader;
+  CFunc m_D3d9SetVertexShaderConstantB;
+  CFunc m_D3d9SetVertexShaderConstantF;
+  CFunc m_D3d9SetVertexShaderConstantI;
+  CFunc m_D3d9SetPixelShader;
+  CFunc m_D3d9SetPixelShaderConstantB;
+  CFunc m_D3d9SetPixelShaderConstantF;
+  CFunc m_D3d9SetPixelShaderConstantI;
+  CFunc m_D3d9DrawPrimitive;
+  CFunc m_D3d9DrawIndexedPrimitive;
+  CFunc m_WaitForGpu;
+  CFunc m_BeginCleanState;
+  CFunc m_EndCleanState;
+  CFunc m_CreateCefWindowTextureSharedHandle;
+  CFunc m_CreateDrawingData;
 
   bool DoRenderPass(enum RenderPassType_e pass) {
     View_s view;
@@ -5550,37 +5820,6 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
   }
 
   bool DrawingConnect(const CefString& name,
-                        CefRefPtr<CefV8Value> object,
-                        const CefV8ValueList& arguments,
-                        CefRefPtr<CefV8Value>& retval,
-                        CefString& exceptionoverride) {
-    if (0 == arguments.size()) {
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(1);
-      args->SetInt(0,
-                   (int)CefDrawingInteropMessage::Connect);
-
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-    else if (1 == arguments.size() && arguments[0] && arguments[0]->IsInt())
-    {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(2);
-      args->SetInt(0, (int)CefDrawingInteropMessage::Connect);
-      args->SetInt(1, arguments[0]->GetIntValue());
-
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool DrawingFinish(const CefString& name,
                       CefRefPtr<CefV8Value> object,
                       const CefV8ValueList& arguments,
                       CefRefPtr<CefV8Value>& retval,
@@ -5589,7 +5828,46 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
       auto message = CefProcessMessage::Create("afx-interop");
       auto args = message->GetArgumentList();
       args->SetSize(1);
-      args->SetInt(0, (int)CefDrawingInteropMessage::Finish);
+      args->SetInt(0, (int)CefDrawingInteropMessage::Connect);
+
+      SendProcessMessage(PID_BROWSER, message);
+      return true;
+    }
+
+    return false;
+  }
+
+  bool DrawingPumpBegin(const CefString& name,
+                      CefRefPtr<CefV8Value> object,
+                      const CefV8ValueList& arguments,
+                      CefRefPtr<CefV8Value>& retval,
+                      CefString& exceptionoverride) {
+    if (2 == arguments.size() && arguments[0] && arguments[1] && arguments[0]->IsInt() && arguments[1]->IsUInt())
+    {
+      auto message = CefProcessMessage::Create("afx-interop");
+      auto args = message->GetArgumentList();
+      args->SetSize(3);
+      args->SetInt(0, (int)CefDrawingInteropMessage::PumpBegin);
+      args->SetInt(1, arguments[0]->GetIntValue());
+      args->SetInt(2, (int)arguments[1]->GetUIntValue());
+
+      SendProcessMessage(PID_BROWSER, message);
+      return true;
+    }
+
+    return false;
+  }
+
+  bool DrawingPumpEnd(const CefString& name,
+                      CefRefPtr<CefV8Value> object,
+                      const CefV8ValueList& arguments,
+                      CefRefPtr<CefV8Value>& retval,
+                      CefString& exceptionoverride) {
+    if (0 == arguments.size()) {
+      auto message = CefProcessMessage::Create("afx-interop");
+      auto args = message->GetArgumentList();
+      args->SetSize(1);
+      args->SetInt(0, (int)CefDrawingInteropMessage::PumpEnd);
 
       SendProcessMessage(PID_BROWSER, message);
       return true;
