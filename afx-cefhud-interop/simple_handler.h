@@ -109,8 +109,6 @@ class SimpleHandler : public CefClient,
 
   bool is_closing_;
 
-  class advancedfx::interop::CDrawingInterop* afx_drawing_interop_ = nullptr;
-
   // Include the default reference counting implementation.
   IMPLEMENT_REFCOUNTING(SimpleHandler);
 };

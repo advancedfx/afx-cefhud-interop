@@ -9,6 +9,8 @@
 
 #include "afx-cefhud-interop/AfxInterop.h"
 
+#include <list>
+
 // Implement application-level callbacks for the browser process.
 class SimpleApp : public CefApp,
                   public CefBrowserProcessHandler,
@@ -35,13 +37,24 @@ class SimpleApp : public CefApp,
                                 CefRefPtr<CefFrame> frame,
                                 CefRefPtr<CefV8Context> context) OVERRIDE {
 
-    afx_engine_interop_ = advancedfx::interop::CreateEngineInterop(browser, frame, context);
+    browser_list_.emplace_back(
+            browser,
+            advancedfx::interop::CreateEngineInterop(browser, frame, context));
   }
   
   virtual void OnContextReleased(CefRefPtr<CefBrowser> browser,
                                  CefRefPtr<CefFrame> frame,
                                  CefRefPtr<CefV8Context> context) OVERRIDE {
-    afx_engine_interop_ = nullptr;
+
+  // Remove from the list of existing browsers.
+    BrowserList::iterator bit = browser_list_.begin();
+    for (; bit != browser_list_.end(); ++bit) {
+      if ((bit->Browser)->IsSame(browser)) {
+        bit->EngineInterop->CloseInterop();
+        browser_list_.erase(bit);
+        break;
+      }
+    }
   }
   virtual bool OnProcessMessageReceived(
       CefRefPtr<CefBrowser> browser,
@@ -82,7 +95,18 @@ class SimpleApp : public CefApp,
   // Include the default reference counting implementation.
   IMPLEMENT_REFCOUNTING(SimpleApp);
 
-  CefRefPtr<advancedfx::interop::CEngineInterop> afx_engine_interop_ = nullptr;
+  struct BrowserListElem {
+    CefRefPtr<CefBrowser> Browser;
+    CefRefPtr<advancedfx::interop::CEngineInterop> EngineInterop;
+
+    BrowserListElem(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<advancedfx::interop::CEngineInterop> engineInterop)
+        : Browser(browser), EngineInterop(engineInterop) {}
+  };
+
+  typedef std::list<BrowserListElem> BrowserList;
+  BrowserList browser_list_;
 };
 
 #endif  // CEF_TESTS_CEFSIMPLE_SIMPLE_APP_H_

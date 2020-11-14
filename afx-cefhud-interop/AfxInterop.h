@@ -15,6 +15,8 @@ namespace interop {
 
 class CEngineInterop : public CefV8Accessor, public CefV8Handler {
  public:
+  virtual void CloseInterop() = 0;
+
   virtual bool OnProcessMessageReceived(
       CefRefPtr<CefBrowser> browser,
       CefRefPtr<CefFrame> frame,
@@ -30,7 +32,10 @@ class CEngineInterop* CreateEngineInterop(
 
 class CDrawingInterop : public CefBaseRefCounted {
  public:
-  virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+  virtual void CloseInterop() = 0;
+
+  virtual bool OnProcessMessageReceived(
+      CefRefPtr<CefBrowser> browser,
                                         CefRefPtr<CefFrame> frame,
                                         CefProcessId source_process,
                                         CefRefPtr<CefProcessMessage> message) = 0;

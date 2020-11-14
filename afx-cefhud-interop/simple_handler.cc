@@ -79,6 +79,7 @@ void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   BrowserList::iterator bit = browser_list_.begin();
   for (; bit != browser_list_.end(); ++bit) {
     if ((bit->Browser)->IsSame(browser)) {
+      bit->DrawingInterop->CloseInterop();
       browser_list_.erase(bit);
       break;
     }

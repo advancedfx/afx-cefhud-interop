@@ -1059,6 +1059,9 @@ class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
   IMPLEMENT_REFCOUNTING(CDrawingInteropImpl);
 
  public:
+
+  virtual void CloseInterop() override { CInterop::Close(); }
+
   CDrawingInteropImpl(CefRefPtr<CefBrowser> const& browser)
       : CInterop("advancedfxInterop_drawing"), m_Browser(browser) {
   
@@ -1667,6 +1670,9 @@ class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
   void DoConnect() { CInterop::Connection(); }
 
   void DoPumpBegin(int frameCount, unsigned int pass) {
+    if (!Connected())
+      return;
+
     if(!DoThePumping(frameCount, pass))
       Close();
   }
@@ -2702,6 +2708,10 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
   IMPLEMENT_REFCOUNTING(CEngineInteropImpl);
 
  public:
+
+  virtual void CloseInterop() override { CInterop::Close();
+  }
+
   CEngineInteropImpl(CefRefPtr<CefBrowser> const& browser,
                      CefRefPtr<CefFrame> const& frame,
                      CefRefPtr<CefV8Context> const& context)
@@ -2717,32 +2727,67 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
     object->SetValue("pipeName", V8_ACCESS_CONTROL_DEFAULT,
                      V8_PROPERTY_ATTRIBUTE_NONE);
-    m_GetMap.emplace("pipeName",
-        std::bind<bool>(&CEngineInteropImpl::GetPipeName, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4));
-    m_SetMap.emplace("pipeName",
-        std::bind<bool>(&CEngineInteropImpl::SetPipeName, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4));
+    m_GetMap.emplace(
+        "pipeName",
+        [this](const CefString& name, const CefRefPtr<CefV8Value> object,
+               CefRefPtr<CefV8Value>& retval, CefString& exception) {
+          retval = CefV8Value::CreateString(CInterop::GetPipeName());
 
-    m_Connect.InitFunc(object, this, m_ExecuteMap, m_GetMap, "connect",
-                       std::bind<bool>(&CEngineInteropImpl::Connect, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+          return true;
+        });
+    m_SetMap.emplace("pipeName",
+        [this](const CefString& name, const CefRefPtr<CefV8Value> object,
+               const CefRefPtr<CefV8Value> value, CefString& exception) {
+          if (value && value->IsString()) {
+            std::string pipeName(value->GetStringValue().ToString());
+
+            CInterop::SetPipeName(pipeName.c_str());
+
+            pipeName.append("_drawing");
+
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(2);
+            args->SetInt(0, (int)CefDrawingInteropMessage::SetPipeName);
+            args->SetString(1, pipeName);
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
+
+    m_Connect.InitFunc(
+        object, this, m_ExecuteMap, m_GetMap, "connect",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          retval = CefV8Value::CreateBool(CInterop::Connection());
+          return true;
+        });
 
     m_GetConnected.InitFunc(object, this, m_ExecuteMap, m_GetMap, "getConnected",
-        std::bind<bool>(&CEngineInteropImpl::GetConnected, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          retval = CefV8Value::CreateBool(CInterop::Connected());
+          return true;
+        });
 
     m_Close.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "close",
-        std::bind<bool>(&CEngineInteropImpl::Close, this, std::placeholders::_1,
-                        std::placeholders::_2, std::placeholders::_3,
-                        std::placeholders::_4, std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          CInterop::Close();
+
+          auto message = CefProcessMessage::Create("afx-interop");
+          auto args = message->GetArgumentList();
+          args->SetSize(1);
+          args->SetInt(0, (int)CefDrawingInteropMessage::Close);
+          SendProcessMessage(PID_BROWSER, message);
+          return true;
+        });
                 
     m_NewConnectionCallback.InitCallback(context, object, this, m_ExecuteMap,
                                          m_GetMap, "onNewConnection");
@@ -2752,10 +2797,19 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
     m_ScheduleCommand.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "scheduleCommand",
-        std::bind<bool>(&CEngineInteropImpl::ScheduleCommand, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (1 <= arguments.size()) {
+            const CefRefPtr<CefV8Value>& arg0 = arguments[0];
+            if (arg0->IsString()) {
+              m_Commands.emplace(arg0->GetStringValue().ToString().c_str());
+              return true;
+            }
+          }
+
+          return false;
+        });
 
     m_RenderViewBeginCallback.InitCallback(context, object, this, m_ExecuteMap,
                                            m_GetMap, "onRenderViewBegin");
@@ -2778,316 +2832,1360 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
     m_AddCalcHandle.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "addCalcHandle",
-        std::bind<bool>(&CEngineInteropImpl::AddCalcHandle, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsString() && arguments[1]->IsFunction()) {
+            retval = (new CCalcResult(
+                          &m_HandleCalcCallbacks,
+                          arguments[0]->GetStringValue().ToString().c_str(),
+                          new CCalcCallback(arguments[1], m_Context)))
+                         ->GetObj();
+
+            return true;
+          }
+
+          return false;
+        });
     m_AddCalcVecAng.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "addCalcVecAng",
-        std::bind<bool>(&CEngineInteropImpl::AddCalcVecAng, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsString() && arguments[1]->IsFunction()) {
+            retval = (new CCalcResult(
+                          &m_VecAngCalcCallbacks,
+                          arguments[0]->GetStringValue().ToString().c_str(),
+                          new CCalcCallback(arguments[1], m_Context)))
+                         ->GetObj();
+
+            return true;
+          }
+
+          return false;
+        });
     m_AddCalcCam.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "addCalcCam",
-        std::bind<bool>(&CEngineInteropImpl::AddCalcCam, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsString() && arguments[1]->IsFunction()) {
+            retval = (new CCalcResult(
+                          &m_CamCalcCallbacks,
+                          arguments[0]->GetStringValue().ToString().c_str(),
+                          new CCalcCallback(arguments[1], m_Context)))
+                         ->GetObj();
+
+            return true;
+          }
+
+          return false;
+        });
     m_AddCalcFov.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "addCalcFov",
-        std::bind<bool>(&CEngineInteropImpl::AddCalcFov, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsString() && arguments[1]->IsFunction()) {
+            retval = (new CCalcResult(
+                          &m_FovCalcCallbacks,
+                          arguments[0]->GetStringValue().ToString().c_str(),
+                          new CCalcCallback(arguments[1], m_Context)))
+                         ->GetObj();
+
+            return true;
+          }
+
+          return false;
+        });
     m_AddCalcBool.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "addCalcBool",
-        std::bind<bool>(&CEngineInteropImpl::AddCalcBool, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsString() && arguments[1]->IsFunction()) {
+            std::string valName = arguments[0]->GetStringValue().ToString();
+
+            retval = (new CCalcResult(
+                          &m_BoolCalcCallbacks,
+                          arguments[0]->GetStringValue().ToString().c_str(),
+                          new CCalcCallback(arguments[1], m_Context)))
+                         ->GetObj();
+
+            return true;
+          }
+
+          return false;
+        });
     m_AddCalcInt.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "addCalcInt",
-        std::bind<bool>(&CEngineInteropImpl::AddCalcInt, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsString() && arguments[1]->IsFunction()) {
+            std::string valName = arguments[0]->GetStringValue().ToString();
+
+            retval = (new CCalcResult(
+                          &m_IntCalcCallbacks,
+                          arguments[0]->GetStringValue().ToString().c_str(),
+                          new CCalcCallback(arguments[1], m_Context)))
+                         ->GetObj();
+
+            return true;
+          }
+
+          return false;
+        });
 
     m_GameEventAllowAdd.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "gameEventAllowAdd",
-        std::bind<bool>(&CEngineInteropImpl::GameEventAllowAdd, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (1 == arguments.size() && arguments[0] &&
+              arguments[0]->IsString()) {
+            std::string val = arguments[0]->GetStringValue().ToString();
+
+            m_GameEventsAllowDeletions.erase(val);
+            m_GameEventsAllowAdditions.insert(val);
+
+            return true;
+          }
+
+          return false;
+        });
     m_GameEventAllowRemove.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "gameEventAllowRemove",
-        std::bind<bool>(&CEngineInteropImpl::GameEventAllowRemove, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (1 == arguments.size() && arguments[0] &&
+              arguments[0]->IsString()) {
+            std::string val = arguments[0]->GetStringValue().ToString();
+
+            m_GameEventsAllowAdditions.erase(val);
+            m_GameEventsAllowDeletions.insert(val);
+
+            return true;
+          }
+
+          return false;
+        });
     m_GameEventDenyAdd.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "gameEventDenyAdd",
-        std::bind<bool>(&CEngineInteropImpl::GameEventDenyAdd, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (1 == arguments.size() && arguments[0] &&
+              arguments[0]->IsString()) {
+            std::string val = arguments[0]->GetStringValue().ToString();
+
+            m_GameEventsDenyDeletions.erase(val);
+            m_GameEventsDenyAdditions.insert(val);
+
+            return true;
+          }
+
+          return false;
+        });
     m_GameEventDenyRemove.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "gameEventDenyRemove",
-        std::bind<bool>(&CEngineInteropImpl::GameEventDenyRemove, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (1 == arguments.size() && arguments[0] &&
+              arguments[0]->IsString()) {
+            std::string val = arguments[0]->GetStringValue().ToString();
+
+            m_GameEventsDenyAdditions.erase(val);
+            m_GameEventsDenyDeletions.insert(val);
+
+            return true;
+          }
+
+          return false;
+        });
     m_GameEventSetEnrichment.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "gameEventSetEnrichment",
-        std::bind<bool>(&CEngineInteropImpl::GameEventSetEnrichment, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (3 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[0]->IsString() &&
+              arguments[1]->IsString() && arguments[2]->IsUInt()) {
+            std::string strEvent = arguments[0]->GetStringValue().ToString();
+            std::string strProperty = arguments[1]->GetStringValue().ToString();
+            unsigned int uiEnrichments = arguments[2]->GetUIntValue();
+
+            m_GameEventsEnrichmentsChanges[GameEventEnrichmentKey_s(
+                strEvent.c_str(), strProperty.c_str())] = uiEnrichments;
+
+            return true;
+          }
+
+          return false;
+        });
 
     m_GameEventCallback.InitCallback(context, object, this, m_ExecuteMap,
                                          m_GetMap, "onGameEvent");
 
     m_GameEventSetTransmitClientTime.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "gameEventSetTransmitClientTime",
-        std::bind<bool>(&CEngineInteropImpl::GameEventSetTransmitClientTime,
-                        this, std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (1 == arguments.size() && arguments[0] && arguments[0]->IsBool()) {
+            bool value = arguments[0]->GetBoolValue();
+
+            m_GameEventsTransmitChanged =
+                m_GameEventsTransmitChanged ||
+                value != m_GameEventsTransmitClientTime;
+            m_GameEventsTransmitClientTime = value;
+
+            return true;
+          }
+
+          return false;
+        });
 
     m_GameEventSetTransmitTick.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "gameEventSetTransmitTick",
-        std::bind<bool>(&CEngineInteropImpl::GameEventSetTransmitTick, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (1 == arguments.size() && arguments[0] && arguments[0]->IsBool()) {
+            bool value = arguments[0]->GetBoolValue();
+
+            m_GameEventsTransmitChanged = m_GameEventsTransmitChanged ||
+                                          value != m_GameEventsTransmitTick;
+            m_GameEventsTransmitTick = value;
+
+            return true;
+          }
+
+          return false;
+        });
 
     m_GameEventSetTransmitSystemTime.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "gameEventSetTransmitSystemTime",
-        std::bind<bool>(&CEngineInteropImpl::GameEventSetTransmitSystemTime,
-                        this, std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (1 == arguments.size() && arguments[0] && arguments[0]->IsBool()) {
+            bool value = arguments[0]->GetBoolValue();
+
+            m_GameEventsTransmitChanged =
+                m_GameEventsTransmitChanged ||
+                value != m_GameEventsTransmitSystemTime;
+            m_GameEventsTransmitSystemTime = value;
+
+            return true;
+          }
+
+          return false;
+        });
 
 
     m_OnDeviceReset.InitCallback(context, object, this, m_ExecuteMap,
                                      m_GetMap, "onDeviceReset");
     m_DrawingConnect.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "drawingConnect",
-        std::bind<bool>(&CEngineInteropImpl::DrawingConnect,
-                        this, std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (0 == arguments.size()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(1);
+            args->SetInt(0, (int)CefDrawingInteropMessage::Connect);
+
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_DrawingPumpBegin.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "drawingPumpBegin",
-        std::bind<bool>(&CEngineInteropImpl::DrawingPumpBegin, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsInt() && arguments[1]->IsUInt()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(3);
+            args->SetInt(0, (int)CefDrawingInteropMessage::PumpBegin);
+            args->SetInt(1, arguments[0]->GetIntValue());
+            args->SetInt(2, (unsigned int)arguments[1]->GetUIntValue());
+
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_DrawingPumpEnd.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "drawingPumpEnd",
-        std::bind<bool>(&CEngineInteropImpl::DrawingPumpEnd, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (0 == arguments.size()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(1);
+            args->SetInt(0, (int)CefDrawingInteropMessage::PumpEnd);
+
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_DrawingBeginFrame.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "drawingBeginFrame",
-        std::bind<bool>(&CEngineInteropImpl::DrawingBeginFrame, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (0 == arguments.size()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(1);
+            args->SetInt(0, (int)CefDrawingInteropMessage::BeginFrame);
+
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          } else if (2 == arguments.size() && arguments[0] && arguments[1] &&
+                     arguments[0]->IsInt() && arguments[1]->IsInt()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(3);
+            args->SetInt(0, (int)CefDrawingInteropMessage::BeginFrame);
+            args->SetInt(1, arguments[0]->GetIntValue());
+            args->SetInt(2, arguments[1]->GetIntValue());
+
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9CreateVertexDecalaration.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9CreateVertexDeclaration",
-        std::bind<bool>(&CEngineInteropImpl::D3d9CreateVertexDeclaration, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt() && arguments[1]->GetUserData() &&
+              static_cast<CAfxInteropUserData*>(
+                  arguments[1]->GetUserData().get())
+                      ->GetUserDataType() == AfxUserDataType::AfxDrawingData) {
+            auto drawingData =
+                static_cast<CAfxDrawingData*>(static_cast<CAfxInteropUserData*>(
+                    arguments[1]->GetUserData().get()));
+
+            if (nullptr != drawingData) {
+              CAfxD3d9VertexDeclaration* val =
+                  new CAfxD3d9VertexDeclaration(this);
+              retval = val->GetObj();
+
+              auto message = CefProcessMessage::Create("afx-interop");
+              auto args = message->GetArgumentList();
+              args->SetSize(6);
+              args->SetInt(
+                  0,
+                  (int)CefDrawingInteropMessage::D3d9CreateVertexDecalaration);
+              val->InsertIdAsTwoInts(args, 1, 2);
+              args->SetInt(3, (int)arguments[0]->GetUIntValue());
+              drawingData->InsertIdAsTwoInts(args, 4, 5);
+
+              SendProcessMessage(PID_BROWSER, message);
+              return true;
+            }
+          }
+
+          return false;
+        });
     m_D3d9CreateIndexBuffer.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9CreateIndexBuffer",
-        std::bind<bool>(&CEngineInteropImpl::D3d9CreateIndexBuffer, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+                 const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+                 CefString& exceptionoverride) {
+          if (5 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[3] && arguments[4] &&
+              arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
+              arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
+            CAfxDrawingHandle* drawingHandle = nullptr;
+
+            if (static_cast<CAfxInteropUserData*>(
+                    arguments[4]->GetUserData().get())
+                    ->GetUserDataType() == AfxUserDataType::AfxDrawingHandle)
+              drawingHandle = static_cast<CAfxDrawingHandle*>(
+                  static_cast<CAfxInteropUserData*>(
+                      arguments[4]->GetUserData().get()));
+
+            CAfxD3d9IndexBuffer* val = new CAfxD3d9IndexBuffer(this);
+            retval = val->GetObj();
+
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(9);
+            args->SetInt(0,
+                         (int)CefDrawingInteropMessage::D3d9CreateIndexBuffer);
+            val->InsertIdAsTwoInts(args, 1, 2);
+            args->SetInt(3, (int)arguments[0]->GetUIntValue());
+            args->SetInt(4, (int)arguments[1]->GetUIntValue());
+            args->SetInt(5, (int)arguments[2]->GetUIntValue());
+            args->SetInt(6, (int)arguments[3]->GetUIntValue());
+            if (nullptr != drawingHandle)
+              drawingHandle->InsertIdAsTwoInts(args, 7, 8);
+            else {
+              args->SetInt(7, 0);
+              args->SetInt(8, 0);
+            }
+
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9CreateVertexBuffer.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9CreateVertexBuffer",
-        std::bind<bool>(&CEngineInteropImpl::D3d9CreateVertexBuffer, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (5 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[3] && arguments[4] &&
+              arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
+              arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
+            CAfxDrawingHandle* drawingHandle = nullptr;
+
+            if (static_cast<CAfxInteropUserData*>(
+                    arguments[4]->GetUserData().get())
+                    ->GetUserDataType() == AfxUserDataType::AfxDrawingHandle)
+              drawingHandle = static_cast<CAfxDrawingHandle*>(
+                  static_cast<CAfxInteropUserData*>(
+                      arguments[4]->GetUserData().get()));
+
+            CAfxD3d9VertexBuffer* val = new CAfxD3d9VertexBuffer(this);
+            retval = val->GetObj();
+
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(9);
+            args->SetInt(0,
+                         (int)CefDrawingInteropMessage::D3d9CreateVertexBuffer);
+            val->InsertIdAsTwoInts(args, 1, 2);
+            args->SetInt(3, (int)arguments[0]->GetUIntValue());
+            args->SetInt(4, (int)arguments[1]->GetUIntValue());
+            args->SetInt(5, (int)arguments[2]->GetUIntValue());
+            args->SetInt(6, (int)arguments[3]->GetUIntValue());
+            if (nullptr != drawingHandle)
+              drawingHandle->InsertIdAsTwoInts(args, 7, 8);
+            else {
+              args->SetInt(7, 0);
+              args->SetInt(8, 0);
+            }
+
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9CreateTexture.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9CreateTexture",
-        std::bind<bool>(&CEngineInteropImpl::D3d9CreateTexture, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (7 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[3] && arguments[4] && arguments[5] &&
+              arguments[5] && arguments[0]->IsUInt() &&
+              arguments[1]->IsUInt() && arguments[2]->IsUInt() &&
+              arguments[3]->IsUInt() && arguments[5]->IsUInt() &&
+              arguments[4]->IsUInt()) {
+            CAfxDrawingHandle* drawingHandle = nullptr;
+
+            if (static_cast<CAfxInteropUserData*>(
+                    arguments[6]->GetUserData().get())
+                    ->GetUserDataType() == AfxUserDataType::AfxDrawingHandle)
+              drawingHandle = static_cast<CAfxDrawingHandle*>(
+                  static_cast<CAfxInteropUserData*>(
+                      arguments[6]->GetUserData().get()));
+
+            CAfxD3d9Texture* val = new CAfxD3d9Texture(this);
+            retval = val->GetObj();
+
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(11);
+            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9CreateTexture);
+            val->InsertIdAsTwoInts(args, 1, 2);
+            args->SetInt(3, (int)arguments[0]->GetUIntValue());
+            args->SetInt(4, (int)arguments[1]->GetUIntValue());
+            args->SetInt(5, (int)arguments[2]->GetUIntValue());
+            args->SetInt(6, (int)arguments[3]->GetUIntValue());
+            args->SetInt(7, (int)arguments[4]->GetUIntValue());
+            args->SetInt(8, (int)arguments[5]->GetUIntValue());
+            if (nullptr != drawingHandle)
+              drawingHandle->InsertIdAsTwoInts(args, 9, 10);
+            else {
+              args->SetInt(9, 0);
+              args->SetInt(10, 0);
+            }
+
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9CreateVertexShader.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9CreateVertexShader",
-        std::bind<bool>(&CEngineInteropImpl::D3d9CreateVertexShader, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+                CefString& exceptionoverride) {
+          if (1 == arguments.size() && arguments[0] &&
+              arguments[0]->GetUserData() &&
+              static_cast<CAfxInteropUserData*>(
+                  arguments[0]->GetUserData().get())
+                      ->GetUserDataType() == AfxUserDataType::AfxDrawingData) {
+            auto drawingData =
+                static_cast<CAfxDrawingData*>(static_cast<CAfxInteropUserData*>(
+                    arguments[0]->GetUserData().get()));
+
+            if (drawingData) {
+              CAfxD3d9VertexShader* val = new CAfxD3d9VertexShader(this);
+              retval = val->GetObj();
+
+              auto message = CefProcessMessage::Create("afx-interop");
+              auto args = message->GetArgumentList();
+              args->SetSize(5);
+              args->SetInt(
+                  0,
+                  (int)CefDrawingInteropMessage::D3d9CreateVertexDecalaration);
+              val->InsertIdAsTwoInts(args, 1, 2);
+              drawingData->InsertIdAsTwoInts(args, 3, 4);
+
+              SendProcessMessage(PID_BROWSER, message);
+              return true;
+            }
+          }
+
+          return false;
+        });
     m_D3d9CreatePixelShader.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9CreatePixelShader",
-        std::bind<bool>(&CEngineInteropImpl::D3d9CreatePixelShader, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (1 == arguments.size() && arguments[0] &&
+              arguments[0]->GetUserData() &&
+              static_cast<CAfxInteropUserData*>(
+                  arguments[0]->GetUserData().get())
+                      ->GetUserDataType() == AfxUserDataType::AfxDrawingData) {
+            auto drawingData =
+                static_cast<CAfxDrawingData*>(static_cast<CAfxInteropUserData*>(
+                    arguments[0]->GetUserData().get()));
+
+            if (drawingData) {
+              CAfxD3d9PixelShader* val = new CAfxD3d9PixelShader(this);
+              retval = val->GetObj();
+
+              auto message = CefProcessMessage::Create("afx-interop");
+              auto args = message->GetArgumentList();
+              args->SetSize(5);
+              args->SetInt(
+                  0,
+                  (int)CefDrawingInteropMessage::D3d9CreateVertexDecalaration);
+              val->InsertIdAsTwoInts(args, 1, 2);
+              drawingData->InsertIdAsTwoInts(args, 3, 4);
+
+              SendProcessMessage(PID_BROWSER, message);
+              return true;
+            }
+          }
+
+          return false;
+        });
     m_D3d9UpdateTexture.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9UpdateTexture",
-        std::bind<bool>(&CEngineInteropImpl::D3d9UpdateTexture, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (3 == arguments.size() && arguments[0] && arguments[1]) {
+            CAfxD3d9Texture* val = nullptr;
+            if (static_cast<CAfxInteropUserData*>(
+                    arguments[0]->GetUserData().get())
+                    ->GetUserDataType() == AfxUserDataType::AfxD3d9Texture)
+              val = static_cast<CAfxD3d9Texture*>(
+                  static_cast<CAfxInteropUserData*>(
+                      arguments[0]->GetUserData().get()));
+
+            CAfxD3d9Texture* val2 = nullptr;
+            if (static_cast<CAfxInteropUserData*>(
+                    arguments[1]->GetUserData().get())
+                    ->GetUserDataType() == AfxUserDataType::AfxD3d9Texture)
+              val2 = static_cast<CAfxD3d9Texture*>(
+                  static_cast<CAfxInteropUserData*>(
+                      arguments[1]->GetUserData().get()));
+
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(5);
+            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9UpdateTexture);
+            if (val)
+              val->InsertIdAsTwoInts(args, 1, 2);
+            else {
+              args->SetInt(1, 0);
+              args->SetInt(2, 0);
+            }
+            if (val2)
+              val2->InsertIdAsTwoInts(args, 3, 4);
+            else {
+              args->SetInt(3, 0);
+              args->SetInt(4, 0);
+            }
+
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9SetViewport.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetViewport",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetViewport, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (0 == arguments.size()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(1);
+            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetViewport);
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          } else if (1 == arguments.size() && arguments[0] &&
+                     arguments[0]->IsObject()) {
+            auto x = arguments[0]->GetValue(0);
+            auto y = arguments[0]->GetValue(0);
+            auto width = arguments[0]->GetValue(0);
+            auto height = arguments[0]->GetValue(0);
+            auto minZ = arguments[0]->GetValue(0);
+            auto maxZ = arguments[0]->GetValue(0);
+
+            if (x && y && width && height && minZ && maxZ && x->IsUInt() &&
+                y->IsUInt() && width->IsUInt() && height->IsUInt() &&
+                minZ->IsDouble() && maxZ->IsDouble()) {
+              auto message = CefProcessMessage::Create("afx-interop");
+              auto args = message->GetArgumentList();
+              args->SetSize(7);
+              args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetViewport);
+              args->SetInt(1, (int)x->GetUIntValue());
+              args->SetInt(2, (int)y->GetUIntValue());
+              args->SetInt(3, (int)width->GetUIntValue());
+              args->SetInt(4, (int)height->GetUIntValue());
+              args->SetDouble(5, (int)minZ->GetUIntValue());
+              args->SetDouble(6, (int)maxZ->GetUIntValue());
+              SendProcessMessage(PID_BROWSER, message);
+              return true;
+            }
+          }
+
+          return false;
+        });
     m_D3d9SetRenderState.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetRenderState",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetRenderState, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt() && arguments[1]->IsUInt()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(3);
+            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetRenderState);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            args->SetInt(2, (int)arguments[1]->GetUIntValue());
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9SetSamplerState.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetSamplerState",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetSamplerState, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (3 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[0]->IsUInt() &&
+              arguments[1]->IsUInt() && arguments[2]->IsUInt()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(4);
+            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetSamplerState);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            args->SetInt(2, (int)arguments[1]->GetUIntValue());
+            args->SetInt(3, (int)arguments[2]->GetUIntValue());
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9SetTexture.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetTexture",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetTexture, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt()) {
+            CAfxD3d9Texture* val = nullptr;
+            if (static_cast<CAfxInteropUserData*>(
+                    arguments[1]->GetUserData().get())
+                    ->GetUserDataType() == AfxUserDataType::AfxD3d9Texture)
+              val = static_cast<CAfxD3d9Texture*>(
+                  static_cast<CAfxInteropUserData*>(
+                      arguments[1]->GetUserData().get()));
+
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(4);
+            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetTexture);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            if (val)
+              val->InsertIdAsTwoInts(args, 2, 3);
+            else {
+              args->SetInt(2, 0);
+              args->SetInt(3, 0);
+            }
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9SetTextureStageState.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetTextureStageState",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetTextureStageState, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (3 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[0]->IsUInt() &&
+              arguments[1]->IsUInt() && arguments[2]->IsUInt()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(4);
+            args->SetInt(
+                0, (int)CefDrawingInteropMessage::D3d9SetTextureStageState);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            args->SetInt(2, (int)arguments[1]->GetUIntValue());
+            args->SetInt(3, (int)arguments[2]->GetUIntValue());
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9SetTransform.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetTransform",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetTransform, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt()) {
+            if (arguments[2]->IsArray() &&
+                arguments[2]->GetArrayLength() == 16) {
+              auto message = CefProcessMessage::Create("afx-interop");
+              auto args = message->GetArgumentList();
+              args->SetSize(18);
+              args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetTransform);
+              args->SetInt(1, (int)arguments[0]->GetUIntValue());
+              bool bOk = true;
+              for (int i = 0; i < 16; ++i) {
+                auto arrVal = arguments[2]->GetValue(i);
+
+                if (arrVal && arrVal->IsDouble()) {
+                  args->SetDouble(2 + i, arrVal->GetDoubleValue());
+                } else {
+                  bOk = false;
+                  break;
+                }
+              }
+              if (bOk) {
+                SendProcessMessage(PID_BROWSER, message);
+                return true;
+              }
+            } else {
+              auto message = CefProcessMessage::Create("afx-interop");
+              auto args = message->GetArgumentList();
+              args->SetSize(2);
+              args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetTransform);
+              args->SetInt(1, (int)arguments[0]->GetUIntValue());
+
+              SendProcessMessage(PID_BROWSER, message);
+              return true;
+            }
+          }
+
+          return false;
+        });
     m_D3d9SetIndices.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetIndices",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetIndices, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt()) {
+            CAfxD3d9IndexBuffer* val = nullptr;
+            if (static_cast<CAfxInteropUserData*>(
+                    arguments[1]->GetUserData().get())
+                    ->GetUserDataType() == AfxUserDataType::AfxD3d9IndexBuffer)
+              val = static_cast<CAfxD3d9IndexBuffer*>(
+                  static_cast<CAfxInteropUserData*>(
+                      arguments[1]->GetUserData().get()));
+
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(4);
+            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetIndices);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            if (val)
+              val->InsertIdAsTwoInts(args, 2, 3);
+            else {
+              args->SetInt(2, 0);
+              args->SetInt(3, 0);
+            }
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9SetStreamSource.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetStreamSource",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetStreamSource, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (1 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[3] && arguments[0]->IsUInt() &&
+              arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
+            CAfxD3d9IndexBuffer* val = nullptr;
+            if (static_cast<CAfxInteropUserData*>(
+                    arguments[1]->GetUserData().get())
+                    ->GetUserDataType() == AfxUserDataType::AfxD3d9IndexBuffer)
+              val = static_cast<CAfxD3d9IndexBuffer*>(
+                  static_cast<CAfxInteropUserData*>(
+                      arguments[1]->GetUserData().get()));
+
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(6);
+            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetStreamSource);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            if (val)
+              val->InsertIdAsTwoInts(args, 2, 3);
+            else {
+              args->SetInt(2, 0);
+              args->SetInt(3, 0);
+            }
+            args->SetInt(4, (int)arguments[2]->GetUIntValue());
+            args->SetInt(5, (int)arguments[3]->GetUIntValue());
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9SetStreamSourceFreq.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetStreamSourceFreq",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetStreamSourceFreq, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt() && arguments[1]->IsUInt()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(3);
+            args->SetInt(
+                0, (int)CefDrawingInteropMessage::D3d9SetStreamSourceFreq);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            args->SetInt(2, (int)arguments[1]->GetUIntValue());
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9SetVertexDeclaration.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexDeclaration",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetVertexDeclaration, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt()) {
+            CAfxD3d9VertexDeclaration* val = nullptr;
+            if (static_cast<CAfxInteropUserData*>(
+                    arguments[1]->GetUserData().get())
+                    ->GetUserDataType() ==
+                AfxUserDataType::AfxD3d9VertexDeclaration)
+              val = static_cast<CAfxD3d9VertexDeclaration*>(
+                  static_cast<CAfxInteropUserData*>(
+                      arguments[1]->GetUserData().get()));
+
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(4);
+            args->SetInt(
+                0, (int)CefDrawingInteropMessage::D3d9SetVertexDeclaration);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            if (val)
+              val->InsertIdAsTwoInts(args, 2, 3);
+            else {
+              args->SetInt(2, 0);
+              args->SetInt(3, 0);
+            }
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9SetVertexShader.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShader",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetVertexShader, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt()) {
+            CAfxD3d9VertexShader* val = nullptr;
+            if (static_cast<CAfxInteropUserData*>(
+                    arguments[1]->GetUserData().get())
+                    ->GetUserDataType() == AfxUserDataType::AfxD3d9VertexShader)
+              val = static_cast<CAfxD3d9VertexShader*>(
+                  static_cast<CAfxInteropUserData*>(
+                      arguments[1]->GetUserData().get()));
+
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(4);
+            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetVertexShader);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            if (val)
+              val->InsertIdAsTwoInts(args, 2, 3);
+            else {
+              args->SetInt(2, 0);
+              args->SetInt(3, 0);
+            }
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9SetVertexShaderConstantB.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShaderConstantB",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetVertexShaderConstantB, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[0]->IsUInt() &&
+              arguments[2]->IsArray()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+
+            size_t arrLen = arguments[2]->GetArrayLength();
+
+            args->SetSize(2 + arrLen);
+            args->SetInt(
+                0, (int)CefDrawingInteropMessage::D3d9SetVertexShaderConstantB);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            bool bOk = true;
+            for (int i = 0; i < arrLen; ++i) {
+              auto arrVal = arguments[2]->GetValue(i);
+
+              if (arrVal && arrVal->IsBool()) {
+                args->SetBool(2 + i, arrVal->GetBoolValue());
+              } else {
+                bOk = false;
+                break;
+              }
+            }
+            if (bOk) {
+              SendProcessMessage(PID_BROWSER, message);
+              return true;
+            }
+          }
+
+          return false;
+        });
     m_D3d9SetVertexShaderConstantF.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShaderConstantF",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetVertexShaderConstantF, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[0]->IsUInt() &&
+              arguments[2]->IsArray()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+
+            size_t arrLen = arguments[2]->GetArrayLength();
+
+            args->SetSize(2 + arrLen);
+            args->SetInt(
+                0, (int)CefDrawingInteropMessage::D3d9SetVertexShaderConstantF);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            bool bOk = true;
+            for (int i = 0; i < arrLen; ++i) {
+              auto arrVal = arguments[2]->GetValue(i);
+
+              if (arrVal && arrVal->IsDouble()) {
+                args->SetDouble(2 + i, arrVal->GetDoubleValue());
+              } else {
+                bOk = false;
+                break;
+              }
+            }
+            if (bOk) {
+              SendProcessMessage(PID_BROWSER, message);
+              return true;
+            }
+          }
+
+          return false;
+        });
     m_D3d9SetVertexShaderConstantI.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShaderConstantI",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetVertexShaderConstantI, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[0]->IsUInt() &&
+              arguments[2]->IsArray()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+
+            size_t arrLen = arguments[2]->GetArrayLength();
+
+            args->SetSize(2 + arrLen);
+            args->SetInt(
+                0, (int)CefDrawingInteropMessage::D3d9SetVertexShaderConstantI);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            bool bOk = true;
+            for (int i = 0; i < arrLen; ++i) {
+              auto arrVal = arguments[2]->GetValue(i);
+
+              if (arrVal && arrVal->IsInt()) {
+                args->SetInt(2 + i, arrVal->GetIntValue());
+              } else {
+                bOk = false;
+                break;
+              }
+            }
+            if (bOk) {
+              SendProcessMessage(PID_BROWSER, message);
+              return true;
+            }
+          }
+
+          return false;
+        });
     m_D3d9SetPixelShader.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShader",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetPixelShader, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt()) {
+            CAfxD3d9PixelShader* val = nullptr;
+            if (static_cast<CAfxInteropUserData*>(
+                    arguments[1]->GetUserData().get())
+                    ->GetUserDataType() == AfxUserDataType::AfxD3d9PixelShader)
+              val = static_cast<CAfxD3d9PixelShader*>(
+                  static_cast<CAfxInteropUserData*>(
+                      arguments[1]->GetUserData().get()));
+
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(4);
+            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetPixelShader);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            if (val)
+              val->InsertIdAsTwoInts(args, 2, 3);
+            else {
+              args->SetInt(2, 0);
+              args->SetInt(3, 0);
+            }
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9SetPixelShaderConstantB.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShaderConstantB",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetPixelShaderConstantB, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[0]->IsUInt() &&
+              arguments[2]->IsArray()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+
+            size_t arrLen = arguments[2]->GetArrayLength();
+
+            args->SetSize(2 + arrLen);
+            args->SetInt(
+                0, (int)CefDrawingInteropMessage::D3d9SetPixelShaderConstantB);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            bool bOk = true;
+            for (int i = 0; i < arrLen; ++i) {
+              auto arrVal = arguments[2]->GetValue(i);
+
+              if (arrVal && arrVal->IsBool()) {
+                args->SetBool(2 + i, arrVal->GetBoolValue());
+              } else {
+                bOk = false;
+                break;
+              }
+            }
+            if (bOk) {
+              SendProcessMessage(PID_BROWSER, message);
+              return true;
+            }
+          }
+
+          return false;
+        });
     m_D3d9SetPixelShaderConstantF.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShaderConstantF",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetPixelShaderConstantF, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[0]->IsUInt() &&
+              arguments[2]->IsArray()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+
+            size_t arrLen = arguments[2]->GetArrayLength();
+
+            args->SetSize(2 + arrLen);
+            args->SetInt(
+                0, (int)CefDrawingInteropMessage::D3d9SetPixelShaderConstantF);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            bool bOk = true;
+            for (int i = 0; i < arrLen; ++i) {
+              auto arrVal = arguments[2]->GetValue(i);
+
+              if (arrVal && arrVal->IsDouble()) {
+                args->SetDouble(2 + i, arrVal->GetDoubleValue());
+              } else {
+                bOk = false;
+                break;
+              }
+            }
+            if (bOk) {
+              SendProcessMessage(PID_BROWSER, message);
+              return true;
+            }
+          }
+
+          return false;
+        });
     m_D3d9SetPixelShaderConstantI.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShaderConstantI",
-        std::bind<bool>(&CEngineInteropImpl::D3d9SetPixelShaderConstantI, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[0]->IsUInt() &&
+              arguments[2]->IsArray()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+
+            size_t arrLen = arguments[2]->GetArrayLength();
+
+            args->SetSize(2 + arrLen);
+            args->SetInt(
+                0, (int)CefDrawingInteropMessage::D3d9SetPixelShaderConstantI);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            bool bOk = true;
+            for (int i = 0; i < arrLen; ++i) {
+              auto arrVal = arguments[2]->GetValue(i);
+
+              if (arrVal && arrVal->IsInt()) {
+                args->SetInt(2 + i, arrVal->GetIntValue());
+              } else {
+                bOk = false;
+                break;
+              }
+            }
+            if (bOk) {
+              SendProcessMessage(PID_BROWSER, message);
+              return true;
+            }
+          }
+
+          return false;
+        });
     m_D3d9DrawPrimitive.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9DrawPrimitive",
-        std::bind<bool>(&CEngineInteropImpl::D3d9DrawPrimitive, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (3 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[0]->IsUInt() &&
+              arguments[1]->IsUInt() && arguments[2]->IsUInt()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(4);
+            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9DrawPrimitive);
+            args->SetInt(1, (int)arguments[0]->GetUIntValue());
+            args->SetInt(2, (int)arguments[1]->GetUIntValue());
+            args->SetInt(3, (int)arguments[2]->GetUIntValue());
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_D3d9DrawIndexedPrimitive.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "d3d9DrawIndexedPrimitive",
-        std::bind<bool>(&CEngineInteropImpl::D3d9DrawIndexedPrimitive, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name,
+                         CefRefPtr<CefV8Value> object,
+                         const CefV8ValueList& arguments,
+                         CefRefPtr<CefV8Value>& retval,
+                         CefString& exceptionoverride) {
+      if (6 == arguments.size() && arguments[0] && arguments[1] &&
+          arguments[2] && arguments[3] && arguments[4] && arguments[5] &&
+          arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
+          arguments[2]->IsUInt() && arguments[3]->IsUInt() &&
+          arguments[4]->IsUInt() && arguments[5]->IsUInt()) {
+        auto message = CefProcessMessage::Create("afx-interop");
+        auto args = message->GetArgumentList();
+        args->SetSize(7);
+        args->SetInt(0,
+                     (int)CefDrawingInteropMessage::D3d9DrawIndexedPrimitive);
+        args->SetInt(1, (int)arguments[0]->GetUIntValue());
+        args->SetInt(2, (int)arguments[1]->GetUIntValue());
+        args->SetInt(3, (int)arguments[2]->GetUIntValue());
+        args->SetInt(4, (int)arguments[0]->GetUIntValue());
+        args->SetInt(5, (int)arguments[1]->GetUIntValue());
+        args->SetInt(6, (int)arguments[2]->GetUIntValue());
+        SendProcessMessage(PID_BROWSER, message);
+        return true;
+      }
+
+      return false;
+  });
     m_WaitForGpu.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "waitForGpu",
-        std::bind<bool>(&CEngineInteropImpl::WaitForGpu, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (0 == arguments.size()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(1);
+            args->SetInt(0, (int)CefDrawingInteropMessage::WaitForGpu);
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_BeginCleanState.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "beginCleanState",
-        std::bind<bool>(&CEngineInteropImpl::BeginCleanState, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (0 == arguments.size()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(1);
+            args->SetInt(0, (int)CefDrawingInteropMessage::BeginCleanState);
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_EndCleanState.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "endCleanState",
-        std::bind<bool>(&CEngineInteropImpl::EndCleanState, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (0 == arguments.size()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+            args->SetSize(1);
+            args->SetInt(0, (int)CefDrawingInteropMessage::EndCleanState);
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_CreateCefWindowTextureSharedHandle.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "createCefWindowTextureSharedHandle",
-        std::bind<bool>(&CEngineInteropImpl::CreateCefWindowTextureSharedHandle,
-                        this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (0 == arguments.size()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+
+            CAfxDrawingHandle* val = new CAfxDrawingHandle(this);
+            retval = val->GetObj();
+
+            args->SetSize(3);
+            args->SetInt(0, (int)CefDrawingInteropMessage::
+                                CreateCefWindowTextureSharedHandle);
+            val->InsertIdAsTwoInts(args, 1, 2);
+
+            SendProcessMessage(PID_BROWSER, message);
+            return true;
+          }
+
+          return false;
+        });
     m_CreateDrawingData.InitFunc(
         object, this, m_ExecuteMap, m_GetMap, "createDrawingData",
-        std::bind<bool>(&CEngineInteropImpl::CreateDrawingData, this,
-                        std::placeholders::_1, std::placeholders::_2,
-                        std::placeholders::_3, std::placeholders::_4,
-                        std::placeholders::_5));
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+           const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+           CefString& exceptionoverride) {
+          if (1 == arguments.size() && arguments[0] && arguments[0]->IsUInt()) {
+            auto message = CefProcessMessage::Create("afx-interop");
+            auto args = message->GetArgumentList();
+
+            unsigned int size = arguments[0]->GetUIntValue();
+            if (void* pData = malloc(size)) {
+              CAfxDrawingData* val = new CAfxDrawingData(this, size, pData);
+              retval = val->GetObj();
+
+              args->SetSize(4);
+              args->SetInt(0, (int)CefDrawingInteropMessage::CreateDrawingData);
+              args->SetInt(1, (int)arguments[0]->GetUIntValue());
+              val->InsertIdAsTwoInts(args, 2, 3);
+
+              SendProcessMessage(PID_BROWSER, message);
+              return true;
+            }
+          }
+
+          return false;
+        });
   }
 
   virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
@@ -3123,8 +4221,10 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
   
     auto it = m_ExecuteMap.find(name.ToString());
 
-    if (it != m_ExecuteMap.end())
-      return it->second(name, object, arguments, retval, exception);
+    if (it != m_ExecuteMap.end()) {
+      it->second(name, object, arguments, retval, exception);
+      return true;
+    }
 
     return false;
   }
@@ -3798,9 +4898,23 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
                       const char* name){
 
       InitFunc(object, handler, executeMap, getMap, name,
-               std::bind<bool>(&CCallback::Execute, this, std::placeholders::_1,
-                               std::placeholders::_2, std::placeholders::_3,
-                               std::placeholders::_4, std::placeholders::_5));
+               [this](const CefString& name, CefRefPtr<CefV8Value> object,
+                      const CefV8ValueList& arguments,
+                      CefRefPtr<CefV8Value>& retval, CefString& exception) {
+                 if (1 <= arguments.size()) {
+                   const CefRefPtr<CefV8Value>& arg0 = arguments[0];
+                   if (arg0->IsFunction()) {
+                     m_CallbackFunc = arguments[0];
+                     return true;
+                   } else if (arg0->IsNull()) {
+                     m_CallbackFunc = nullptr;
+                     return true;
+                   }
+                 }
+
+                 return false;
+               });
+
       m_CallbackContext = context;
     }
 
@@ -3811,25 +4925,6 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
     bool IsValid() {
         return m_CallbackFunc != nullptr;
-    }
-
-    bool Execute(const CefString& name,
-                 CefRefPtr<CefV8Value> object,
-                 const CefV8ValueList& arguments,
-                 CefRefPtr<CefV8Value>& retval,
-                 CefString& exception) {
-      if (1 <= arguments.size()){
-        const CefRefPtr<CefV8Value>& arg0 = arguments[0];
-        if (arg0->IsFunction()) {
-          m_CallbackFunc = arguments[0];
-          return true;
-        } else if (arg0->IsNull()) {
-          m_CallbackFunc = nullptr;
-          return true;
-        }
-      }
-
-      return false;
     }
 
     CefRefPtr<CefV8Value> ExecuteCallback(const CefV8ValueList& arguments) {
@@ -5395,92 +6490,6 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
     return true;
   }
 
-  bool GetPipeName(const CefString& name,
-                             const CefRefPtr<CefV8Value> object,
-                             CefRefPtr<CefV8Value>& retval,
-                             CefString& exception) {
-
-      retval = CefV8Value::CreateString(CInterop::GetPipeName());
-
-      return true;
-  }
-
-  bool SetPipeName(const CefString& name,
-      const CefRefPtr<CefV8Value> object,
-      const CefRefPtr<CefV8Value> value,
-      CefString& exception) {
-
-      if (value && value->IsString()) {
-
-        std::string pipeName(value->GetStringValue().ToString());
-
-        CInterop::SetPipeName(pipeName.c_str());
-
-        pipeName.append("_drawing");
-
-        auto message = CefProcessMessage::Create("afx-interop");
-        auto args = message->GetArgumentList();
-        args->SetSize(2);
-        args->SetInt(0, (int)CefDrawingInteropMessage::SetPipeName);
-        args->SetString(1, pipeName);
-        SendProcessMessage(PID_BROWSER, message);
-        return true;
-      }
-
-      return false;
-  }
-
- bool Connect(const CefString& name,
-                       CefRefPtr<CefV8Value> object,
-                       const CefV8ValueList& arguments,
-                       CefRefPtr<CefV8Value>& retval,
-                       CefString& exceptionoverride) {
-    retval = CefV8Value::CreateBool( CInterop::Connection() );
-    return true;
- }
-
-  bool GetConnected(const CefString& name,
-                        CefRefPtr<CefV8Value> object,
-                        const CefV8ValueList& arguments,
-                        CefRefPtr<CefV8Value>& retval,
-                        CefString& exceptionoverride) {
-   retval = CefV8Value::CreateBool(CInterop::Connected());
-    return true;
- }
-
-  bool Close(const CefString& name,
-                     CefRefPtr<CefV8Value> object,
-                     const CefV8ValueList& arguments,
-                     CefRefPtr<CefV8Value>& retval,
-                     CefString& exceptionoverride) {
-    CInterop::Close();
-    
-
-    auto message = CefProcessMessage::Create("afx-interop");
-    auto args = message->GetArgumentList();
-    args->SetSize(1);
-    args->SetInt(0, (int)CefDrawingInteropMessage::Close);
-    SendProcessMessage(PID_BROWSER, message);
-    return true;
-  }
-
-  
-  bool ScheduleCommand(const CefString& name,
-             CefRefPtr<CefV8Value> object,
-             const CefV8ValueList& arguments,
-             CefRefPtr<CefV8Value>& retval,
-             CefString& exceptionoverride) {
-    if (1 <= arguments.size()) {
-      const CefRefPtr<CefV8Value>& arg0 = arguments[0];
-      if (arg0->IsString()) {
-        m_Commands.emplace(arg0->GetStringValue().ToString().c_str());
-        return true;
-      }
-    }
-
-    return false;
-  }
-
   class CCalcResult : public CefV8Accessor, public CefV8Handler {
     IMPLEMENT_REFCOUNTING(CCalcResult);
 
@@ -5554,1370 +6563,6 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
       return true;
     }
   };
-
-  bool AddCalcHandle(const CefString& name,
-             CefRefPtr<CefV8Value> object,
-             const CefV8ValueList& arguments,
-             CefRefPtr<CefV8Value>& retval,
-             CefString& exceptionoverride) {
-
-    if (2 == arguments.size() && arguments[0] && arguments[1] &&
-        arguments[0]->IsString() && arguments[1]->IsFunction()) {
-
-      retval =
-          (new CCalcResult(&m_HandleCalcCallbacks,
-                           arguments[0]->GetStringValue().ToString().c_str(),
-                           new CCalcCallback(arguments[1], m_Context)))
-              ->GetObj();
-
-      return true;
-    }
-
-    return false;
-  }
-
-  bool AddCalcVecAng(const CefString& name,
-                     CefRefPtr<CefV8Value> object,
-                     const CefV8ValueList& arguments,
-                     CefRefPtr<CefV8Value>& retval,
-                     CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] &&
-        arguments[0]->IsString() && arguments[1]->IsFunction()) {
-
-      retval =
-          (new CCalcResult(&m_VecAngCalcCallbacks,
-                           arguments[0]->GetStringValue().ToString().c_str(),
-                           new CCalcCallback(arguments[1], m_Context)))
-              ->GetObj();
-     
-      return true;
-    }
-
-    return false;
-  }
-
-  bool AddCalcCam(const CefString& name,
-                     CefRefPtr<CefV8Value> object,
-                     const CefV8ValueList& arguments,
-                     CefRefPtr<CefV8Value>& retval,
-                     CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] &&
-        arguments[0]->IsString() && arguments[1]->IsFunction()) {
-
-      retval =
-          (new CCalcResult(&m_CamCalcCallbacks,
-                           arguments[0]->GetStringValue().ToString().c_str(),
-                           new CCalcCallback(arguments[1], m_Context)))
-              ->GetObj();
-
-      return true;
-    }
-
-    return false;
-  }
-
-  bool AddCalcFov(const CefString& name,
-                  CefRefPtr<CefV8Value> object,
-                  const CefV8ValueList& arguments,
-                  CefRefPtr<CefV8Value>& retval,
-                  CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] &&
-        arguments[0]->IsString() && arguments[1]->IsFunction()) {
-
-      retval =
-          (new CCalcResult(&m_FovCalcCallbacks,
-                           arguments[0]->GetStringValue().ToString().c_str(),
-                           new CCalcCallback(arguments[1], m_Context)))
-              ->GetObj();
-
-      return true;
-    }
-
-    return false;
-  }
-
-  bool AddCalcBool(const CefString& name,
-                  CefRefPtr<CefV8Value> object,
-                  const CefV8ValueList& arguments,
-                  CefRefPtr<CefV8Value>& retval,
-                  CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] &&
-        arguments[0]->IsString() && arguments[1]->IsFunction()) {
-      std::string valName = arguments[0]->GetStringValue().ToString();
-
-      retval =
-          (new CCalcResult(&m_BoolCalcCallbacks,
-                           arguments[0]->GetStringValue().ToString().c_str(),
-                           new CCalcCallback(arguments[1], m_Context)))
-              ->GetObj();
-
-      return true;
-    }
-
-    return false;
-  }
-
-  bool AddCalcInt(const CefString& name,
-                  CefRefPtr<CefV8Value> object,
-                  const CefV8ValueList& arguments,
-                  CefRefPtr<CefV8Value>& retval,
-                  CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] &&
-        arguments[0]->IsString() && arguments[1]->IsFunction()) {
-      std::string valName = arguments[0]->GetStringValue().ToString();
-
-      retval =
-          (new CCalcResult(&m_IntCalcCallbacks,
-                           arguments[0]->GetStringValue().ToString().c_str(),
-                           new CCalcCallback(arguments[1], m_Context)))
-              ->GetObj();
-
-      return true;
-    }
-
-    return false;
-  }
-
-  bool GameEventAllowAdd(const CefString& name,
-                         CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval,
-                         CefString& exceptionoverride) {
-    if (1 == arguments.size() && arguments[0] && arguments[0]->IsString()) {
-      std::string val = arguments[0]->GetStringValue().ToString();
-
-      m_GameEventsAllowDeletions.erase(val);
-      m_GameEventsAllowAdditions.insert(val);
-
-      return true;
-    }
-
-    return false;
-  }
-
-  bool GameEventAllowRemove(const CefString& name,
-                         CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval,
-                         CefString& exceptionoverride) {
-    if (1 == arguments.size() && arguments[0] && arguments[0]->IsString()) {
-      std::string val = arguments[0]->GetStringValue().ToString();
-
-    m_GameEventsAllowAdditions.erase(val);
-      m_GameEventsAllowDeletions.insert(val);
-
-      return true;
-    }
-
-    return false;
-  }
-
-  bool GameEventDenyAdd(const CefString& name,
-                        CefRefPtr<CefV8Value> object,
-                        const CefV8ValueList& arguments,
-                        CefRefPtr<CefV8Value>& retval,
-                        CefString& exceptionoverride) {
-    if (1 == arguments.size() && arguments[0] && arguments[0]->IsString()) {
-      std::string val = arguments[0]->GetStringValue().ToString();
-
-      m_GameEventsDenyDeletions.erase(val);
-      m_GameEventsDenyAdditions.insert(val);
-
-      return true;
-    }
-
-    return false;
-  }
-
-  bool GameEventDenyRemove(const CefString& name,
-                        CefRefPtr<CefV8Value> object,
-                        const CefV8ValueList& arguments,
-                        CefRefPtr<CefV8Value>& retval,
-                        CefString& exceptionoverride) {
-    if (1 == arguments.size() && arguments[0] && arguments[0]->IsString()) {
-      std::string val = arguments[0]->GetStringValue().ToString();
-
-    m_GameEventsDenyAdditions.erase(val);
-      m_GameEventsDenyDeletions.insert(val);
-
-      return true;
-    }
-
-    return false;
-  }
-
-  bool GameEventSetEnrichment(const CefString& name,
-                           CefRefPtr<CefV8Value> object,
-                           const CefV8ValueList& arguments,
-                           CefRefPtr<CefV8Value>& retval,
-                           CefString& exceptionoverride) {
-    if (3 == arguments.size() && arguments[0] && arguments[1] && arguments[2] && arguments[0]->IsString() && arguments[1]->IsString() && arguments[2]->IsUInt()) {
-      std::string strEvent = arguments[0]->GetStringValue().ToString();
-      std::string strProperty = arguments[1]->GetStringValue().ToString();
-      unsigned int uiEnrichments = arguments[2]->GetUIntValue();
-
-    m_GameEventsEnrichmentsChanges[GameEventEnrichmentKey_s(
-              strEvent.c_str(), strProperty.c_str())] = uiEnrichments;
-
-      return true;
-    }
-
-    return false;
-  }
-
-
-  bool GameEventSetTransmitClientTime(const CefString& name,
-                                      CefRefPtr<CefV8Value> object,
-                                      const CefV8ValueList& arguments,
-                                      CefRefPtr<CefV8Value>& retval,
-                                      CefString& exceptionoverride) {
-    if (1 == arguments.size() && arguments[0] && arguments[0]->IsBool()) {
-      bool value = arguments[0]->GetBoolValue();
-
-      m_GameEventsTransmitChanged =
-          m_GameEventsTransmitChanged || value != m_GameEventsTransmitClientTime;
-      m_GameEventsTransmitClientTime = value;
-
-      return true;
-    }
-
-    return false;
-  }
-
-  bool GameEventSetTransmitTick(const CefString& name,
-                                      CefRefPtr<CefV8Value> object,
-                                      const CefV8ValueList& arguments,
-                                      CefRefPtr<CefV8Value>& retval,
-                                      CefString& exceptionoverride) {
-    if (1 == arguments.size() && arguments[0] && arguments[0]->IsBool()) {
-      bool value = arguments[0]->GetBoolValue();
-
-    m_GameEventsTransmitChanged =
-          m_GameEventsTransmitChanged || value != m_GameEventsTransmitTick;
-      m_GameEventsTransmitTick = value;
-
-      return true;
-    }
-
-    return false;
-  }
-  bool GameEventSetTransmitSystemTime(const CefString& name,
-                                CefRefPtr<CefV8Value> object,
-                                const CefV8ValueList& arguments,
-                                CefRefPtr<CefV8Value>& retval,
-                                CefString& exceptionoverride) {
-    if (1 == arguments.size() && arguments[0] && arguments[0]->IsBool()) {
-      bool value = arguments[0]->GetBoolValue();
-
-    m_GameEventsTransmitChanged = m_GameEventsTransmitChanged ||
-                                    value != m_GameEventsTransmitSystemTime;
-      m_GameEventsTransmitSystemTime = value;
-
-      return true;
-    }
-
-    return false;
-  }
-
-  bool DrawingConnect(const CefString& name,
-                      CefRefPtr<CefV8Value> object,
-                      const CefV8ValueList& arguments,
-                      CefRefPtr<CefV8Value>& retval,
-                      CefString& exceptionoverride) {
-    if (0 == arguments.size()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(1);
-      args->SetInt(0, (int)CefDrawingInteropMessage::Connect);
-
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool DrawingPumpBegin(const CefString& name,
-                      CefRefPtr<CefV8Value> object,
-                      const CefV8ValueList& arguments,
-                      CefRefPtr<CefV8Value>& retval,
-                      CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] && arguments[0]->IsInt() && arguments[1]->IsUInt())
-    {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(3);
-      args->SetInt(0, (int)CefDrawingInteropMessage::PumpBegin);
-      args->SetInt(1, arguments[0]->GetIntValue());
-      args->SetInt(2, (int)arguments[1]->GetUIntValue());
-
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool DrawingPumpEnd(const CefString& name,
-                      CefRefPtr<CefV8Value> object,
-                      const CefV8ValueList& arguments,
-                      CefRefPtr<CefV8Value>& retval,
-                      CefString& exceptionoverride) {
-    if (0 == arguments.size()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(1);
-      args->SetInt(0, (int)CefDrawingInteropMessage::PumpEnd);
-
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool DrawingBeginFrame(const CefString& name,
-                      CefRefPtr<CefV8Value> object,
-                      const CefV8ValueList& arguments,
-                      CefRefPtr<CefV8Value>& retval,
-                      CefString& exceptionoverride) {
-    if (0 == arguments.size()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(1);
-      args->SetInt(0, (int)CefDrawingInteropMessage::BeginFrame);
-
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    } else if (2 == arguments.size() && arguments[0] && arguments[1] &&
-               arguments[0]->IsInt() && arguments[1]->IsInt()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(3);
-      args->SetInt(0, (int)CefDrawingInteropMessage::BeginFrame);
-      args->SetInt(1, arguments[0]->GetIntValue());
-      args->SetInt(2, arguments[1]->GetIntValue());
-
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool D3d9CreateVertexDeclaration(const CefString& name,
-                         CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval,
-                         CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] &&
-        arguments[0]->IsUInt() &&
-        arguments[1]->GetUserData() &&
-        static_cast<CAfxInteropUserData*>(arguments[1]->GetUserData().get())
-                ->GetUserDataType() == AfxUserDataType::AfxDrawingData) {
-      auto drawingData = static_cast<CAfxDrawingData*>(
-          static_cast<CAfxInteropUserData*>(arguments[1]->GetUserData().get()));
-
-      if(nullptr != drawingData) {
-        CAfxD3d9VertexDeclaration* val =
-            new CAfxD3d9VertexDeclaration(this);
-        retval = CefV8Value::CreateObject(val, NULL);
-
-        auto message = CefProcessMessage::Create("afx-interop");
-        auto args = message->GetArgumentList();
-        args->SetSize(6);
-        args->SetInt(
-            0, (int)CefDrawingInteropMessage::D3d9CreateVertexDecalaration);
-        val->InsertIdAsTwoInts(args, 1, 2);
-        args->SetInt(3, (int)arguments[0]->GetUIntValue());
-        drawingData->InsertIdAsTwoInts(args, 4, 5);
-
-        SendProcessMessage(PID_BROWSER, message);
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  bool D3d9CreateIndexBuffer(const CefString& name,
-                                    CefRefPtr<CefV8Value> object,
-                                    const CefV8ValueList& arguments,
-                                    CefRefPtr<CefV8Value>& retval,
-                                    CefString& exceptionoverride) {
-    if (5 == arguments.size() && arguments[0] && arguments[1] && arguments[2] &&
-        arguments[3] && arguments[4] &&
-        arguments[0]->IsUInt() && arguments[1]->IsUInt() && arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
-      CAfxDrawingHandle* drawingHandle = nullptr;
-      
-      if (static_cast<CAfxInteropUserData*>(arguments[4]->GetUserData().get())
-                  ->GetUserDataType() == AfxUserDataType::AfxDrawingHandle)
-        drawingHandle = static_cast<CAfxDrawingHandle*>(
-          static_cast<CAfxInteropUserData*>(arguments[4]->GetUserData().get()));
-
-      CAfxD3d9IndexBuffer* val = new CAfxD3d9IndexBuffer(this);
-      retval = CefV8Value::CreateObject(val, NULL);
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(9);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9CreateIndexBuffer);
-      val->InsertIdAsTwoInts(args, 1, 2);
-      args->SetInt(3, (int)arguments[0]->GetUIntValue());
-      args->SetInt(4, (int)arguments[1]->GetUIntValue());
-      args->SetInt(5, (int)arguments[2]->GetUIntValue());
-      args->SetInt(6, (int)arguments[3]->GetUIntValue());
-      if (nullptr != drawingHandle)
-        drawingHandle->InsertIdAsTwoInts(args, 7, 8);
-      else {
-        args->SetInt(7, 0);
-        args->SetInt(8, 0);
-      }
-
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool D3d9CreateVertexBuffer(const CefString& name,
-                             CefRefPtr<CefV8Value> object,
-                             const CefV8ValueList& arguments,
-                             CefRefPtr<CefV8Value>& retval,
-                             CefString& exceptionoverride) {
-    if (5 == arguments.size() && arguments[0] && arguments[1] && arguments[2] &&
-        arguments[3] && arguments[4] && arguments[0]->IsUInt() &&
-        arguments[1]->IsUInt() &&
-        arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
-      CAfxDrawingHandle* drawingHandle = nullptr;
-
-      if (static_cast<CAfxInteropUserData*>(arguments[4]->GetUserData().get())
-                  ->GetUserDataType() == AfxUserDataType::AfxDrawingHandle)
-        drawingHandle =
-            static_cast<CAfxDrawingHandle*>(static_cast<CAfxInteropUserData*>(
-                arguments[4]->GetUserData().get()));
-
-      CAfxD3d9VertexBuffer* val = new CAfxD3d9VertexBuffer(this);
-      retval = CefV8Value::CreateObject(val, NULL);
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(9);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9CreateVertexBuffer);
-      val->InsertIdAsTwoInts(args, 1, 2);
-      args->SetInt(3, (int)arguments[0]->GetUIntValue());
-      args->SetInt(4, (int)arguments[1]->GetUIntValue());
-      args->SetInt(5, (int)arguments[2]->GetUIntValue());
-      args->SetInt(6, (int)arguments[3]->GetUIntValue());
-      if (nullptr != drawingHandle)
-        drawingHandle->InsertIdAsTwoInts(args, 7, 8);
-      else {
-        args->SetInt(7, 0);
-        args->SetInt(8, 0);
-      }
-
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-
-  bool D3d9CreateTexture(const CefString& name,
-                              CefRefPtr<CefV8Value> object,
-                              const CefV8ValueList& arguments,
-                              CefRefPtr<CefV8Value>& retval,
-                              CefString& exceptionoverride) {
-    if (7 == arguments.size() && arguments[0] && arguments[1] && arguments[2] &&
-        arguments[3] && arguments[4] && arguments[5] && arguments[5] &&
-        arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
-        arguments[2]->IsUInt() && arguments[3]->IsUInt() &&
-        arguments[5]->IsUInt() && arguments[4]->IsUInt()) {
-      CAfxDrawingHandle* drawingHandle = nullptr;
-
-      if (static_cast<CAfxInteropUserData*>(arguments[6]->GetUserData().get())
-                  ->GetUserDataType() == AfxUserDataType::AfxDrawingHandle)
-        drawingHandle =
-            static_cast<CAfxDrawingHandle*>(static_cast<CAfxInteropUserData*>(
-                arguments[6]->GetUserData().get()));
-
-      CAfxD3d9Texture* val = new CAfxD3d9Texture(this);
-      retval = CefV8Value::CreateObject(val, NULL);
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(11);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9CreateTexture);
-      val->InsertIdAsTwoInts(args, 1, 2);
-      args->SetInt(3, (int)arguments[0]->GetUIntValue());
-      args->SetInt(4, (int)arguments[1]->GetUIntValue());
-      args->SetInt(5, (int)arguments[2]->GetUIntValue());
-      args->SetInt(6, (int)arguments[3]->GetUIntValue());
-      args->SetInt(7, (int)arguments[4]->GetUIntValue());
-      args->SetInt(8, (int)arguments[5]->GetUIntValue());
-      if (nullptr != drawingHandle)
-        drawingHandle->InsertIdAsTwoInts(args, 9, 10);
-      else {
-        args->SetInt(9, 0);
-        args->SetInt(10, 0);
-      }
-
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool D3d9CreatePixelShader(const CefString& name,
-                                    CefRefPtr<CefV8Value> object,
-                                    const CefV8ValueList& arguments,
-                                    CefRefPtr<CefV8Value>& retval,
-                                    CefString& exceptionoverride) {
-    if (1 == arguments.size() && arguments[0] && arguments[0]->GetUserData() &&
-        static_cast<CAfxInteropUserData*>(arguments[0]->GetUserData().get())
-                ->GetUserDataType() == AfxUserDataType::AfxDrawingData) {
-      auto drawingData = static_cast<CAfxDrawingData*>(
-          static_cast<CAfxInteropUserData*>(arguments[0]->GetUserData().get()));
-
-      if(drawingData) {
-        CAfxD3d9PixelShader* val = new CAfxD3d9PixelShader(this);
-        retval = CefV8Value::CreateObject(val, NULL);
-
-        auto message = CefProcessMessage::Create("afx-interop");
-        auto args = message->GetArgumentList();
-        args->SetSize(5);
-        args->SetInt(
-            0, (int)CefDrawingInteropMessage::D3d9CreateVertexDecalaration);
-        val->InsertIdAsTwoInts(args, 1, 2);
-        drawingData->InsertIdAsTwoInts(args, 3, 4);
-
-        SendProcessMessage(PID_BROWSER, message);
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-
-  bool D3d9CreateVertexShader(const CefString& name,
-                             CefRefPtr<CefV8Value> object,
-                             const CefV8ValueList& arguments,
-                             CefRefPtr<CefV8Value>& retval,
-                             CefString& exceptionoverride) {
-    if (1 == arguments.size() && arguments[0] &&
-        arguments[0]->GetUserData() &&
-        static_cast<CAfxInteropUserData*>(arguments[0]->GetUserData().get())
-                ->GetUserDataType() == AfxUserDataType::AfxDrawingData) {
-      auto drawingData = static_cast<CAfxDrawingData*>(
-          static_cast<CAfxInteropUserData*>(arguments[0]->GetUserData().get()));
-
-      if (drawingData) {
-        CAfxD3d9VertexShader* val = new CAfxD3d9VertexShader(this);
-        retval = CefV8Value::CreateObject(val, NULL);
-
-        auto message = CefProcessMessage::Create("afx-interop");
-        auto args = message->GetArgumentList();
-        args->SetSize(5);
-        args->SetInt(
-            0, (int)CefDrawingInteropMessage::D3d9CreateVertexDecalaration);
-        val->InsertIdAsTwoInts(args, 1, 2);
-        drawingData->InsertIdAsTwoInts(args, 3, 4);
-
-        SendProcessMessage(PID_BROWSER, message);
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  bool D3d9UpdateTexture(const CefString& name,
-                              CefRefPtr<CefV8Value> object,
-                              const CefV8ValueList& arguments,
-                              CefRefPtr<CefV8Value>& retval,
-                              CefString& exceptionoverride) {
-    if (3 == arguments.size() && arguments[0] && arguments[1]) {
-
-      CAfxD3d9Texture* val = nullptr;
-      if (static_cast<CAfxInteropUserData*>(arguments[0]->GetUserData().get())
-              ->GetUserDataType() == AfxUserDataType::AfxD3d9Texture)
-        val = static_cast<CAfxD3d9Texture*>(static_cast<CAfxInteropUserData*>(
-                arguments[0]->GetUserData().get()));
-
-      CAfxD3d9Texture* val2 = nullptr;
-      if (static_cast<CAfxInteropUserData*>(arguments[1]->GetUserData().get())
-              ->GetUserDataType() == AfxUserDataType::AfxD3d9Texture)
-        val2 = static_cast<CAfxD3d9Texture*>(static_cast<CAfxInteropUserData*>(
-            arguments[1]->GetUserData().get()));
-
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(5);
-      args->SetInt(0,
-                   (int)CefDrawingInteropMessage::D3d9UpdateTexture);
-      if(val)
-        val->InsertIdAsTwoInts(args, 1, 2);
-      else {
-        args->SetInt(1, 0);
-        args->SetInt(2, 0);
-      }
-      if (val2)
-        val2->InsertIdAsTwoInts(args, 3, 4);
-      else {
-        args->SetInt(3, 0);
-        args->SetInt(4, 0);
-      }
-
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool D3d9SetViewport(const CefString& name,
-                         CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval,
-                         CefString& exceptionoverride) {
-
-    if (0 == arguments.size()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(1);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetViewport);
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    } else if (1 == arguments.size() && arguments[0] && arguments[0]->IsObject()) {
-      
-      auto x = arguments[0]->GetValue(0);
-      auto y = arguments[0]->GetValue(0);
-      auto width = arguments[0]->GetValue(0);
-      auto height = arguments[0]->GetValue(0);
-      auto minZ = arguments[0]->GetValue(0);
-      auto maxZ = arguments[0]->GetValue(0);
-
-      if (x&&y&&width&&height&&minZ&&maxZ
-          && x->IsUInt() && y->IsUInt() && width->IsUInt() && height->IsUInt() && minZ->IsDouble() && maxZ->IsDouble()) {
-        auto message = CefProcessMessage::Create("afx-interop");
-        auto args = message->GetArgumentList();
-        args->SetSize(7);
-        args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetViewport);
-        args->SetInt(1, (int)x->GetUIntValue());
-        args->SetInt(2, (int)y->GetUIntValue());
-        args->SetInt(3, (int)width->GetUIntValue());
-        args->SetInt(4, (int)height->GetUIntValue());
-        args->SetDouble(5, (int)minZ->GetUIntValue());
-        args->SetDouble(6, (int)maxZ->GetUIntValue());
-        SendProcessMessage(PID_BROWSER, message);
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  bool D3d9SetRenderState(const CefString& name,
-                       CefRefPtr<CefV8Value> object,
-                       const CefV8ValueList& arguments,
-                       CefRefPtr<CefV8Value>& retval,
-                       CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] &&
-        arguments[0]->IsUInt() && arguments[1]->IsUInt()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(3);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetRenderState);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      args->SetInt(2, (int)arguments[1]->GetUIntValue());
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool D3d9SetSamplerState(const CefString& name,
-                          CefRefPtr<CefV8Value> object,
-                          const CefV8ValueList& arguments,
-                          CefRefPtr<CefV8Value>& retval,
-                          CefString& exceptionoverride) {
-    if (3 == arguments.size() && arguments[0] && arguments[1] && arguments[2] &&
-        arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
-        arguments[2]->IsUInt()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(4);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetSamplerState);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      args->SetInt(2, (int)arguments[1]->GetUIntValue());
-      args->SetInt(3, (int)arguments[2]->GetUIntValue());
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool D3d9SetTexture(const CefString& name,
-                           CefRefPtr<CefV8Value> object,
-                           const CefV8ValueList& arguments,
-                           CefRefPtr<CefV8Value>& retval,
-                           CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] &&
-        arguments[0]->IsUInt()) {
-
-      CAfxD3d9Texture* val = nullptr;
-      if (static_cast<CAfxInteropUserData*>(arguments[1]->GetUserData().get())
-              ->GetUserDataType() == AfxUserDataType::AfxD3d9Texture)
-        val = static_cast<CAfxD3d9Texture*>(static_cast<CAfxInteropUserData*>(
-            arguments[1]->GetUserData().get()));
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(4);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetTexture);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      if (val)
-        val->InsertIdAsTwoInts(args, 2, 3);
-      else {
-        args->SetInt(2, 0);
-        args->SetInt(3, 0);
-      }
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool D3d9SetTextureStageState(const CefString& name,
-                           CefRefPtr<CefV8Value> object,
-                           const CefV8ValueList& arguments,
-                           CefRefPtr<CefV8Value>& retval,
-                           CefString& exceptionoverride) {
-    if (3 == arguments.size() && arguments[0] && arguments[1] && arguments[2] &&
-        arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
-        arguments[2]->IsUInt()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(4);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetTextureStageState);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      args->SetInt(2, (int)arguments[1]->GetUIntValue());
-      args->SetInt(3, (int)arguments[2]->GetUIntValue());
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-    bool D3d9SetTransform(const CefString& name,
-                        CefRefPtr<CefV8Value> object,
-                        const CefV8ValueList& arguments,
-                        CefRefPtr<CefV8Value>& retval,
-                        CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] &&
-        arguments[0]->IsUInt()) {
-      if (arguments[2]->IsArray() && arguments[2]->GetArrayLength() == 16) {
-        auto message = CefProcessMessage::Create("afx-interop");
-        auto args = message->GetArgumentList();
-        args->SetSize(18);
-        args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetTransform);
-        args->SetInt(1, (int)arguments[0]->GetUIntValue());
-        bool bOk = true;
-        for (int i = 0; i < 16; ++i) {
-          auto arrVal = arguments[2]->GetValue(i);
-
-          if (arrVal && arrVal->IsDouble()) {
-            args->SetDouble(2 + i, arrVal->GetDoubleValue());
-          } else {
-            bOk = false;
-            break;
-          }
-        }
-        if (bOk) {
-          SendProcessMessage(PID_BROWSER, message);
-          return true;
-        }
-      } else {
-        auto message = CefProcessMessage::Create("afx-interop");
-        auto args = message->GetArgumentList();
-        args->SetSize(2);
-        args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetTransform);
-        args->SetInt(1, (int)arguments[0]->GetUIntValue());
-
-        SendProcessMessage(PID_BROWSER, message);
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-
-  bool D3d9SetIndices(const CefString& name,
-                      CefRefPtr<CefV8Value> object,
-                      const CefV8ValueList& arguments,
-                      CefRefPtr<CefV8Value>& retval,
-                      CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] &&
-        arguments[0]->IsUInt()) {
-      CAfxD3d9IndexBuffer* val = nullptr;
-      if (static_cast<CAfxInteropUserData*>(arguments[1]->GetUserData().get())
-              ->GetUserDataType() == AfxUserDataType::AfxD3d9IndexBuffer)
-        val =
-            static_cast<CAfxD3d9IndexBuffer*>(static_cast<CAfxInteropUserData*>(
-            arguments[1]->GetUserData().get()));
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(4);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetIndices);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      if (val)
-        val->InsertIdAsTwoInts(args, 2, 3);
-      else {
-        args->SetInt(2, 0);
-        args->SetInt(3, 0);
-      }
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool D3d9SetStreamSource(const CefString& name,
-                      CefRefPtr<CefV8Value> object,
-                      const CefV8ValueList& arguments,
-                      CefRefPtr<CefV8Value>& retval,
-                      CefString& exceptionoverride) {
-    if (1 == arguments.size() && arguments[0] && arguments[1] && arguments[2] &&
-        arguments[3] && arguments[0]->IsUInt() && arguments[2]->IsUInt() &&
-        arguments[3]->IsUInt()) {
-      CAfxD3d9IndexBuffer* val = nullptr;
-      if (static_cast<CAfxInteropUserData*>(arguments[1]->GetUserData().get())
-              ->GetUserDataType() == AfxUserDataType::AfxD3d9IndexBuffer)
-        val =
-            static_cast<CAfxD3d9IndexBuffer*>(static_cast<CAfxInteropUserData*>(
-                arguments[1]->GetUserData().get()));
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(6);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetStreamSource);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      if (val)
-        val->InsertIdAsTwoInts(args, 2, 3);
-      else {
-        args->SetInt(2, 0);
-        args->SetInt(3, 0);
-      }
-      args->SetInt(4, (int)arguments[2]->GetUIntValue());
-      args->SetInt(5, (int)arguments[3]->GetUIntValue());
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool D3d9SetStreamSourceFreq(const CefString& name,
-                          CefRefPtr<CefV8Value> object,
-                          const CefV8ValueList& arguments,
-                          CefRefPtr<CefV8Value>& retval,
-                          CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] &&
-        arguments[0]->IsUInt() && arguments[1]->IsUInt()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(3);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetStreamSourceFreq);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      args->SetInt(2, (int)arguments[1]->GetUIntValue());
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool D3d9SetVertexDeclaration(const CefString& name,
-                      CefRefPtr<CefV8Value> object,
-                      const CefV8ValueList& arguments,
-                      CefRefPtr<CefV8Value>& retval,
-                      CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] &&
-        arguments[0]->IsUInt()) {
-      CAfxD3d9VertexDeclaration* val = nullptr;
-      if (static_cast<CAfxInteropUserData*>(arguments[1]->GetUserData().get())
-              ->GetUserDataType() == AfxUserDataType::AfxD3d9VertexDeclaration)
-        val = static_cast<CAfxD3d9VertexDeclaration*>(
-            static_cast<CAfxInteropUserData*>(
-                arguments[1]->GetUserData().get()));
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(4);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetVertexDeclaration);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      if (val)
-        val->InsertIdAsTwoInts(args, 2, 3);
-      else {
-        args->SetInt(2, 0);
-        args->SetInt(3, 0);
-      }
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-
-  bool D3d9SetVertexShader(const CefString& name,
-                                CefRefPtr<CefV8Value> object,
-                                const CefV8ValueList& arguments,
-                                CefRefPtr<CefV8Value>& retval,
-                                CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] &&
-        arguments[0]->IsUInt()) {
-      CAfxD3d9VertexShader* val = nullptr;
-      if (static_cast<CAfxInteropUserData*>(arguments[1]->GetUserData().get())
-              ->GetUserDataType() == AfxUserDataType::AfxD3d9VertexShader)
-        val = static_cast<CAfxD3d9VertexShader*>(
-            static_cast<CAfxInteropUserData*>(
-                arguments[1]->GetUserData().get()));
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(4);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetVertexShader);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      if (val)
-        val->InsertIdAsTwoInts(args, 2, 3);
-      else {
-        args->SetInt(2, 0);
-        args->SetInt(3, 0);
-      }
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-
-    bool D3d9SetVertexShaderConstantB(const CefString& name,
-                        CefRefPtr<CefV8Value> object,
-                        const CefV8ValueList& arguments,
-                        CefRefPtr<CefV8Value>& retval,
-                        CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] && arguments[2] &&
-        arguments[0]->IsUInt() && arguments[2]->IsArray()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-
-      size_t arrLen = arguments[2]->GetArrayLength();
-
-      args->SetSize(2 + arrLen);
-      args->SetInt(0,
-                   (int)CefDrawingInteropMessage::D3d9SetVertexShaderConstantB);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      bool bOk = true;
-      for (int i = 0; i < arrLen; ++i) {
-        auto arrVal = arguments[2]->GetValue(i);
-
-        if (arrVal && arrVal->IsBool()) {
-          args->SetBool(2 + i, arrVal->GetBoolValue());
-        } else {
-          bOk = false;
-          break;
-        }
-      }
-      if (bOk) {
-        SendProcessMessage(PID_BROWSER, message);
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-    bool D3d9SetVertexShaderConstantF(const CefString& name,
-                                    CefRefPtr<CefV8Value> object,
-                                    const CefV8ValueList& arguments,
-                                    CefRefPtr<CefV8Value>& retval,
-                                    CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] && arguments[2] &&
-        arguments[0]->IsUInt() && arguments[2]->IsArray()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-
-      size_t arrLen = arguments[2]->GetArrayLength();
-
-      args->SetSize(2 + arrLen);
-      args->SetInt(0,
-                   (int)CefDrawingInteropMessage::D3d9SetVertexShaderConstantF);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      bool bOk = true;
-      for (int i = 0; i < arrLen; ++i) {
-        auto arrVal = arguments[2]->GetValue(i);
-
-        if (arrVal && arrVal->IsDouble()) {
-          args->SetDouble(2 + i, arrVal->GetDoubleValue());
-        } else {
-          bOk = false;
-          break;
-        }
-      }
-      if (bOk) {
-        SendProcessMessage(PID_BROWSER, message);
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-    bool D3d9SetVertexShaderConstantI(const CefString& name,
-                                    CefRefPtr<CefV8Value> object,
-                                    const CefV8ValueList& arguments,
-                                    CefRefPtr<CefV8Value>& retval,
-                                    CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] && arguments[2] &&
-        arguments[0]->IsUInt() && arguments[2]->IsArray()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-
-      size_t arrLen = arguments[2]->GetArrayLength();
-
-      args->SetSize(2 + arrLen);
-      args->SetInt(0,
-                   (int)CefDrawingInteropMessage::D3d9SetVertexShaderConstantI);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      bool bOk = true;
-      for (int i = 0; i < arrLen; ++i) {
-        auto arrVal = arguments[2]->GetValue(i);
-
-        if (arrVal && arrVal->IsInt()) {
-          args->SetInt(2 + i, arrVal->GetIntValue());
-        } else {
-          bOk = false;
-          break;
-        }
-      }
-      if (bOk) {
-        SendProcessMessage(PID_BROWSER, message);
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-//
-
-
-
-  bool D3d9SetPixelShader(const CefString& name,
-                           CefRefPtr<CefV8Value> object,
-                           const CefV8ValueList& arguments,
-                           CefRefPtr<CefV8Value>& retval,
-                           CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] &&
-        arguments[0]->IsUInt()) {
-      CAfxD3d9PixelShader* val = nullptr;
-      if (static_cast<CAfxInteropUserData*>(arguments[1]->GetUserData().get())
-              ->GetUserDataType() == AfxUserDataType::AfxD3d9PixelShader)
-        val = static_cast<CAfxD3d9PixelShader*>(
-            static_cast<CAfxInteropUserData*>(
-                arguments[1]->GetUserData().get()));
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(4);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetPixelShader);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      if (val)
-        val->InsertIdAsTwoInts(args, 2, 3);
-      else {
-        args->SetInt(2, 0);
-        args->SetInt(3, 0);
-      }
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool D3d9SetPixelShaderConstantB(const CefString& name,
-                                    CefRefPtr<CefV8Value> object,
-                                    const CefV8ValueList& arguments,
-                                    CefRefPtr<CefV8Value>& retval,
-                                    CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] && arguments[2] &&
-        arguments[0]->IsUInt() && arguments[2]->IsArray()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-
-      size_t arrLen = arguments[2]->GetArrayLength();
-
-      args->SetSize(2 + arrLen);
-      args->SetInt(0,
-                   (int)CefDrawingInteropMessage::D3d9SetPixelShaderConstantB);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      bool bOk = true;
-      for (int i = 0; i < arrLen; ++i) {
-        auto arrVal = arguments[2]->GetValue(i);
-
-        if (arrVal && arrVal->IsBool()) {
-          args->SetBool(2 + i, arrVal->GetBoolValue());
-        } else {
-          bOk = false;
-          break;
-        }
-      }
-      if (bOk) {
-        SendProcessMessage(PID_BROWSER, message);
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  bool D3d9SetPixelShaderConstantF(const CefString& name,
-                                    CefRefPtr<CefV8Value> object,
-                                    const CefV8ValueList& arguments,
-                                    CefRefPtr<CefV8Value>& retval,
-                                    CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] && arguments[2] &&
-        arguments[0]->IsUInt() && arguments[2]->IsArray()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-
-      size_t arrLen = arguments[2]->GetArrayLength();
-
-      args->SetSize(2 + arrLen);
-      args->SetInt(0,
-                   (int)CefDrawingInteropMessage::D3d9SetPixelShaderConstantF);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      bool bOk = true;
-      for (int i = 0; i < arrLen; ++i) {
-        auto arrVal = arguments[2]->GetValue(i);
-
-        if (arrVal && arrVal->IsDouble()) {
-          args->SetDouble(2 + i, arrVal->GetDoubleValue());
-        } else {
-          bOk = false;
-          break;
-        }
-      }
-      if (bOk) {
-        SendProcessMessage(PID_BROWSER, message);
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  bool D3d9SetPixelShaderConstantI(const CefString& name,
-                                    CefRefPtr<CefV8Value> object,
-                                    const CefV8ValueList& arguments,
-                                    CefRefPtr<CefV8Value>& retval,
-                                    CefString& exceptionoverride) {
-    if (2 == arguments.size() && arguments[0] && arguments[1] && arguments[2] &&
-        arguments[0]->IsUInt() && arguments[2]->IsArray()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-
-      size_t arrLen = arguments[2]->GetArrayLength();
-
-      args->SetSize(2 + arrLen);
-      args->SetInt(0,
-                   (int)CefDrawingInteropMessage::D3d9SetPixelShaderConstantI);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      bool bOk = true;
-      for (int i = 0; i < arrLen; ++i) {
-        auto arrVal = arguments[2]->GetValue(i);
-
-        if (arrVal && arrVal->IsInt()) {
-          args->SetInt(2 + i, arrVal->GetIntValue());
-        } else {
-          bOk = false;
-          break;
-        }
-      }
-      if (bOk) {
-        SendProcessMessage(PID_BROWSER, message);
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  bool D3d9DrawPrimitive(const CefString& name,
-                           CefRefPtr<CefV8Value> object,
-                           const CefV8ValueList& arguments,
-                           CefRefPtr<CefV8Value>& retval,
-                           CefString& exceptionoverride) {
-    if (3 == arguments.size() && arguments[0] && arguments[1] && arguments[2] &&
-        arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
-        arguments[2]->IsUInt()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(4);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9DrawPrimitive);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      args->SetInt(2, (int)arguments[1]->GetUIntValue());
-      args->SetInt(3, (int)arguments[2]->GetUIntValue());
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool D3d9DrawIndexedPrimitive(const CefString& name,
-                         CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval,
-                         CefString& exceptionoverride) {
-    if (6 == arguments.size() && arguments[0] && arguments[1] && arguments[2] &&
-        arguments[3] && arguments[4] && arguments[5] &&
-        arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
-        arguments[2]->IsUInt() && arguments[3]->IsUInt() &&
-        arguments[4]->IsUInt() && arguments[5]->IsUInt()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(7);
-      args->SetInt(0, (int)CefDrawingInteropMessage::D3d9DrawIndexedPrimitive);
-      args->SetInt(1, (int)arguments[0]->GetUIntValue());
-      args->SetInt(2, (int)arguments[1]->GetUIntValue());
-      args->SetInt(3, (int)arguments[2]->GetUIntValue());
-      args->SetInt(4, (int)arguments[0]->GetUIntValue());
-      args->SetInt(5, (int)arguments[1]->GetUIntValue());
-      args->SetInt(6, (int)arguments[2]->GetUIntValue());
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool WaitForGpu(const CefString& name,
-                                CefRefPtr<CefV8Value> object,
-                                const CefV8ValueList& arguments,
-                                CefRefPtr<CefV8Value>& retval,
-                                CefString& exceptionoverride) {
-    if (0 == arguments.size()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(1);
-      args->SetInt(0, (int)CefDrawingInteropMessage::WaitForGpu);
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool BeginCleanState(const CefString& name,
-                  CefRefPtr<CefV8Value> object,
-                  const CefV8ValueList& arguments,
-                  CefRefPtr<CefV8Value>& retval,
-                  CefString& exceptionoverride) {
-    if (0 == arguments.size()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(1);
-      args->SetInt(0, (int)CefDrawingInteropMessage::BeginCleanState);
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool EndCleanState(const CefString& name,
-                       CefRefPtr<CefV8Value> object,
-                       const CefV8ValueList& arguments,
-                       CefRefPtr<CefV8Value>& retval,
-                       CefString& exceptionoverride) {
-    if (0 == arguments.size()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(1);
-      args->SetInt(0, (int)CefDrawingInteropMessage::EndCleanState);
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool CreateCefWindowTextureSharedHandle(const CefString& name,
-                     CefRefPtr<CefV8Value> object,
-                     const CefV8ValueList& arguments,
-                     CefRefPtr<CefV8Value>& retval,
-                     CefString& exceptionoverride) {
-    if (0 == arguments.size()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-
-
-      CAfxDrawingHandle* val = new CAfxDrawingHandle(this);
-      retval = CefV8Value::CreateObject(val, NULL);
-
-      args->SetSize(3);
-      args->SetInt(
-          0, (int)CefDrawingInteropMessage::CreateCefWindowTextureSharedHandle);
-      val->InsertIdAsTwoInts(args, 1, 2);
-
-      SendProcessMessage(PID_BROWSER, message);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool CreateDrawingData(const CefString& name,
-                                          CefRefPtr<CefV8Value> object,
-                                          const CefV8ValueList& arguments,
-                                          CefRefPtr<CefV8Value>& retval,
-                                          CefString& exceptionoverride) {
-    if (1 == arguments.size() && arguments[0] && arguments[0]->IsUInt()) {
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-
-      unsigned int size = arguments[0]->GetUIntValue();
-      if (void * pData = malloc(size)) {
-        CAfxDrawingData * val = new CAfxDrawingData(this, size, pData);
-        retval = CefV8Value::CreateObject(val, NULL);
-
-        args->SetSize(4);
-        args->SetInt(0, (int)CefDrawingInteropMessage::CreateDrawingData);
-        args->SetInt(1, (int)arguments[0]->GetUIntValue());
-        val->InsertIdAsTwoInts(args, 2, 3);
-        
-        SendProcessMessage(PID_BROWSER, message);
-        return true;
-      }
-    }
-
-    return false;
-  }
 };
 
 class CEngineInterop* CreateEngineInterop(

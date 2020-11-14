@@ -325,6 +325,28 @@ AfxInterop = {
 
 <script>
 	{
+		var BOOL = {
+			FALSE: 0,
+			TRUE: 1
+		}
+	
+		var D3DRENDERSTATETYPE = {
+			D3DRS_SRGBWRITEENABLE: 194,
+			D3DRS_COLORWRITEENABLE: 168,
+			D3DRS_SEPARATEALPHABLENDENABLE: 206,
+			
+		};
+		
+		var D3DRS_COLORWRITEENABLE = {
+			D3DCOLORWRITEENABLE_RED:     (1<<0),
+			D3DCOLORWRITEENABLE_GREEN:   (1<<1),
+			D3DCOLORWRITEENABLE_BLUE:    (1<<2),
+			D3DCOLORWRITEENABLE_ALPHA:   (1<<3),
+		};
+		
+		
+		///////////////////////////////
+	
 		var AFX_GAMEVENT_ENRICHMENTS = {
 			UserIdWithSteamId: (1 << 0),
 			EntnumWithOrigin: (1 << 1),
@@ -355,25 +377,74 @@ AfxInterop = {
 		var afxPass = null;
 		var afxRenderInfo = null;
 		
-		var divGameEvents = document.getElementById('gameEvents');
-		/*
-		function afxDrawCefWindowOnScreen(width,height) {
-			var afxCefWindowTextureSharedHandle;
-			var afxCefWindowTexture;
+		var afxNewConnection = true;
+		var afxDeviceReset = true;
 		
-			var currentCefWindowTextureSharedHandle = afxInterop.getCefWindowTextureSharedHandle();
-			if(afxCefWindowTextureSharedHandle !== currentCefWindowTextureSharedHandle)
+		var firstConnection = true;
+		var reload = false;
+		var divGameEvents = document.getElementById('gameEvents');
+		
+		///////////////////////////////
+		
+		function base64ToArrayBuffer(base64_string) {
+			var data = atob(base64_string);
+			var arrayBuffer = new ArrayBuffer(data.length);
+			var arrayBufferView = new Uint8Array(arrayBuffer);
+			for (var i = 0; i < data.length; ++i) {
+				arrayBufferView[i] = data.charCodeAt(i);
+			}
+			return arrayBuffer;
+		}
+		
+		function createFirstAcsShaderEntry(base64_string) {
+			
+			var buffer = base64ToArrayBuffer(base64_string);
+			var bufferView = new DataView(buffer);
+			
+			var version = bufferView.getInt32(0, true);
+			if(0 == version)
 			{
-				if(afxCefWindowTexture) afxCefWindowTexture.release();
-				afxCefWindowTexture = afxInterop.createManagedD3d9Texture(
-				afxCefWindowTextureSharedHandle = currentCefWindowTextureSharedHandle;
+				var entries = bufferView.getInt32(4, true);
+				if(1 <= entries)
+				{
+					var key = bufferView.getInt32(8, true);
+					var offset = bufferView.getInt32(12, true);
+					var length = 0;
+					if(1 == entries)
+						length = buffer.byteLength - offset;
+					else
+					{
+						var nextOffset = bufferView.getInt32(12+4+4, true);
+						length = nextOffset - offset;
+					}
+					
+					var drawingData = afxInterop.createDrawingData(length);
+					var drawingDataView = new DataView(drawingData.buffer);
+					
+					for(var i = 0; i < length; ++i)
+					{
+						drawingDataView.setUint8(i, bufferView.getUint8(offset+i));
+					}
+					
+					return drawingData;
+				}
 			}
 		}
-		*/
+		
+		var SHADERS = {
+			"afx_drawtexture_ps20.acs": createFirstAcsShaderEntry("AAAAAAEAAAAAAAAAEAAAAAAC///+/yMAQ1RBQhwAAABfAAAAAAL//wEAAAAcAAAAAIEAAFgAAAAwAAAAAwAAAAEAAgBIAAAAAAAAAGdfc0RlcHRoVGV4dHVyZVNhbXBsZXIAqwQADAABAAEAAQAAAAAAAABwc18yXzAATWljcm9zb2Z0IChSKSBITFNMIFNoYWRlciBDb21waWxlciAxMC4xAKsfAAACAAAAgAAAA7AfAAACAAAAkAAID6BCAAADAAAPgAAA5LAACOSgAQAAAgAID4AAAOSA//8AAA==")
+		};
+		
+		///////////////////////////////
 		
 		afxInterop.onNewConnection(function(){
 		
 			afxInterop.scheduleCommand("echo cefhud: afxInterop.onNewConnection (connect / reconnect).");
+			
+			if(firstConnection) {
+				firstConnection = false;
+				afxInterop.scheduleCommand("echo afx_interop send cefhud - To send commands to me.");
+			}
 		});
 		
 		afxInterop.onCommands(function(commands){
@@ -400,11 +471,16 @@ AfxInterop = {
 								afxInterop.scheduleCommand(result);
 								handled = true;
 								break;
+							case "reload":
+								reload = true;
+								handled = true;
+								break;
 							}
 							
 							if(handled) continue;
 						}
 						afxInterop.scheduleCommand("echo \""+command[0]+" cefhud echo <sText>+ - echo text back to CS:GO.\"");
+						afxInterop.scheduleCommand("echo \""+command[0]+" cefhud reload - Reload current page.\"");
 					}
 				}
 			}
@@ -428,7 +504,8 @@ AfxInterop = {
 		
 		afxInterop.onRenderViewBegin(function(renderInfo){
 		
-			
+			afxInterop.drawingConnect();
+		
 			afxRenderInfo = renderInfo;
 			afxPass = 0;
 			
@@ -442,15 +519,26 @@ AfxInterop = {
 			//passes["beforeTranslucent"] = true;
 			//passes["afterTranslucent"] = true;
 			//passes["beforeHud"] = true;
-			//passes["afterHud"] = true;
+			passes["afterHud"] = true;
 			//passes["afterRenderView"] = true;
 			
 			afxInterop.drawingPumpBegin(afxRenderInfo.frameCount, afxPass++);
+			
+			if (afxNewConnection)
+			{
+				
+			}
+			if (afxDeviceReset)
+			{
+				
+			}
+			
 			afxInterop.drawingPumpEnd();
 			
 			return passes;
 		});
 		
+		/*
 		afxInterop.onRenderPass(function(renderPassState, renderView){
 			
 			afxInterop.drawingPumpBegin(afxRenderInfo.frameCount, afxPass++);
@@ -460,51 +548,30 @@ AfxInterop = {
 
 			if(renderPassState == AFX_RENDERPASS_STATE.BeforeTranslucent)
 			{
-				// Draw 3D rectangle:
+				
 			}
 			
 			afxInterop.drawingPumpEnd();
 		});
-		
-		/*
-		afxInterop.onHudBegin(function afxOnHudBegin(){
-			
-			afxInterop.drawingPumpBegin(afxRenderInfo.afxRenderInfo, afxPass);
-
-			var texWidth = renderView.width - renderView.x;
-			var texHeight = renderView.height - renderView.y;
-			afxInterop.scheduleDrawingBeginFrame(texWidth, texHeight);
-			afxInterop.scheduleDrawingConnect(afxFrameCount);
-
-			++afxPass;
-		});
 		*/
 		
-		/*
 		afxInterop.onHudEnd(function(){
-			
-			afxInterop.drawingPumpBegin(afxRenderInfo.afxRenderInfo, afxPass);
-			
-			var texWidth = renderView.width - renderView.x;
-			var texHeight = renderView.height - renderView.y;
-			afxInterop.drawingConnect(afxFrameCount); afxDrawingConnectCalled = true;
-			afxInterop.drawingBeginFrame(texWidth, texHeight);
-
-			++afxPass;
-		});
-		*/
-		
-		afxInterop.onRenderViewEnd(function(){
-			
-			afxInterop.drawingPumpBegin(afxRenderInfo.afxRenderInfo, afxPass);
+			afxInterop.drawingPumpBegin(afxRenderInfo.frameCount, afxPass++);
 			
 			var texWidth = afxRenderInfo.view.width - afxRenderInfo.view.x;
 			var texHeight = afxRenderInfo.view.height - afxRenderInfo.view.y;
 			
 			afxInterop.drawingBeginFrame(texWidth, texHeight);
-
-			++afxPass;
+			
+			afxInterop.beginCleanState();
+			
+			
+			
+			afxInterop.endCleanState();
+			
+			afxInterop.drawingPumpEnd();
 		});
+		
 		
 		// GameEvents:
 		//
@@ -630,6 +697,13 @@ AfxInterop = {
 		// The worker function:
 
 		setInterval(function(){
+			if(reload)
+			{
+				reload = false;
+				window.location.reload();
+				console.log("windown.location.reload()");
+			}
+		
 			if(afxInterop.connect())
 			{
 				if(afxInterop.getConnected())
