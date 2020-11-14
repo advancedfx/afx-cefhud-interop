@@ -135,11 +135,15 @@ void SimpleApp::OnContextInitialized() {
   }
 }
 
-bool SimpleApp::OnProcessMessageReceived(
-    CefRefPtr<CefBrowser> browser,
-    CefRefPtr<CefFrame> frame,
-    CefProcessId source_process,
-    CefRefPtr<CefProcessMessage> message) {
+bool SimpleApp::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                         CefRefPtr<CefFrame> frame,
+                                         CefProcessId source_process,
+                                         CefRefPtr<CefProcessMessage> message) {
+  if (nullptr != afx_engine_interop_) {
+    if (afx_engine_interop_->OnProcessMessageReceived(browser, frame,
+                                                      source_process, message))
+      return true;
+  }
 
-    return false;
+  return false;
 }

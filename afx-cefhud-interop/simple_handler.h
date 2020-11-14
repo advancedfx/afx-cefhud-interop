@@ -9,7 +9,7 @@
 
 #include "afx-cefhud-interop/AfxInterop.h"
 
-#include <list>
+#include <map>
 
 class SimpleHandler : public CefClient,
                       public CefDisplayHandler,
@@ -91,55 +91,25 @@ class SimpleHandler : public CefClient,
                            const CefString& title);
 
   // List of existing browser windows. Only accessed on the CEF UI thread.
-  typedef std::list<CefRefPtr<CefBrowser>> BrowserList;
+
+  struct BrowserListElem {
+    CefRefPtr<CefBrowser> Browser;
+    CefRefPtr<advancedfx::interop::CDrawingInterop> DrawingInterop;
+
+    BrowserListElem(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<advancedfx::interop::CDrawingInterop> drawingInterop)
+        : Browser(browser), DrawingInterop(drawingInterop) {
+
+    }
+  };
+
+  typedef std::list<BrowserListElem> BrowserList;
   BrowserList browser_list_;
 
   bool is_closing_;
 
-  int width_ = 640;
-  int height_ = 480;
-  void* shared_handle_ = 0;
-  class advancedfx::interop::IDrawingInterop* drawing_interop_ = nullptr;
-
-  void EnsureDrawingInterop() {
-    if (nullptr == drawing_interop_)
-      drawing_interop_ =
-          advancedfx::interop::CreateDrawingInterop("advancedfxInterop_drawing");
-  }
-
-  void AfxSetSize(CefRefPtr<CefBrowser> browser, int width, int height) {
-
-    if (width != width_ || height != height_) {
-      width_ = width;
-      height_ = height;
-
-      if (browser) {
-        browser->GetHost()->WasResized();
-      }
-    }
-  }
-
-  void AfxDrawingInteropSetPipeName(const CefString& pipeName) {
-    EnsureDrawingInterop();
-    drawing_interop_->SetPipeName(
-        pipeName.ToString().append("_drawing").c_str());
-  }
-
-  bool AfxDrawingInteropConnection() {
-    EnsureDrawingInterop();
-    return drawing_interop_->Connection();
-  }
-
-  bool AfxDrawingInteropConnection(int frameCount) {
-    EnsureDrawingInterop();
-
-    return drawing_interop_->Connection(frameCount);
-  }
-
-  void AfxDrawingInteropClose() {
-    EnsureDrawingInterop();
-    drawing_interop_->Close();
-  }
+  class advancedfx::interop::CDrawingInterop* afx_drawing_interop_ = nullptr;
 
   // Include the default reference counting implementation.
   IMPLEMENT_REFCOUNTING(SimpleHandler);

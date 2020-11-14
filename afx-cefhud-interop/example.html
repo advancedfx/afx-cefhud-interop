@@ -199,7 +199,7 @@ AfxD3d9Texture: {
 	release: Function(), // Actively release the texture on the client. Strongly recommended if you don't need it anymore to save resources.
 	
 	// WARNING: Input is currently not fully sanitized and validated, providing bogous values might cause CEF or CS:GO to crash!
-	update: Function(level: UInt, rect: null|AfxRect, data: AfxDrawingData, rowOffsetBytes: UInt, columnOffsetBytes: UInt, dataBytesPerRow: UInt, totalBytesPerRow: UInt, numRows: UInt) // The texture data supplied must be without padding!
+	update: Function(level: UInt, rect: null|AfxRect, data: AfxDrawingData, rowOffsetBytes: UInt, columnOffsetBytes: UInt, dataBytesPerRow: UInt, totalBytesPerRow: UInt, numRows: UInt)
 };
 
 AfxD3d9PixelShader: {

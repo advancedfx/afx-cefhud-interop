@@ -53,7 +53,7 @@ void SimpleHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
 
   // Add to the list of existing browsers.
-  browser_list_.push_back(browser);
+  browser_list_.emplace_back(browser,advancedfx::interop::CreateDrawingInterop(browser));
 }
 
 bool SimpleHandler::DoClose(CefRefPtr<CefBrowser> browser) {
@@ -75,13 +75,10 @@ bool SimpleHandler::DoClose(CefRefPtr<CefBrowser> browser) {
 void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
 
-  if (drawing_interop_)
-    drawing_interop_->Release();
-
   // Remove from the list of existing browsers.
   BrowserList::iterator bit = browser_list_.begin();
   for (; bit != browser_list_.end(); ++bit) {
-    if ((*bit)->IsSame(browser)) {
+    if ((bit->Browser)->IsSame(browser)) {
       browser_list_.erase(bit);
       break;
     }
@@ -127,58 +124,35 @@ void SimpleHandler::CloseAllBrowsers(bool force_close) {
 
   BrowserList::const_iterator it = browser_list_.begin();
   for (; it != browser_list_.end(); ++it)
-    (*it)->GetHost()->CloseBrowser(force_close);
+    (it->Browser)->GetHost()->CloseBrowser(force_close);
 }
 
 
-void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> /*browser*/,
+void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> browser,
                                 CefRect& rect) {
-    rect.Set(0, 0, width_, height_);
+
+  BrowserList::iterator bit = browser_list_.begin();
+  for (; bit != browser_list_.end(); ++bit) {
+    if ((bit->Browser)->IsSame(browser)) {
+      bit->DrawingInterop->GetViewRect(browser, rect);
+      break;
+    }
+  }
 }
 
-bool SimpleHandler::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
-                                        CefRefPtr<CefFrame> frame,
-                                        CefProcessId source_process,
-                                        CefRefPtr<CefProcessMessage> message) {
-  auto const name = message->GetName().ToString();
-
-  if (name == "afx-connect") {
-    auto const args = message->GetArgumentList();
-    auto const size = args->GetSize();
-    if (size == 0) {
-      AfxDrawingInteropConnection();
-    } else if (1 <= size) {
-      AfxDrawingInteropConnection(
-          args->GetInt(0));
+bool SimpleHandler::OnProcessMessageReceived(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefFrame> frame,
+    CefProcessId source_process,
+    CefRefPtr<CefProcessMessage> message) {
+  BrowserList::iterator bit = browser_list_.begin();
+  for (; bit != browser_list_.end(); ++bit) {
+    if ((bit->Browser)->IsSame(browser)) {
+      bit->DrawingInterop->OnProcessMessageReceived(browser, frame,
+                                                    source_process, message);
+      break;
     }
-    return true;
-  }
-
-  if (name == "afx-begin-frame" && browser != nullptr) {
-    auto const args = message->GetArgumentList();
-    auto const size = args->GetSize();
-    if (size == 2) {
-      AfxSetSize(browser, args->GetInt(0), args->GetInt(1));
-    }
-    
-    browser->GetHost()->SendExternalBeginFrame();
-    return true;
-  }
-
-  if (name == "afx-set-pipename") {
-    auto const args = message->GetArgumentList();
-    auto const size = args->GetSize();
-    if (1 == size && args->GetType(0) == VTYPE_STRING) {
-      AfxDrawingInteropSetPipeName(
-          args->GetString(0));
-    }
-    return true;
-  }
-
-  if (name == "afx-close") {
-    AfxDrawingInteropClose();
-    return true;
   }
 
   return false;
-  }
+}

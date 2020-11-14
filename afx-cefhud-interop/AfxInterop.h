@@ -33,8 +33,7 @@ class CDrawingInterop : public CefBaseRefCounted {
   virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                         CefRefPtr<CefFrame> frame,
                                         CefProcessId source_process,
-                                        CefRefPtr<CefProcessMessage> message,
-                                        CefRefPtr<CefListValue> args) = 0;
+                                        CefRefPtr<CefProcessMessage> message) = 0;
   
   virtual void GetViewRect(CefRefPtr<CefBrowser> browser,
                            CefRect& rect) = 0;
