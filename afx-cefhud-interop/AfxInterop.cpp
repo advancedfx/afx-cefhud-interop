@@ -295,6 +295,92 @@ struct IntCalcResult_s {
   int Result = 0;
 };
 
+
+class CThreadedQueue {
+  typedef std::function<void(void)> fp_t;
+
+ public:
+  CThreadedQueue();
+  ~CThreadedQueue();
+
+  void Abort();
+
+  void Queue(const fp_t& op);
+  void Queue(fp_t&& op);
+
+  CThreadedQueue(const CThreadedQueue& rhs) = delete;
+  CThreadedQueue& operator=(const CThreadedQueue& rhs) = delete;
+  CThreadedQueue(CThreadedQueue&& rhs) = delete;
+  CThreadedQueue& operator=(CThreadedQueue&& rhs) = delete;
+
+ private:
+  std::mutex m_Lock;
+  std::thread m_Thread;
+  std::queue<fp_t> m_Queue;
+  std::condition_variable m_Cv;
+  bool m_Quit = false;
+
+  void QueueThreadHandler(void);
+};
+
+CThreadedQueue::CThreadedQueue() {
+  m_Thread = std::thread(&CThreadedQueue::QueueThreadHandler, this);
+}
+
+CThreadedQueue::~CThreadedQueue() {
+  Abort();
+}
+
+void CThreadedQueue::Abort() {
+  if (!m_Quit) {
+    std::unique_lock<std::mutex> lock(m_Lock);
+    m_Quit = true;
+    lock.unlock();
+    m_Cv.notify_all();
+
+    if (m_Thread.joinable()) {
+      m_Thread.join();
+    }  
+  }
+}
+
+
+void CThreadedQueue::Queue(const fp_t& op) {
+  std::unique_lock<std::mutex> lock(m_Lock);
+  m_Queue.push(op);
+
+  lock.unlock();
+  m_Cv.notify_one();
+}
+
+void CThreadedQueue::Queue(fp_t&& op) {
+  std::unique_lock<std::mutex> lock(m_Lock);
+  m_Queue.push(std::move(op));
+
+  lock.unlock();
+  m_Cv.notify_one();
+}
+
+void CThreadedQueue::QueueThreadHandler(void) {
+  std::unique_lock<std::mutex> lock(m_Lock);
+
+  do {
+    m_Cv.wait(lock, [this] { return (m_Queue.size() || m_Quit); });
+
+    if (!m_Quit && m_Queue.size()) {
+      auto op = std::move(m_Queue.front());
+      m_Queue.pop();
+
+      lock.unlock();
+
+      op();
+
+      lock.lock();
+    }
+  } while (!m_Quit);
+}
+
+
 class CNamedPipeServer {
  public:
   enum State { State_Error, State_Waiting, State_Connected };
@@ -1060,7 +1146,10 @@ class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
 
  public:
 
-  virtual void CloseInterop() override { CInterop::Close(); }
+  virtual void CloseInterop() override { 
+      m_DrawingThreadedQueue.Abort();
+      CInterop::Close();
+  }
 
   CDrawingInteropImpl(CefRefPtr<CefBrowser> const& browser)
       : CInterop("advancedfxInterop_drawing"), m_Browser(browser) {
@@ -1083,459 +1172,1185 @@ class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
 
         switch ((CefDrawingInteropMessage)msg_id) {
           case CefDrawingInteropMessage::SetPipeName:
-            CefPostTask(TID_UI, base::Bind(&CDrawingInteropImpl::DoSetPipeName, this,
-                                   args->GetString(1).ToString()));
+            m_DrawingThreadedQueue.Queue(
+                [this, pipeName = args->GetString(1).ToString()] {
+                  CInterop::SetPipeName(pipeName.c_str());
+                });
             return true;
           case CefDrawingInteropMessage::Close:
-            CefPostTask(TID_UI,
-                        base::Bind(&CDrawingInteropImpl::DoClose, this));
+            m_DrawingThreadedQueue.Queue([this] { CInterop::Close(); });
             return true;
           case CefDrawingInteropMessage::Connect:
-              CefPostTask(TID_UI,
-                          base::Bind(&CDrawingInteropImpl::DoConnect, this));
+            m_DrawingThreadedQueue.Queue([this] { CInterop::Connection(); });
             return true;
           case CefDrawingInteropMessage::PumpBegin:
-            CefPostTask(TID_UI,
-                             base::Bind(&CDrawingInteropImpl::DoPumpBegin, this,
-                                   args->GetInt(1), (unsigned int)args->GetInt(2)));
+            m_DrawingThreadedQueue.Queue(
+                [this, frameCount = args->GetInt(1),
+                 pass = (unsigned int)args->GetInt(2)] {
+              if (!Connected())
+                return;
+
+              if (!DoThePumping(frameCount, pass))
+                Close();
+            });
             return true;
           case CefDrawingInteropMessage::PumpEnd:
-            CefPostTask(TID_UI, base::Bind(&CDrawingInteropImpl::DoPumpEnd,
-                                           this));              
+            m_DrawingThreadedQueue.Queue([this] {
+              if (!m_InFlow)
+                return;
 
+              if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::Finished))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::BeginFrame:
-            if (1 == argC)
-              CefPostTask(TID_UI,
-                          base::Bind(&CDrawingInteropImpl::DoBeginFrame, this));
-            else
-              CefPostTask(TID_UI,
-                          base::Bind(&CDrawingInteropImpl::DoBeginFrame2, this, args->GetInt(1), args->GetInt(2)));  
-          
+            if (1 == argC) {
+              m_DrawingThreadedQueue.Queue(
+                  [this] {
+                       m_Browser->GetHost()->SendExternalBeginFrame();
+                  });
+            } else {
+              m_DrawingThreadedQueue.Queue(
+                  [this, width = args->GetInt(1), height = args->GetInt(2)] {
+                if (width != m_Width || height != m_Height) {
+                  m_Width = width;
+                  m_Height = height;
+
+                  m_Browser->GetHost()->WasResized();
+                }
+                m_Browser->GetHost()->SendExternalBeginFrame();
+              });
+            }
             return true;
           case CefDrawingInteropMessage::D3d9CreateVertexDecalaration:
-            CefPostTask(TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9CreateVertexDecalaration,
-                           this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32), (unsigned __int64)args->GetInt(3) |
-                               ((unsigned __int64)args->GetInt(4) << 32)));
+            m_DrawingThreadedQueue.Queue(
+                [this,
+                 index = (unsigned __int64)args->GetInt(1) |
+                         ((unsigned __int64)args->GetInt(2) << 32),
+                 drawingDataIndex = (unsigned __int64)args->GetInt(3) |
+                                    ((unsigned __int64)args->GetInt(4) << 32)] {
+              if (!m_InFlow)
+                return;
+
+              auto it = m_DrawingData.find(drawingDataIndex);
+
+              if (m_DrawingData.end() == it)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9CreateVertexDeclaration))
+                goto error;
+              if (!m_PipeServer->WriteUInt64((UINT64)index))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)it->second.GetSize()))
+                goto error;
+              if (!m_PipeServer->WriteBytes(it->second.GetData(), 0,
+                                            it->second.GetSize()))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
-          case CefDrawingInteropMessage::D3d9CreateIndexBuffer: 
-              CefPostTask(TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9CreateIndexBuffer, this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32),
-                           (unsigned int)args->GetInt(3),
-                           (unsigned int)args->GetInt(4),
-                           (unsigned int)args->GetInt(5),
-                           (unsigned int)args->GetInt(6),
-                           (unsigned __int64)args->GetInt(7) |
-                               ((unsigned __int64)args->GetInt(8) << 32)));
+          case CefDrawingInteropMessage::D3d9CreateIndexBuffer: {
+            m_DrawingThreadedQueue.Queue(
+                [this,
+                 index = (unsigned __int64)args->GetInt(1) |
+                         ((unsigned __int64)args->GetInt(2) << 32),
+                 length = (unsigned int)args->GetInt(3),
+                 usage = (unsigned int)args->GetInt(4),
+                 format = (unsigned int)args->GetInt(5),
+                 pool = (unsigned int)args->GetInt(6),
+                 sharedHandleIndex =
+                     (unsigned __int64)args->GetInt(7) |
+                     ((unsigned __int64)args->GetInt(8) << 32)] {
+                  if (!m_InFlow)
+                    return;
+
+                  if (!m_PipeServer->WriteUInt32(
+                          (UINT32)DrawingReply::D3d9CreateIndexBuffer))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt32((UINT64)index))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt32((UINT32)length))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt32((UINT32)usage))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt32((UINT32)format))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt32((UINT32)pool))
+                    goto error;
+                  if (0 == sharedHandleIndex) {
+                    if (!m_PipeServer->WriteBoolean(false))
+                      goto error;
+                  } else {
+                    if (!m_PipeServer->WriteBoolean(true))
+                      goto error;
+                    if (!m_PipeServer->WriteHandle(m_ShareHandle))
+                      goto error;
+                  }
+
+                  return;
+
+                error:
+                  Close();
+                });
+          }
             return true;
           case CefDrawingInteropMessage::D3d9CreateVertexBuffer:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9CreateVertexBuffer, this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32),
-                           (unsigned int)args->GetInt(3),
-                           (unsigned int)args->GetInt(4),
-                           (unsigned int)args->GetInt(5),
-                           (unsigned int)args->GetInt(6),
-                           (unsigned __int64)args->GetInt(7) |
-                               ((unsigned __int64)args->GetInt(8) << 32)));
+            m_DrawingThreadedQueue.Queue(
+                [this,
+                 index = (unsigned __int64)args->GetInt(1) |
+                         ((unsigned __int64)args->GetInt(2) << 32),
+                 length = (unsigned int)args->GetInt(3),
+                 usage = (unsigned int)args->GetInt(4),
+                 fvf = (unsigned int)args->GetInt(5),
+                 pool = (unsigned int)args->GetInt(6),
+                 sharedHandleIndex =
+                     (unsigned __int64)args->GetInt(7) |
+                     ((unsigned __int64)args->GetInt(8) << 32)] {
+                  if (!m_InFlow)
+                    return;
+
+                  if (!m_PipeServer->WriteUInt32(
+                          (UINT32)DrawingReply::D3d9CreateVertexBuffer))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt64((UINT64)index))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt32((UINT32)length))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt32((UINT32)usage))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt32((UINT32)fvf))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt32((UINT32)pool))
+                    goto error;
+                  if (0 == sharedHandleIndex) {
+                    if (!m_PipeServer->WriteBoolean(false))
+                      goto error;
+                  } else {
+                    if (!m_PipeServer->WriteBoolean(true))
+                      goto error;
+                    if (!m_PipeServer->WriteHandle(m_ShareHandle))
+                      goto error;
+                  }
+
+                  return;
+
+                error:
+                  Close();
+                });
             return true;
           case CefDrawingInteropMessage::D3d9CreateTexture:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9CreateTexture, this,
-                           DoD3d9CreateTextureArgs_s((unsigned __int64)
-                                   args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32),
-                           (unsigned int)args->GetInt(3),
-                           (unsigned int)args->GetInt(4),
-                           (unsigned int)args->GetInt(5),
-                           (unsigned int)args->GetInt(6),
-                           (unsigned int)args->GetInt(7),
-                           (unsigned int)args->GetInt(8),
-                           (unsigned __int64)args->GetInt(9) |
-                               ((unsigned __int64)args->GetInt(10) << 32))));
+            m_DrawingThreadedQueue.Queue(
+                [this,
+                 index = (unsigned __int64)args->GetInt(1) |
+                         ((unsigned __int64)args->GetInt(2) << 32),
+                 width = (unsigned int)args->GetInt(3),
+                 height = (unsigned int)args->GetInt(4),
+                 levels = (unsigned int)args->GetInt(5),
+                 usage = (unsigned int)args->GetInt(6),
+                 format = (unsigned int)args->GetInt(7),
+                 pool = (unsigned int)args->GetInt(8),
+                 sharedHandleIndex =
+                     (unsigned __int64)args->GetInt(9) |
+                     ((unsigned __int64)args->GetInt(10) << 32)] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9CreateTexture))
+                goto error;
+              if (!m_PipeServer->WriteUInt64((UINT64)index))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)width))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)height))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)levels))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)usage))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)format))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)pool))
+                goto error;
+              if (0 == sharedHandleIndex) {
+                if (!m_PipeServer->WriteBoolean(false))
+                  goto error;
+              } else {
+                if (!m_PipeServer->WriteBoolean(true))
+                  goto error;
+                if (!m_PipeServer->WriteHandle(m_ShareHandle))
+                  goto error;
+              }
+
+              return;
+
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::D3d9CreateVertexShader:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9CreateVertexShader,
-                           this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32),
-                           (unsigned __int64)args->GetInt(3) |
-                               ((unsigned __int64)args->GetInt(4) << 32)));
+            m_DrawingThreadedQueue.Queue(
+                [this,
+                 index = (unsigned __int64)args->GetInt(1) |
+                         ((unsigned __int64)args->GetInt(2) << 32),
+                 drawingDataIndex = (unsigned __int64)args->GetInt(3) |
+                                    ((unsigned __int64)args->GetInt(4) << 32)] {
+                  if (!m_InFlow)
+                    return;
+
+                  auto it = m_DrawingData.find(drawingDataIndex);
+
+                  if (m_DrawingData.end() == it)
+                    return;
+
+                  if (!m_PipeServer->WriteUInt32(
+                          (UINT32)DrawingReply::D3d9CreateVertexShader))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt64((UINT64)index))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt32((UINT32)it->second.GetSize()))
+                    goto error;
+                  if (!m_PipeServer->WriteBytes(it->second.GetData(), 0,
+                                                it->second.GetSize()))
+                    goto error;
+
+                  return;
+                error:
+                  Close();
+                });
             return true;
           case CefDrawingInteropMessage::D3d9CreatePixelShader:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9CreatePixelShader, this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32),
-                           (unsigned __int64)args->GetInt(3) |
-                               ((unsigned __int64)args->GetInt(4) << 32)));
+            m_DrawingThreadedQueue.Queue(
+                [this,
+                 index = (unsigned __int64)args->GetInt(1) |
+                         ((unsigned __int64)args->GetInt(2) << 32),
+                 drawingDataIndex = (unsigned __int64)args->GetInt(3) |
+                                    ((unsigned __int64)args->GetInt(4) << 32)] {
+              if (!m_InFlow)
+                return;
+
+              auto it = m_DrawingData.find(drawingDataIndex);
+
+              if (m_DrawingData.end() == it)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9CreatePixelShader))
+                goto error;
+              if (!m_PipeServer->WriteUInt64((UINT64)index))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)it->second.GetSize()))
+                goto error;
+              if (!m_PipeServer->WriteBytes(it->second.GetData(), 0,
+                                            it->second.GetSize()))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::D3d9UpdateTexture:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9UpdateTexture, this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32),
-                           (unsigned __int64)args->GetInt(3) |
-                               ((unsigned __int64)args->GetInt(4) << 32)));
+            m_DrawingThreadedQueue.Queue(
+                [this,
+                 sourceTextureIndex = (unsigned __int64)args->GetInt(1) |
+                                      ((unsigned __int64)args->GetInt(2) << 32),
+                 destinationTextureIndex =
+                     (unsigned __int64)args->GetInt(3) |
+                     ((unsigned __int64)args->GetInt(4) << 32)] {
+                  if (!m_InFlow)
+                    return;
+
+                  if (!m_PipeServer->WriteUInt32(
+                          (UINT32)DrawingReply::D3d9UpdateTexture))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt64((UINT64)sourceTextureIndex))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt64(
+                          (UINT64)destinationTextureIndex))
+                    goto error;
+
+                  return;
+                error:
+                  Close();
+                });
             return true;
           case CefDrawingInteropMessage::D3d9SetViewport:
-            if (1 == argC)
-              CefPostTask(TID_UI,
-                          base::Bind(&CDrawingInteropImpl::DoD3d9SetViewPort,
-                          this));
-            else
-              CefPostTask(
-                  TID_UI,
-                          base::Bind(&CDrawingInteropImpl::DoD3d9SetViewPort2,
-                                     this,
-                             (unsigned int)args->GetInt(1),
-                                     (unsigned int)args->GetInt(2),
-                                     (unsigned int)args->GetInt(3),
-                                     (unsigned int)args->GetInt(4),
-                                     (float)args->GetDouble(5),
-                                     (float)args->GetDouble(6)));
+            if (1 == argC) {
+              m_DrawingThreadedQueue.Queue([this] {
+                if (!m_InFlow)
+                  return;
+
+                if (!m_PipeServer->WriteUInt32(
+                        (UINT32)DrawingReply::D3d9SetViewport))
+                  goto error;
+                if (!m_PipeServer->WriteBoolean(false))
+                  goto error;
+
+                return;
+              error:
+                Close();
+              });
+            } else {
+              m_DrawingThreadedQueue.Queue(
+                  [this, x = (unsigned int)args->GetInt(1),
+                   y = (unsigned int)args->GetInt(2),
+                   width = (unsigned int)args->GetInt(3),
+                   height = (unsigned int)args->GetInt(4),
+                   minZ = (float)args->GetDouble(5),
+                   maxZ = (float)args->GetDouble(6)] {
+                    if (!m_InFlow)
+                      return;
+
+                    if (!m_PipeServer->WriteUInt32(
+                            (UINT32)DrawingReply::D3d9SetViewport))
+                      goto error;
+                    if (!m_PipeServer->WriteBoolean(true))
+                      goto error;
+                    if (!m_PipeServer->WriteUInt32(x))
+                      goto error;
+                    if (!m_PipeServer->WriteUInt32(y))
+                      goto error;
+                    if (!m_PipeServer->WriteUInt32(width))
+                      goto error;
+                    if (!m_PipeServer->WriteUInt32(height))
+                      goto error;
+                    if (!m_PipeServer->WriteSingle(minZ))
+                      goto error;
+                    if (!m_PipeServer->WriteSingle(maxZ))
+                      goto error;
+
+                    return;
+                  error:
+                    Close();
+                  });
+            }
             return true;
           case CefDrawingInteropMessage::D3d9SetRenderState:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9SetRenderState, this,
-                             (unsigned int)args->GetInt(1),
-                                     (unsigned int)args->GetInt(2)));
+            m_DrawingThreadedQueue.Queue([this,
+                                          state = (unsigned int)args->GetInt(1),
+                                          value =
+                                              (unsigned int)args->GetInt(2)] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetRenderState))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(state))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(value))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::D3d9SetSamplerState:
-            CefPostTask(TID_UI,
-                        base::Bind(&CDrawingInteropImpl::DoD3d9SetSamplerState,
-                                   this, (unsigned int)args->GetInt(1),
-                                   (unsigned int)args->GetInt(2),
-                                   (unsigned int)args->GetInt(3)));
+            m_DrawingThreadedQueue.Queue(
+                [this, sampler = (unsigned int)args->GetInt(1),
+                 type = (unsigned int)args->GetInt(2),
+                 value = (unsigned int)args->GetInt(3)] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetSamplerState))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(sampler))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(type))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(value))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::D3d9SetTexture:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9SetTexture, this,
-                           (unsigned int)args->GetInt(1),
-                           (unsigned __int64)args->GetInt(2) |
-                               ((unsigned __int64)args->GetInt(3) << 32)));
+            m_DrawingThreadedQueue.Queue(
+                [this, sampler = (unsigned int)args->GetInt(1),
+                 textureIndex = (unsigned __int64)args->GetInt(2) |
+                                ((unsigned __int64)args->GetInt(3) << 32)] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetTexture))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)sampler))
+                goto error;
+              if (!m_PipeServer->WriteUInt64((UINT64)textureIndex))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::D3d9SetTextureStageState:
-            CefPostTask(TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9SetTextureStageState,
-                                   this, (unsigned int)args->GetInt(1),
-                                   (unsigned int)args->GetInt(2),
-                                   (unsigned int)args->GetInt(3)));
+            m_DrawingThreadedQueue.Queue([this,
+                                          stage = (unsigned int)args->GetInt(1),
+                                          type = (unsigned int)args->GetInt(2),
+                                          value =
+                                              (unsigned int)args->GetInt(3)] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetTextureStageState))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(stage))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(type))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(value))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::D3d9SetTransform:
-            if (2 == argC)
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9SetTransform,
-                           this, (unsigned int)args->GetInt(1)));
-            else {
-              std::vector<float> matrix(16);
-              for (size_t i = 0; i < matrix.size(); ++i) {
-                matrix[i] = (float)args->GetDouble(2 + i);
-              }
-              CefPostTask(TID_UI,
-                          base::Bind(&CDrawingInteropImpl::DoD3d9SetTransform2,
-                                     this, (unsigned int)args->GetInt(1), matrix));
-            
+            if (2 == argC) {
+              m_DrawingThreadedQueue.Queue([this,
+                                            state =
+                                                (unsigned int)args->GetInt(1)] {
+                if (!m_InFlow)
+                  return;
+
+                if (!m_PipeServer->WriteUInt32(
+                        (UINT32)DrawingReply::D3d9SetTransform))
+                  goto error;
+                if (!m_PipeServer->WriteUInt32((UINT32)state))
+                  goto error;
+                if (!m_PipeServer->WriteBoolean(false))
+                  goto error;
+
+                return;
+              error:
+                Close();
+              });
+            } else {
+              m_DrawingThreadedQueue.Queue([this,
+                                            state =
+                                                (unsigned int)args->GetInt(1),
+                   matrix =std::move(FloatVecFromCefArgs(args,2,16))] {
+                if (!m_InFlow)
+                  return;
+
+                if (!m_PipeServer->WriteUInt32(
+                        (UINT32)DrawingReply::D3d9SetTransform))
+                  goto error;
+                if (!m_PipeServer->WriteUInt32((UINT32)state))
+                  goto error;
+                if (!m_PipeServer->WriteBoolean(true))
+                  goto error;
+
+                for (size_t i = 0; i < matrix.size(); ++i) {
+                  if (!m_PipeServer->WriteSingle(matrix[i]))
+                    goto error;
+                }
+
+                return;
+              error:
+                Close();
+              });
             }
             return true;
           case CefDrawingInteropMessage::D3d9SetIndices:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9SetIndicies, this,
-                            (unsigned __int64)args->GetInt(1) |
-                                ((unsigned __int64)args->GetInt(2) << 32)));
+            m_DrawingThreadedQueue.Queue([this, indicesIndex =
+                (unsigned __int64)args->GetInt(1) |
+                ((unsigned __int64)args->GetInt(2) << 32)] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetIndices))
+                goto error;
+              if (!m_PipeServer->WriteUInt64((UINT64)indicesIndex))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::D3d9SetStreamSource:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9SetStreamSource, this,
-                           (unsigned int)args->GetInt(1),
-                           (unsigned __int64)args->GetInt(2) |
-                               ((unsigned __int64)args->GetInt(3) << 32),
-                           (unsigned int)args->GetInt(4),
-                           (unsigned int)args->GetInt(5)));
+            m_DrawingThreadedQueue.Queue(
+                [this, streamNumber = (unsigned int)args->GetInt(1),
+                 streamDataIndex = (unsigned __int64)args->GetInt(2) |
+                                   ((unsigned __int64)args->GetInt(3) << 32),
+                 offsetInBytes = (unsigned int)args->GetInt(4),
+                 stride = (unsigned int)args->GetInt(5)] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetStreamSource))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT64)streamNumber))
+                goto error;
+              if (!m_PipeServer->WriteUInt64((UINT64)streamDataIndex))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT64)offsetInBytes))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT64)stride))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::D3d9SetStreamSourceFreq:
-            CefPostTask(TID_UI,
-                base::Bind(&CDrawingInteropImpl::D3d9SetStreamSourceFreq,
-                                   this, (unsigned int)args->GetInt(1),
-                                   (unsigned int)args->GetInt(2)));
+            m_DrawingThreadedQueue.Queue(
+                [this, streamNumber = (unsigned int)args->GetInt(1),
+                 setting = (unsigned int)args->GetInt(2)] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetStreamSourceFreq))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(streamNumber))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(setting))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::D3d9SetVertexDeclaration:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9SetVertexDeclaration,
-                           this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32)));
+            m_DrawingThreadedQueue.Queue(
+                [this, declIndex = (unsigned __int64)args->GetInt(1) |
+                                   ((unsigned __int64)args->GetInt(2) << 32)] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetVertexDeclaration))
+                goto error;
+              if (!m_PipeServer->WriteUInt64((UINT64)declIndex))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::D3d9SetVertexShader:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9SetVertexShader,
-                           this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32)));
+            m_DrawingThreadedQueue.Queue(
+                [this,
+                 shaderIndex = (unsigned __int64)args->GetInt(1) |
+                               ((unsigned __int64)args->GetInt(2) << 32)] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetVertexShader))
+                goto error;
+              if (!m_PipeServer->WriteUInt64((UINT64)shaderIndex))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
-          case CefDrawingInteropMessage::D3d9SetVertexShaderConstantB: {
-            std::vector<bool> constantData(args->GetSize() - 2);
-            for (size_t i = 0; i < constantData.size(); ++i) {
-              constantData[i] = (bool)args->GetBool(2 + i);
-            }
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9SetVertexShaderConstantB,
-                           this,
-                           (unsigned int)args->GetInt(1), constantData));
+          case CefDrawingInteropMessage::D3d9SetVertexShaderConstantB:
+            m_DrawingThreadedQueue.Queue([this,
+                                          startRegister =
+                                              (unsigned int)args->GetInt(1),
+                                          constantData = std::move(BoolVecFromCefArgs(args, 2, args->GetSize() - 2))] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetVertexShaderConstantB))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
+                goto error;
+              for (size_t i = 0; i < constantData.size(); ++i) {
+                if (!m_PipeServer->WriteBoolean(constantData[i]))
+                  goto error;
+              }
+
+              return;
+            error:
+              Close();
+            });
+            return true;
+          case CefDrawingInteropMessage::D3d9SetVertexShaderConstantF:
+            m_DrawingThreadedQueue.Queue(
+                [this, startRegister = (unsigned int)args->GetInt(1),
+                                          constantData = std::move(FloatVecFromCefArgs(
+                                              args, 2, args->GetSize() - 2))] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetVertexShaderConstantF))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
+                goto error;
+              for (size_t i = 0; i < constantData.size(); ++i) {
+                if (!m_PipeServer->WriteSingle((FLOAT)constantData[i]))
+                  goto error;
+              }
+
+              return;
+            error:
+              Close();
+            });
+            return true;
+          case CefDrawingInteropMessage::D3d9SetVertexShaderConstantI:
+            m_DrawingThreadedQueue.Queue(
+                [this, startRegister = (unsigned int)args->GetInt(1),
+                 constantData = std::move(IntVecFromCefArgs(
+                                              args, 2, args->GetSize() - 2))] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetVertexShaderConstantF))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
+                goto error;
+              for (size_t i = 0; i < constantData.size(); ++i) {
+                if (!m_PipeServer->WriteInt32((INT32)constantData[i]))
+                  goto error;
+              }
+
+              return;
+            error:
+              Close();
+            });
+            return true;
+          case CefDrawingInteropMessage::D3d9SetPixelShader: {
+            unsigned __int64 shaderIndex =
+                (unsigned __int64)args->GetInt(1) |
+                ((unsigned __int64)args->GetInt(2) << 32);
+            m_DrawingThreadedQueue.Queue([this, shaderIndex] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetPixelShader))
+                goto error;
+              if (!m_PipeServer->WriteUInt64((UINT64)shaderIndex))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
           }
             return true;
-          case CefDrawingInteropMessage::D3d9SetVertexShaderConstantF: {
-            std::vector<float> constantData(args->GetSize() - 2);
-            for (size_t i = 0; i < constantData.size(); ++i) {
-              constantData[i] = (float)args->GetDouble(2 + i);
-            }
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9SetVertexShaderConstantF,
-                           this, (unsigned int)args->GetInt(1), constantData));
-          }
+          case CefDrawingInteropMessage::D3d9SetPixelShaderConstantB:
+            m_DrawingThreadedQueue.Queue([this,startRegister =
+                                              (unsigned int)args->GetInt(1),
+                                          constantData = std::move(BoolVecFromCefArgs(
+                                              args, 2, args->GetSize() - 2))] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetPixelShaderConstantB))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
+                goto error;
+              for (size_t i = 0; i < constantData.size(); ++i) {
+                if (!m_PipeServer->WriteBoolean(constantData[i]))
+                  goto error;
+              }
+
+              return;
+            error:
+              Close();
+            });
             return true;
-          case CefDrawingInteropMessage::D3d9SetVertexShaderConstantI: {
-            std::vector<int> constantData(args->GetSize() - 2);
-            for (size_t i = 0; i < constantData.size(); ++i) {
-              constantData[i] = (int)args->GetDouble(2 + i);
-            }
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9SetVertexShaderConstantI,
-                           this, (unsigned int)args->GetInt(1), constantData));
-          } return true;
-          case CefDrawingInteropMessage::D3d9SetPixelShader:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9SetPixelShader, this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32)));
+          case CefDrawingInteropMessage::D3d9SetPixelShaderConstantF:
+            m_DrawingThreadedQueue.Queue([this, startRegister = (unsigned int)args->GetInt(1),
+                 constantData = std::move(
+                     FloatVecFromCefArgs(args, 2, args->GetSize() - 2))] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetPixelShaderConstantF))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
+                goto error;
+              for (size_t i = 0; i < constantData.size(); ++i) {
+                if (!m_PipeServer->WriteSingle((FLOAT)constantData[i]))
+                  goto error;
+              }
+
+              return;
+            error:
+              Close();
+            });
             return true;
-          case CefDrawingInteropMessage::D3d9SetPixelShaderConstantB: {
-            std::vector<bool> constantData(args->GetSize() - 2);
-            for (size_t i = 0; i < constantData.size(); ++i) {
-              constantData[i] = (bool)args->GetBool(2 + i);
-            }
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9SetPixelShaderConstantB,
-                           this, (unsigned int)args->GetInt(1), constantData));
-          }
-            return true;
-          case CefDrawingInteropMessage::D3d9SetPixelShaderConstantF: {
-            std::vector<float> constantData(args->GetSize() - 2);
-            for (size_t i = 0; i < constantData.size(); ++i) {
-              constantData[i] = (float)args->GetDouble(2 + i);
-            }
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9SetPixelShaderConstantF,
-                           this, (unsigned int)args->GetInt(1), constantData));
-          }
-            return true;
-          case CefDrawingInteropMessage::D3d9SetPixelShaderConstantI: {
-            std::vector<int> constantData(args->GetSize() - 2);
-            for (size_t i = 0; i < constantData.size(); ++i) {
-              constantData[i] = (int)args->GetDouble(2 + i);
-            }
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9SetPixelShaderConstantI,
-                           this, (unsigned int)args->GetInt(1), constantData));
-          }
+          case CefDrawingInteropMessage::D3d9SetPixelShaderConstantI:
+            m_DrawingThreadedQueue.Queue([this,startRegister = (unsigned int)args->GetInt(1),
+                 constantData = std::move(
+                     IntVecFromCefArgs(args, 2, args->GetSize() - 2))] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetPixelShaderConstantF))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
+                goto error;
+              for (size_t i = 0; i < constantData.size(); ++i) {
+                if (!m_PipeServer->WriteInt32((INT32)constantData[i]))
+                  goto error;
+              }
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::D3d9DrawPrimitive:
-            CefPostTask(TID_UI,
-                        base::Bind(&CDrawingInteropImpl::DoD3d9DrawPrimitive,
-                                   this, (unsigned int)args->GetInt(1),
-                                   (unsigned int)args->GetInt(2),
-                                   (unsigned int)args->GetInt(3)));
+            m_DrawingThreadedQueue.Queue(
+            [this, primitiveType = (unsigned int)args->GetInt(1), startVertex = (unsigned int)args->GetInt(2),  primitiveCount = (unsigned int)args->GetInt(3)] {
+                if (!m_InFlow)
+                return;
+
+                if (!m_PipeServer->WriteUInt32(
+                        (UINT32)DrawingReply::D3d9DrawPrimitive))
+                goto error;
+                if (!m_PipeServer->WriteUInt32(primitiveType))
+                goto error;
+                if (!m_PipeServer->WriteUInt32(startVertex))
+                goto error;
+                if (!m_PipeServer->WriteUInt32(primitiveCount))
+                goto error;
+
+                return;
+            error:
+                Close();
+            });
             return true;
           case CefDrawingInteropMessage::D3d9DrawIndexedPrimitive:
-            CefPostTask(TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoD3d9DrawIndexedPrimitive,
-                                   this, (unsigned int)args->GetInt(1),
-                                   (unsigned int)args->GetInt(2),
-                           (unsigned int)args->GetInt(3),
-                           (unsigned int)args->GetInt(4),
-                           (unsigned int)args->GetInt(5),
-                           (unsigned int)args->GetInt(6)));
+            m_DrawingThreadedQueue.Queue([this, primitiveType = (unsigned int)args->GetInt(1), baseVertexIndex = (unsigned int)args->GetInt(2),
+                                          minVertexIndex = (unsigned int)args->GetInt(3), numVertices = (unsigned int)args->GetInt(4),
+                                           startIndex = (unsigned int)args->GetInt(5), primCount = (unsigned int)args->GetInt(6)] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9DrawIndexedPrimitive))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(primitiveType))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(baseVertexIndex))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(minVertexIndex))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(numVertices))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(startIndex))
+                goto error;
+              if (!m_PipeServer->WriteUInt32(primCount))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::WaitForGpu:
-            CefPostTask(
-                TID_UI,
-                        base::Bind(&CDrawingInteropImpl::DoWaitForGpu, this));
+            m_DrawingThreadedQueue.Queue([this] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::WaitForGpu))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::BeginCleanState:
-            CefPostTask(TID_UI,
-                        base::Bind(&CDrawingInteropImpl::DoBeginCleanState,
-                                   this));
+            m_DrawingThreadedQueue.Queue([this] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::BeginCleanState))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::EndCleanState:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoEndCleanState, this));
+            m_DrawingThreadedQueue.Queue([this] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::EndCleanState))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::CreateCefWindowTextureSharedHandle:
             // We only have one type of shared handle supported at the moment (this one), so no need to do anything here.
             return true;
           case CefDrawingInteropMessage::CreateDrawingData:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoCreateDrawingData, this,
-                    (unsigned int)args->GetInt(1),
-                           (unsigned __int64)args->GetInt(2) |
-                               ((unsigned __int64)args->GetInt(3) << 32)));
+            m_DrawingThreadedQueue.Queue([this,size = (unsigned int)args->GetInt(1),dataIndex =
+                (unsigned __int64)args->GetInt(2) |
+                ((unsigned __int64)args->GetInt(3) << 32)] {
+              m_DrawingData.emplace(
+                  std::piecewise_construct, std::forward_as_tuple(dataIndex),
+                  std::forward_as_tuple(
+                      size, malloc(size)));  // malloc might fail, but I am not
+                                             // handling that for now, there's
+                                             // not much the user could do atm.
+            });
             return true;
           case CefDrawingInteropMessage::AfxDrawingHandle_Release:
             // We only have one type of shared handle supported at the moment
             // (this one), so no need to do anything here.
             return true;
           case CefDrawingInteropMessage::AfxDrawingData_Release:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoReleaseDrawingData, this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32)));
+            m_DrawingThreadedQueue.Queue([this, dataIndex =
+                (unsigned __int64)args->GetInt(1) |
+                ((unsigned __int64)args->GetInt(2) << 32)] { m_DrawingData.erase(dataIndex);
+            });
             return true;
-          case CefDrawingInteropMessage::AfxDrawingData_Update:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoUpdateDrawingData, this,
-                    (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32),
-                (unsigned int)args->GetInt(3),
-                           CBinaryData(args->GetBinary(4))));
+          case CefDrawingInteropMessage::AfxDrawingData_Update: {
+            m_DrawingThreadedQueue.Queue(
+                [this, dataIndex = (unsigned __int64)args->GetInt(1) |
+                             ((unsigned __int64)args->GetInt(2) << 32),
+                 offset = (unsigned int)args->GetInt(3), data = std::move(CBinaryData(args->GetBinary(4)))] {
+                  if (data.Data) {
+                    auto it = m_DrawingData.find(dataIndex);
+                    if (it != m_DrawingData.end())
+                      it->second.Update(offset, data.Size, data.Data);
+                  }
+            });
+          }
             return true;
           case CefDrawingInteropMessage::AfxD3d9VertexDeclaration_Release:
-            CefPostTask(
-                TID_UI,
-                base::Bind(
-                    &CDrawingInteropImpl::DoReleaseD3d9VertexDeclaration, this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32)));
+            m_DrawingThreadedQueue.Queue(
+                [this, index = (unsigned __int64)args->GetInt(1) |
+                               ((unsigned __int64)args->GetInt(2) << 32)] {
+                  if (!m_InFlow)
+                    return;
+
+                  if (!m_PipeServer->WriteUInt32(
+                          (UINT32)DrawingReply::ReleaseD3d9VertexDeclaration))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt64((UINT64)index))
+                    goto error;
+
+                  return;
+                error:
+                  Close();
+            });
             return true;
           case CefDrawingInteropMessage::AfxD3d9IndexBuffer_Release:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoReleaseD3d9IndexBuffer, this,
-                    (unsigned __int64)args->GetInt(1) |
-                        ((unsigned __int64)args->GetInt(2) << 32)));
+            m_DrawingThreadedQueue.Queue(
+                [this, index = (unsigned __int64)args->GetInt(1) |
+                               ((unsigned __int64)args->GetInt(2) << 32)] {
+                  if (!m_InFlow)
+                    return;
+
+                  if (!m_PipeServer->WriteUInt32(
+                          (UINT32)DrawingReply::ReleaseD3d9IndexBuffer))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt64((UINT64)index))
+                    goto error;
+
+                  return;
+                error:
+                  Close();
+            });
             return true;
           case CefDrawingInteropMessage::AfxD3d9IndexBuffer_Update:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoUpdateD3d9IndexBuffer, this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32),
-                           (unsigned __int64)args->GetInt(3) |
-                               ((unsigned __int64)args->GetInt(4) << 32),
-                           (unsigned int)args->GetInt(5),
-                           (unsigned int)args->GetInt(6)));
+            m_DrawingThreadedQueue.Queue(
+                [this, index = (unsigned __int64)args->GetInt(1) |
+                         ((unsigned __int64)args->GetInt(2) << 32),
+                 dataIndex = (unsigned __int64)args->GetInt(3) |
+                             ((unsigned __int64)args->GetInt(4) << 32),
+                 offsetToLock = (unsigned int)args->GetInt(5),
+                 sizeToLock = (unsigned int)args->GetInt(6)] {
+                  if (!m_InFlow)
+                    return;
+
+                  auto it = m_DrawingData.find(dataIndex);
+                  if (it != m_DrawingData.end()) {
+                    CDrawingData& data = it->second;
+
+                    if (!m_PipeServer->WriteUInt32(
+                            (UINT32)DrawingReply::UpdateD3d9IndexBuffer))
+                      goto error;
+                    if (!m_PipeServer->WriteUInt64((UINT64)index))
+                      goto error;
+                    if (!m_PipeServer->WriteUInt32((UINT32)offsetToLock))
+                      goto error;
+                    if (!m_PipeServer->WriteUInt32((UINT32)sizeToLock))
+                      goto error;
+                    if (!m_PipeServer->WriteBytes(
+                            (unsigned char*)data.GetData() + offsetToLock,
+                            offsetToLock, sizeToLock))
+                      goto error;
+                  }
+
+                  return;
+                error:
+                  Close();
+            });
             return true;
           case CefDrawingInteropMessage::AfxD3d9VertexBuffer_Release:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoReleaseD3d9VertexBuffer,
-                           this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32)));
+            m_DrawingThreadedQueue.Queue(
+                [this, index = (unsigned __int64)args->GetInt(1) |
+                               ((unsigned __int64)args->GetInt(2) << 32)] {
+                  if (!m_InFlow)
+                    return;
+
+                  if (!m_PipeServer->WriteUInt32(
+                          (UINT32)DrawingReply::ReleaseD3d9VertexBuffer))
+                    goto error;
+                  if (!m_PipeServer->WriteUInt64((UINT64)index))
+                    goto error;
+
+                  return;
+                error:
+                  Close();
+            });
             return true;
           case CefDrawingInteropMessage::AfxD3d9VertexBuffer_Update:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoUpdateD3d9VertexBuffer, this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32),
-                           (unsigned __int64)args->GetInt(3) |
-                               ((unsigned __int64)args->GetInt(4) << 32),
-                           (unsigned int)args->GetInt(5),
-                           (unsigned int)args->GetInt(6)));
+            m_DrawingThreadedQueue.Queue(
+                [this, index = (unsigned __int64)args->GetInt(1) |
+                         ((unsigned __int64)args->GetInt(2) << 32),
+                 dataIndex = (unsigned __int64)args->GetInt(3) |
+                             ((unsigned __int64)args->GetInt(4) << 32),
+                 offsetToLock = (unsigned int)args->GetInt(5),
+                 sizeToLock = (unsigned int)args->GetInt(6)] {
+              if (!m_InFlow)
+                return;
+
+              auto it = m_DrawingData.find(dataIndex);
+              if (it != m_DrawingData.end()) {
+                CDrawingData& data = it->second;
+
+                if (!m_PipeServer->WriteUInt32(
+                        (UINT32)DrawingReply::UpdateD3d9VertexBuffer))
+                  goto error;
+                if (!m_PipeServer->WriteUInt64((UINT64)index))
+                  goto error;
+                if (!m_PipeServer->WriteUInt32((UINT32)offsetToLock))
+                  goto error;
+                if (!m_PipeServer->WriteUInt32((UINT32)sizeToLock))
+                  goto error;
+                if (!m_PipeServer->WriteBytes(
+                        (unsigned char*)data.GetData() + offsetToLock,
+                        offsetToLock, sizeToLock))
+                  goto error;
+              }
+
+              return;
+            error:
+              Close();
+            });
             return true;
           case CefDrawingInteropMessage::AfxD3d9Texture_Release:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoReleaseD3d9Texture,
-                           this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32)));
+            m_DrawingThreadedQueue.Queue([this, index = (unsigned __int64)args->GetInt(1) |
+                               ((unsigned __int64)args->GetInt(2) << 32)] {
+              if (!m_InFlow)
+                return;
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::ReleaseD3d9Texture))
+                goto error;
+              if (!m_PipeServer->WriteUInt64((UINT64)index))
+                goto error;
+
+              return;
+            error:
+              Close();
+            });
             return true;
-          case CefDrawingInteropMessage::AfxD3d9Texture_Update: 
+          case CefDrawingInteropMessage::AfxD3d9Texture_Update:
             if (args->GetType(4) == VTYPE_NULL) {
-              CefPostTask(
-                  TID_UI,
-                  base::Bind(&CDrawingInteropImpl::DoUpdateD3d9Texture, this, 
-                             DoUpdate3d9TextureArgs_s((unsigned __int64)
-                                     args->GetInt(1) |
-                                 ((unsigned __int64)args->GetInt(2) << 32),
-                                 (unsigned int)args->GetInt(3),
-                                 (unsigned __int64)
-                                     args->GetInt(5) |
-                                 ((unsigned __int64)args->GetInt(6) << 32),
-                                 (unsigned int)args->GetInt(7),
-                                 (unsigned int)args->GetInt(8),
-                                 (unsigned int)args->GetInt(9),
-                                 (unsigned int)args->GetInt(10),
-                                 (unsigned int)args->GetInt(11))));
+              m_DrawingThreadedQueue.Queue(
+                  [this,
+                   index = (unsigned __int64)args->GetInt(1) |
+                           ((unsigned __int64)args->GetInt(2) << 32),
+                   level = (unsigned int)args->GetInt(3),
+                   dataIndex = (unsigned __int64)args->GetInt(5) |
+                               ((unsigned __int64)args->GetInt(6) << 32),
+                   rowOffsetBytes = (unsigned int)args->GetInt(7),
+                   columnOffsetBytes = (unsigned int)args->GetInt(8),
+                   dataBytesPerRow = (unsigned int)args->GetInt(9),
+                   totalBytesPerRow = (unsigned int)args->GetInt(10),
+                   numRows = (unsigned int)args->GetInt(11)] {
+                    if (!m_InFlow)
+                      return;
+
+                    auto it = m_DrawingData.find(dataIndex);
+                    if (it != m_DrawingData.end()) {
+                      CDrawingData& data = it->second;
+
+                      if (!m_PipeServer->WriteUInt32(
+                              (UINT32)DrawingReply::UpdateD3d9Texture))
+                        goto error;
+                      if (!m_PipeServer->WriteUInt64((UINT64)index))
+                        goto error;
+                      if (!m_PipeServer->WriteUInt32((UINT32)level))
+                        goto error;
+                      if (!m_PipeServer->WriteBoolean(false))
+                        goto error;
+                      if (!m_PipeServer->WriteUInt32((UINT32)numRows))
+                        goto error;
+                      if (!m_PipeServer->WriteUInt32(
+                              (UINT32)(dataBytesPerRow - columnOffsetBytes)))
+                        goto error;
+
+                      void* pData =
+                          (unsigned char*)data.GetData() + rowOffsetBytes;
+
+                      for (unsigned int i = 0; i < numRows; ++i) {
+                        if (!m_PipeServer->WriteBytes(
+                                (unsigned char*)pData + columnOffsetBytes, 0,
+                                dataBytesPerRow - columnOffsetBytes))
+                          goto error;
+
+                        pData = (unsigned char*)pData + totalBytesPerRow;
+                      }
+                    }
+                    return;
+                  error:
+                    Close();
+                  });
             }
             else {
               auto dict = args->GetDictionary(4);
-              CefPostTask(
-                  TID_UI,
-                  base::Bind(&CDrawingInteropImpl::DoUpdateD3d9Texture, this,
-                             DoUpdate3d9TextureArgs_s(
-                                 (unsigned __int64)args->GetInt(1) |
-                                     ((unsigned __int64)args->GetInt(2) << 32),
-                                 (unsigned int)args->GetInt(3),
-                                (unsigned int)dict->GetInt("left"),
-                                 (unsigned int)dict->GetInt("top"),
-                                 (unsigned int)dict->GetInt("right"),
-                                 (unsigned int)dict->GetInt("bottom"),
-                                 (unsigned __int64)args->GetInt(5) |
-                                     ((unsigned __int64)args->GetInt(6) << 32),
-                                 (unsigned int)args->GetInt(7),
-                                 (unsigned int)args->GetInt(8),
-                                 (unsigned int)args->GetInt(9),
-                                 (unsigned int)args->GetInt(10),
-                                 (unsigned int)args->GetInt(11))));
-            }
+              m_DrawingThreadedQueue.Queue(
+                  [this,
+                   index = (unsigned __int64) args->GetInt(1) |
+                       ((unsigned __int64)args->GetInt(2) << 32),
+                   level = (unsigned int) args->GetInt(3),
+                   rectLeft = (unsigned int) dict->GetInt("left"),
+                   rectTop = (unsigned int) dict->GetInt("top"),
+                   rectRight = (unsigned int) dict->GetInt("right"),
+                   rectBottom = (unsigned int) dict->GetInt("bottom"),
+                   dataIndex = (unsigned __int64) args->GetInt(5) |
+                       ((unsigned __int64)args->GetInt(6) << 32),
+                   rowOffsetBytes = (unsigned int) args->GetInt(7),
+                   columnOffsetBytes = (unsigned int) args->GetInt(8),
+                   dataBytesPerRow = (unsigned int) args->GetInt(9),
+                   totalBytesPerRow = (unsigned int) args->GetInt(10),
+                   numRows = (unsigned int) args->GetInt(11)] {
+                    if (!m_InFlow)
+                      return;
 
+                    auto it = m_DrawingData.find(dataIndex);
+                    if (it != m_DrawingData.end()) {
+                      CDrawingData& data = it->second;
+
+                      if (!m_PipeServer->WriteUInt32(
+                              (UINT32)DrawingReply::UpdateD3d9Texture))
+                        goto error;
+                      if (!m_PipeServer->WriteUInt64((UINT64)index))
+                        goto error;
+                      if (!m_PipeServer->WriteUInt32((UINT32)level))
+                        goto error;
+                      if (!m_PipeServer->WriteBoolean(true))
+                        goto error;
+                      if (!m_PipeServer->WriteUInt32((UINT32)rectLeft))
+                        goto error;
+                      if (!m_PipeServer->WriteUInt32((UINT32)rectTop))
+                        goto error;
+                      if (!m_PipeServer->WriteUInt32((UINT32)rectRight))
+                        goto error;
+                      if (!m_PipeServer->WriteUInt32((UINT32)rectBottom))
+                        goto error;
+                      if (!m_PipeServer->WriteUInt32((UINT32)numRows))
+                        goto error;
+                      if (!m_PipeServer->WriteUInt32(
+                              (UINT32)(dataBytesPerRow - columnOffsetBytes)))
+                        goto error;
+
+                      void* pData =
+                          (unsigned char*)data.GetData() + rowOffsetBytes;
+
+                      for (unsigned int i = 0; i < numRows; ++i) {
+                        if (!m_PipeServer->WriteBytes(
+                                (unsigned char*)pData + columnOffsetBytes, 0,
+                                dataBytesPerRow - columnOffsetBytes))
+                          goto error;
+
+                        pData = (unsigned char*)pData + totalBytesPerRow;
+                      }
+                    }
+                    return;
+                  error:
+                    Close();
+              });
+            }
             return true;
           case CefDrawingInteropMessage::AfxD3d9PixelShader_Release:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoReleaseD3d9PixelShader, this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32)));
+              m_DrawingThreadedQueue.Queue(
+                  [this, index = (unsigned __int64)args->GetInt(1) |
+                       ((unsigned __int64)args->GetInt(2) << 32)] {
+                    if (!m_InFlow)
+                      return;
+
+                    if (!m_PipeServer->WriteUInt32(
+                            (UINT32)DrawingReply::ReleaseD3d9PixelShader))
+                      goto error;
+                    if (!m_PipeServer->WriteUInt64((UINT64)index))
+                      goto error;
+
+                    return;
+                  error:
+                    Close();
+            });
             return true;
           case CefDrawingInteropMessage::AfxD3d9VertexShader_Release:
-            CefPostTask(
-                TID_UI,
-                base::Bind(&CDrawingInteropImpl::DoReleaseD3d9VertexShader,
-                           this,
-                           (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32)));
+              m_DrawingThreadedQueue.Queue(
+                  [this, index = (unsigned __int64)args->GetInt(1) |
+                                 ((unsigned __int64)args->GetInt(2) << 32)] {
+                    if (!m_InFlow)
+                      return;
+
+                    if (!m_PipeServer->WriteUInt32(
+                            (UINT32)DrawingReply::ReleaseD3d9VertexShader))
+                      goto error;
+                    if (!m_PipeServer->WriteUInt64((UINT64)index))
+                      goto error;
+
+                    return;
+                  error:
+                    Close();
+            });
             return true;
         }
       }
@@ -1550,6 +2365,11 @@ class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
  }
 
   virtual void SetSharedHandle(void* handle) override { m_ShareHandle = handle; }
+
+protected:
+  virtual ~CDrawingInteropImpl() {
+    CloseInterop();
+  }
 
  private:
   class CDrawingData {
@@ -1571,6 +2391,7 @@ class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
      void* m_Data;
   };
 
+  CThreadedQueue m_DrawingThreadedQueue;
   std::map<unsigned __int64, CDrawingData> m_DrawingData;
   CefRefPtr<CefBrowser> m_Browser;
 
@@ -1602,14 +2423,16 @@ class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
         case DrawingMessage::NOP:
           break;
         case DrawingMessage::DeviceLost:
+          OutputDebugStringA("DeviceLost\n");
           bContinue = true;
           break;
         case DrawingMessage::DeviceRestored: {
+          OutputDebugStringA("DeviceRestored\n");
           auto browserMessage = CefProcessMessage::Create("afx-interop");
           auto args = browserMessage->GetArgumentList();
           args->SetSize(1);
           args->SetInt(0, (int)CefEngineInteropMessage::DeviceReset);
-          m_Browser->GetMainFrame()->SendProcessMessage(PID_BROWSER,
+          m_Browser->GetMainFrame()->SendProcessMessage(PID_RENDERER,
                                                         browserMessage);
         }
           bContinue = true;
@@ -1635,19 +2458,24 @@ class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
         // Error: client is ahead, otherwise we would have correct data
         // by now.
 
-        if (!m_PipeServer->WriteInt32((INT32)PrepareDrawReply::Retry))
+        if (!m_PipeServer->WriteInt32((INT32)DrawingReply::Retry))
           return false;
         if (!m_PipeServer->Flush())
           return false;
 
+        OutputDebugStringA("DrawingReply::Retry\n");
+
         return true;
+
       } else if (frameDiff > 0 || frameDiff == 0 && pass > clientPass) {
         // client is behind.
 
-        if (!m_PipeServer->WriteInt32((INT32)PrepareDrawReply::Skip))
+        if (!m_PipeServer->WriteInt32((INT32)DrawingReply::Skip))
           return false;
         if (!m_PipeServer->Flush())
           return false;
+
+        OutputDebugStringA("DrawingReply::Skip\n");
       } else {
         // we are right on.
 
@@ -1659,741 +2487,6 @@ class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
 
   virtual void OnClosing() override {
     m_InFlow = false;
-  }
-
-  void DoSetPipeName(const std::string& value) {
-    CInterop::SetPipeName(value.c_str());
-  }
-
-  void DoClose() { CInterop::Close(); }
-
-  void DoConnect() { CInterop::Connection(); }
-
-  void DoPumpBegin(int frameCount, unsigned int pass) {
-    if (!Connected())
-      return;
-
-    if(!DoThePumping(frameCount, pass))
-      Close();
-  }
-
-  void DoPumpEnd() {
-    if (!m_InFlow)
-      return;
-
-    if(!m_PipeServer->WriteUInt32((UINT32)DrawingReply::Finished)) goto error;
-
-    return;
-  error:
-      Close();
-  }
-
-  void DoBeginFrame() {
-
-      m_Browser->GetHost()->SendExternalBeginFrame();
-  }
-
-  void DoBeginFrame2(int width, int height) {
-
-      if(width != m_Width || height != m_Height) {
-          m_Width = width;
-          m_Height = height;
-          
-          m_Browser->GetHost()->WasResized();
-      }
-
-      m_Browser->GetHost()->SendExternalBeginFrame();
-  }
-
-  void DoD3d9CreateVertexDecalaration(unsigned __int64 index,
-      unsigned __int64 drawingDataIndex) {
-    if (!m_InFlow)
-      return;
-
-    auto it = m_DrawingData.find(drawingDataIndex);
-
-    if (m_DrawingData.end() == it)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::D3d9CreateVertexDeclaration))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)index))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)it->second.GetSize()))
-      goto error;
-    if (!m_PipeServer->WriteBytes(it->second.GetData(), 0, it->second.GetSize()))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoD3d9CreateIndexBuffer(unsigned __int64 index, unsigned int length, unsigned int usage, unsigned int format, unsigned int pool, unsigned __int64 sharedHandleIndex) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::D3d9CreateIndexBuffer))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT64)index))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)length))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)usage))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)format))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)pool))
-      goto error;
-    if (0 == sharedHandleIndex)
-    {
-      if (!m_PipeServer->WriteBoolean(false))
-        goto error;
-    }
-    else {
-      if (!m_PipeServer->WriteBoolean(true))
-        goto error;
-      if (!m_PipeServer->WriteHandle(m_ShareHandle))
-        goto error;
-    }
-
-    return;
-
-  error:
-    Close();
-  }
-
-
-  void DoD3d9CreateVertexBuffer(unsigned __int64 index,
-                               unsigned int length,
-                               unsigned int usage,
-                               unsigned int fvf,
-                               unsigned int pool,
-                               unsigned __int64 sharedHandleIndex) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::D3d9CreateVertexBuffer))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)index))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)length))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)usage))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)fvf))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)pool))
-      goto error;
-    if (0 == sharedHandleIndex) {
-      if (!m_PipeServer->WriteBoolean(false))
-        goto error;
-    } else {
-      if (!m_PipeServer->WriteBoolean(true))
-        goto error;
-      if (!m_PipeServer->WriteHandle(m_ShareHandle))
-        goto error;
-    }
-
-    return;
-
-  error:
-    Close();
-  }
-
-  struct DoD3d9CreateTextureArgs_s {
-    unsigned __int64 Index;
-    unsigned int Width;
-    unsigned int Height;
-    unsigned int Levels;
-    unsigned int Usage;
-    unsigned int Format;
-    unsigned int Pool;
-    unsigned __int64 SharedHandleIndex;
-
-    DoD3d9CreateTextureArgs_s(unsigned __int64 index,
-        unsigned int width,
-        unsigned int height,
-        unsigned int levels,
-        unsigned int usage,
-        unsigned int format,
-        unsigned int pool,
-        unsigned __int64 sharedHandleIndex)
-        : Index(index),
-        Width(width),
-        Height(height),
-        Levels(levels),
-        Usage(usage),
-        Format(format),
-        Pool(pool),
-        SharedHandleIndex(sharedHandleIndex) {
-
-    }
-  };
-
-  void DoD3d9CreateTexture(const DoD3d9CreateTextureArgs_s & args) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::D3d9CreateVertexBuffer))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)args.Index))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)args.Width))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)args.Height))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)args.Levels))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)args.Usage))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)args.Format))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)args.Pool))
-      goto error;
-    if (0 == args.SharedHandleIndex) {
-      if (!m_PipeServer->WriteBoolean(false))
-        goto error;
-    } else {
-      if (!m_PipeServer->WriteBoolean(true))
-        goto error;
-      if (!m_PipeServer->WriteHandle(m_ShareHandle))
-        goto error;
-    }
-
-    return;
-
-  error:
-    Close();
-  }
-
-  
-  void DoD3d9CreateVertexShader(unsigned __int64 index,
-                                      unsigned __int64 drawingDataIndex) {
-    if (!m_InFlow)
-      return;
-
-    auto it = m_DrawingData.find(drawingDataIndex);
-
-    if (m_DrawingData.end() == it)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::D3d9CreateVertexShader))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)index))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)it->second.GetSize()))
-      goto error;
-    if (!m_PipeServer->WriteBytes(it->second.GetData(), 0,
-                                  it->second.GetSize()))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoD3d9CreatePixelShader(unsigned __int64 index,
-                                unsigned __int64 drawingDataIndex) {
-    if (!m_InFlow)
-      return;
-
-    auto it = m_DrawingData.find(drawingDataIndex);
-
-    if (m_DrawingData.end() == it)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::D3d9CreatePixelShader))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)index))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)it->second.GetSize()))
-      goto error;
-    if (!m_PipeServer->WriteBytes(it->second.GetData(), 0,
-                                  it->second.GetSize()))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoD3d9UpdateTexture(unsigned __int64 sourceTextureIndex,
-                           unsigned __int64 destinationTextureIndex) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::D3d9UpdateTexture))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)sourceTextureIndex))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)destinationTextureIndex))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoD3d9SetViewPort() {
-    if (!m_InFlow)
-      return;
-
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::D3d9SetViewport))
-      goto error;
-    if (!m_PipeServer->WriteBoolean(false))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoD3d9SetViewPort2(unsigned int x, unsigned int y, unsigned int width, unsigned int height, float minZ, float maxZ) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::D3d9SetViewport))
-      goto error;
-    if (!m_PipeServer->WriteBoolean(true))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(x))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(y))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(width))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(height))
-      goto error;
-    if (!m_PipeServer->WriteSingle(minZ))
-      goto error;
-    if (!m_PipeServer->WriteSingle(maxZ))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
- void DoD3d9SetRenderState(unsigned int state,
-                          unsigned int value) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::D3d9SetRenderState))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(state))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(value))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
- void DoD3d9SetSamplerState(unsigned int sampler, unsigned int type, unsigned int value) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::D3d9SetRenderState))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(sampler))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(type))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(value))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoD3d9SetTexture(unsigned int sampler, unsigned __int64 textureIndex) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::D3d9SetTexture))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)sampler))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)textureIndex))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
- void DoD3d9SetTextureStageState(unsigned int stage,
-                             unsigned int type,
-                             unsigned int value) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::D3d9SetTextureStageState))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(stage))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(type))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(value))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoD3d9SetTransform(unsigned int state) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::D3d9SetTransform))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)state))
-      goto error;
-    if (!m_PipeServer->WriteBoolean(false))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoD3d9SetTransform2(unsigned int state, const std::vector<float> &matrix) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::D3d9SetTransform))
-      goto error;
-
-    for (size_t i = 0; i < matrix.size(); ++i) {
-      if (!m_PipeServer->WriteSingle(matrix[i]))
-        goto error;
-    }
-    
-    return;
-  error:
-    Close();
-  }
-
-  void DoD3d9SetIndicies(unsigned __int64 indicesIndex) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::D3d9SetIndices))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)indicesIndex))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-
-  void DoD3d9SetStreamSource(unsigned int streamNumber,
-                             unsigned __int64 streamDataIndex,
-                             unsigned int offsetInBytes, unsigned int stride) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::D3d9SetStreamSource))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT64)streamNumber))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)streamDataIndex))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT64)offsetInBytes))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT64)stride))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
- void D3d9SetStreamSourceFreq(unsigned int streamNumber,
-                               unsigned int setting) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::D3d9SetStreamSourceFreq))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(streamNumber))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(setting))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-
-  void DoD3d9SetVertexDeclaration(unsigned __int64 declIndex) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::D3d9SetVertexDeclaration))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)declIndex))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoD3d9SetVertexShader(unsigned __int64 shaderIndex) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::D3d9SetVertexShader))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)shaderIndex))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoD3d9SetVertexShaderConstantB(unsigned int startRegister,
-                           const std::vector<bool>& constantData) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::D3d9SetVertexShaderConstantB))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
-      goto error;
-    for (size_t i = 0; i < constantData.size(); ++i) {
-      if (!m_PipeServer->WriteBoolean(constantData[i]))
-        goto error;
-    }
-
-    return;
-  error:
-    Close();
-  }
-  void DoD3d9SetVertexShaderConstantF(unsigned int startRegister,
-                                      const std::vector<float>& constantData) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::D3d9SetVertexShaderConstantF))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
-      goto error;
-    for (size_t i = 0; i < constantData.size(); ++i) {
-      if (!m_PipeServer->WriteSingle((FLOAT)constantData[i]))
-        goto error;
-    }
-
-    return;
-  error:
-    Close();
-  }
-  void DoD3d9SetVertexShaderConstantI(unsigned int startRegister,
-                                      const std::vector<int>& constantData) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::D3d9SetVertexShaderConstantF))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
-      goto error;
-    for (size_t i = 0; i < constantData.size(); ++i) {
-      if (!m_PipeServer->WriteInt32((INT32)constantData[i]))
-        goto error;
-    }
-
-    return;
-  error:
-    Close();
-  }
-
-
-  void DoD3d9SetPixelShader(unsigned __int64 shaderIndex) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::D3d9SetPixelShader))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)shaderIndex))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoD3d9SetPixelShaderConstantB(unsigned int startRegister,
-                                      const std::vector<bool>& constantData) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::D3d9SetPixelShaderConstantB))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
-      goto error;
-    for (size_t i = 0; i < constantData.size(); ++i) {
-      if (!m_PipeServer->WriteBoolean(constantData[i]))
-        goto error;
-    }
-
-    return;
-  error:
-    Close();
-  }
-  void DoD3d9SetPixelShaderConstantF(unsigned int startRegister,
-                                      const std::vector<float>& constantData) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::D3d9SetPixelShaderConstantF))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
-      goto error;
-    for (size_t i = 0; i < constantData.size(); ++i) {
-      if (!m_PipeServer->WriteSingle((FLOAT)constantData[i]))
-        goto error;
-    }
-
-    return;
-  error:
-    Close();
-  }
-  void DoD3d9SetPixelShaderConstantI(unsigned int startRegister,
-                                      const std::vector<int>& constantData) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::D3d9SetPixelShaderConstantF))
-      goto error;
-    if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
-      goto error;
-    for (size_t i = 0; i < constantData.size(); ++i) {
-      if (!m_PipeServer->WriteInt32((INT32)constantData[i]))
-        goto error;
-    }
-
-    return;
-  error:
-    Close();
-  }
-
- void DoD3d9DrawPrimitive(unsigned int primitiveType,
-                           unsigned int startVertex,
-                           unsigned int primitiveCount) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::D3d9DrawPrimitive))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(primitiveType))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(startVertex))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(primitiveCount))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
- 
- void DoD3d9DrawIndexedPrimitive(unsigned int primitiveType,
-                                  unsigned int baseVertexIndex,
-                                  unsigned int minVertexIndex,
-                                  unsigned int numVertices,
-                                  unsigned int startIndex,
-                                  unsigned int primCount) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::D3d9DrawIndexedPrimitive))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(primitiveType))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(baseVertexIndex))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(minVertexIndex))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(numVertices))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(startIndex))
-      goto error;
-    if (!m_PipeServer->WriteUInt32(primCount))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoWaitForGpu() {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::WaitForGpu))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoBeginCleanState() {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::BeginCleanState))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoEndCleanState() {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::EndCleanState))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoCreateDrawingData(unsigned int size, unsigned __int64 dataIndex) {
-    m_DrawingData.emplace(std::piecewise_construct, std::forward_as_tuple(dataIndex), std::forward_as_tuple(size, malloc(size))); // malloc might fail, but I am not handling that for now, there's not much the user could do atm.
-  }
-
-  void DoReleaseDrawingData(unsigned __int64 dataIndex) {
-    m_DrawingData.erase(dataIndex);
   }
 
   struct CBinaryData {
@@ -2412,297 +2505,47 @@ class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
     }
   };
 
-  void DoUpdateDrawingData(unsigned __int64 dataIndex,
-                           unsigned int offset,
-                           const CBinaryData& data) {
+  std::vector<bool> BoolVecFromCefArgs(const CefRefPtr<CefListValue>& args,
+                                         size_t ofs,
+                                         size_t count) {
+    std::vector<bool> result(count);
 
-   if(data.Data) {
-      auto it = m_DrawingData.find(dataIndex);
-      if (it != m_DrawingData.end())
-        it->second.Update(offset, data.Size, data.Data);
-    }
-  }
-
-  void DoReleaseD3d9VertexDeclaration(unsigned __int64 index) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::ReleaseD3d9VertexDeclaration))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)index))
-      goto error;
-    
-    return;
-  error:
-    Close();
-  }
-
-  void DoReleaseD3d9IndexBuffer(unsigned __int64 index) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::ReleaseD3d9IndexBuffer))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)index))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoUpdateD3d9IndexBuffer(unsigned __int64 index,
-                               unsigned __int64 dataIndex, unsigned int offsetToLock, unsigned int sizeToLock) {
-    if (!m_InFlow)
-      return;
-
-    auto it = m_DrawingData.find(dataIndex);
-    if (it != m_DrawingData.end()) {
-      CDrawingData& data = it->second;
-
-      if (!m_PipeServer->WriteUInt32(
-              (UINT32)DrawingReply::UpdateD3d9IndexBuffer))
-        goto error;
-      if (!m_PipeServer->WriteUInt64((UINT64)index))
-        goto error;
-      if (!m_PipeServer->WriteUInt32((UINT32)offsetToLock))
-        goto error;
-      if (!m_PipeServer->WriteUInt32((UINT32)sizeToLock))
-        goto error;
-      if (!m_PipeServer->WriteBytes(
-              (unsigned char*)data.GetData() + offsetToLock, offsetToLock,
-              sizeToLock))
-        goto error;
-    }
-      
-    return;
-  error:
-    Close();
-  }
-
-
-  void DoReleaseD3d9VertexBuffer(unsigned __int64 index) {
-    if (!m_InFlow)
-      return;
-
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::ReleaseD3d9VertexBuffer))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)index))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  void DoUpdateD3d9VertexBuffer(unsigned __int64 index,
-                              unsigned __int64 dataIndex,
-                              unsigned int offsetToLock,
-                              unsigned int sizeToLock) {
-    if (!m_InFlow)
-      return;
-
-    auto it = m_DrawingData.find(dataIndex);
-    if (it != m_DrawingData.end()) {
-      CDrawingData& data = it->second;
-
-      if (!m_PipeServer->WriteUInt32(
-              (UINT32)DrawingReply::UpdateD3d9VertexBuffer))
-        goto error;
-      if (!m_PipeServer->WriteUInt64((UINT64)index))
-        goto error;
-      if (!m_PipeServer->WriteUInt32((UINT32)offsetToLock))
-        goto error;
-      if (!m_PipeServer->WriteUInt32((UINT32)sizeToLock))
-        goto error;
-      if (!m_PipeServer->WriteBytes(
-              (unsigned char*)data.GetData() + offsetToLock, offsetToLock,
-              sizeToLock))
-        goto error;
+    for (size_t i = 0; i < count; ++i) {
+      result[i] = (bool)args->GetBool(ofs + i);
     }
 
-    return;
-  error:
-    Close();
+    return result;
   }
 
-  void DoReleaseD3d9Texture(unsigned __int64 index) {
-    if (!m_InFlow)
-      return;
+  std::vector<float> FloatVecFromCefArgs(const CefRefPtr<CefListValue>& args, size_t ofs, size_t count) {
+    std::vector<float> result(count);
 
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::ReleaseD3d9Texture))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)index))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
-
-  struct DoUpdate3d9TextureArgs_s {
-    unsigned __int64 Index;
-      unsigned int Level;
-      bool HasRect;
-      struct Rect_s {
-        int Left;
-        int Top;
-        int Right;
-        int Bottom;
-
-        Rect_s(int left, int top, int right, int bottom)
-            : Left(left), Top(top), Right(right), Bottom(bottom) {
-
-        }
-      } Rect;
-      unsigned __int64 DataIndex;
-      unsigned int RowOffsetBytes;
-      unsigned int ColumnOffsetBytes;
-      unsigned int DataBytesPerRow;
-      unsigned int TotalBytesPerRow;
-      unsigned int NumRows;
-
-      DoUpdate3d9TextureArgs_s(unsigned __int64 index,
-          unsigned int level,
-          int rectLeft,
-          int rectTop,
-          int rectRight,
-          int rectBottom,
-                               unsigned __int64 dataIndex,
-                               unsigned int rowOffsetBytes,
-                               unsigned int columnOffsetBytes,
-                               unsigned int dataBytesPerRow,
-                               unsigned int totalBytesPerRow,
-                               unsigned int numRows)
-          : Index(index),
-            Level(level),
-            HasRect(true),
-            Rect(rectLeft, rectTop, rectRight, rectBottom),
-            DataIndex(dataIndex),
-            RowOffsetBytes(rowOffsetBytes),
-            ColumnOffsetBytes(columnOffsetBytes),
-            DataBytesPerRow(dataBytesPerRow),
-            TotalBytesPerRow(totalBytesPerRow),
-            NumRows(numRows) {
-
-      }
-
-      DoUpdate3d9TextureArgs_s(unsigned __int64 index,
-                               unsigned int level,
-                               unsigned __int64 dataIndex,
-                               unsigned int rowOffsetBytes,
-                               unsigned int columnOffsetBytes,
-                               unsigned int dataBytesPerRow,
-                               unsigned int totalBytesPerRow,
-                               unsigned int numRows)
-          : Index(index),
-            Level(level),
-            HasRect(false),
-            Rect(0, 0, 0, 0),
-            DataIndex(dataIndex),
-            RowOffsetBytes(rowOffsetBytes),
-            ColumnOffsetBytes(columnOffsetBytes),
-            DataBytesPerRow(dataBytesPerRow),
-            TotalBytesPerRow(totalBytesPerRow),
-            NumRows(numRows) {
-      }
-  };
-
-  void DoUpdateD3d9Texture(const DoUpdate3d9TextureArgs_s& args)
-  {
-    if (!m_InFlow)
-      return;
-
-    auto it = m_DrawingData.find(args.DataIndex);
-    if (it != m_DrawingData.end()) {
-      CDrawingData& data = it->second;
-
-      if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::UpdateD3d9Texture))
-        goto error;
-      if (!m_PipeServer->WriteUInt64((UINT64)args.Index))
-        goto error;
-      if (!m_PipeServer->WriteUInt32((UINT32)args.Level))
-        goto error;
-      if (args.HasRect) {
-        if (!m_PipeServer->WriteBoolean(true))
-          goto error;
-        if (!m_PipeServer->WriteUInt32((UINT32)args.Rect.Left))
-          goto error;
-        if (!m_PipeServer->WriteUInt32((UINT32)args.Rect.Top))
-          goto error;
-        if (!m_PipeServer->WriteUInt32((UINT32)args.Rect.Right))
-          goto error;
-        if (!m_PipeServer->WriteUInt32((UINT32)args.Rect.Bottom))
-          goto error;
-      } else {
-        if (!m_PipeServer->WriteBoolean(false))
-          goto error;
-      }
-      if (!m_PipeServer->WriteUInt32((UINT32)args.NumRows))
-        goto error;
-      if (!m_PipeServer->WriteUInt32(
-              (UINT32)(args.DataBytesPerRow - args.ColumnOffsetBytes)))
-        goto error;
-
-      void* pData = (unsigned char*)data.GetData() + args.RowOffsetBytes;
-
-      for (unsigned int i = 0; i < args.NumRows; ++i) {
-        if (!m_PipeServer->WriteBytes(
-                (unsigned char*)pData + args.ColumnOffsetBytes, 0,
-                args.DataBytesPerRow - args.ColumnOffsetBytes))
-          goto error;
-
-        pData = (unsigned char*)pData + args.TotalBytesPerRow;
-      }
+    for (size_t i = 0; i < count; ++i) {
+      result[i] = (float)args->GetDouble(ofs + i);
     }
-    return;
-  error:
-    Close();
+
+    return result;
   }
 
-  void DoReleaseD3d9PixelShader(unsigned __int64 index) {
-    if (!m_InFlow)
-      return;
+  std::vector<int> IntVecFromCefArgs(const CefRefPtr<CefListValue>& args,
+                                       size_t ofs,
+                                       size_t count) {
+    std::vector<int> result(count);
 
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::ReleaseD3d9PixelShader))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)index))
-      goto error;
+    for (size_t i = 0; i < count; ++i) {
+      result[i] = (int)args->GetInt(ofs + i);
+    }
 
-    return;
-  error:
-    Close();
+    return result;
   }
 
-  void DoReleaseD3d9VertexShader(unsigned __int64 index) {
-    if (!m_InFlow)
-      return;
 
-    if (!m_PipeServer->WriteUInt32(
-            (UINT32)DrawingReply::ReleaseD3d9VertexShader))
-      goto error;
-    if (!m_PipeServer->WriteUInt64((UINT64)index))
-      goto error;
-
-    return;
-  error:
-    Close();
-  }
 };
 
 class CDrawingInterop* CreateDrawingInterop(
     CefRefPtr<CefBrowser> const& browser) {
   return new CDrawingInteropImpl(browser);
 }
-
-class CInteropJsGuts : public virtual CefBaseRefCounted {
-
-};
 
 class CEngineInteropImpl : public CEngineInterop, public CInterop {
   IMPLEMENT_REFCOUNTING(CEngineInteropImpl);
@@ -3116,6 +2959,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
         [this](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
+
           if (2 == arguments.size() && arguments[0] && arguments[1] &&
               arguments[0]->IsInt() && arguments[1]->IsUInt()) {
             auto message = CefProcessMessage::Create("afx-interop");
@@ -3181,14 +3025,13 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
         [this](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[0]->IsUInt() && arguments[1]->GetUserData() &&
+          if (2 == arguments.size() && arguments[0] && arguments[0]->GetUserData() &&
               static_cast<CAfxInteropUserData*>(
-                  arguments[1]->GetUserData().get())
+                  arguments[0]->GetUserData().get())
                       ->GetUserDataType() == AfxUserDataType::AfxDrawingData) {
             auto drawingData =
                 static_cast<CAfxDrawingData*>(static_cast<CAfxInteropUserData*>(
-                    arguments[1]->GetUserData().get()));
+                    arguments[0]->GetUserData().get()));
 
             if (nullptr != drawingData) {
               CAfxD3d9VertexDeclaration* val =
@@ -3197,13 +3040,12 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
               auto message = CefProcessMessage::Create("afx-interop");
               auto args = message->GetArgumentList();
-              args->SetSize(6);
+              args->SetSize(5);
               args->SetInt(
                   0,
                   (int)CefDrawingInteropMessage::D3d9CreateVertexDecalaration);
               val->InsertIdAsTwoInts(args, 1, 2);
-              args->SetInt(3, (int)arguments[0]->GetUIntValue());
-              drawingData->InsertIdAsTwoInts(args, 4, 5);
+              drawingData->InsertIdAsTwoInts(args, 3, 4);
 
               SendProcessMessage(PID_BROWSER, message);
               return true;
@@ -3223,7 +3065,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
               arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
             CAfxDrawingHandle* drawingHandle = nullptr;
 
-            if (static_cast<CAfxInteropUserData*>(
+            if (arguments[4]->GetUserData() &&
+                static_cast<CAfxInteropUserData*>(
                     arguments[4]->GetUserData().get())
                     ->GetUserDataType() == AfxUserDataType::AfxDrawingHandle)
               drawingHandle = static_cast<CAfxDrawingHandle*>(
@@ -3267,7 +3110,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
               arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
             CAfxDrawingHandle* drawingHandle = nullptr;
 
-            if (static_cast<CAfxInteropUserData*>(
+            if (arguments[4]->GetUserData() && arguments[4]
+                    ->GetUserData() && static_cast<CAfxInteropUserData*>(
                     arguments[4]->GetUserData().get())
                     ->GetUserDataType() == AfxUserDataType::AfxDrawingHandle)
               drawingHandle = static_cast<CAfxDrawingHandle*>(
@@ -3307,13 +3151,14 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
                CefString& exceptionoverride) {
           if (7 == arguments.size() && arguments[0] && arguments[1] &&
               arguments[2] && arguments[3] && arguments[4] && arguments[5] &&
-              arguments[5] && arguments[0]->IsUInt() &&
+              arguments[0]->IsUInt() &&
               arguments[1]->IsUInt() && arguments[2]->IsUInt() &&
               arguments[3]->IsUInt() && arguments[5]->IsUInt() &&
               arguments[4]->IsUInt()) {
             CAfxDrawingHandle* drawingHandle = nullptr;
 
-            if (static_cast<CAfxInteropUserData*>(
+            if (arguments[6]->GetUserData() &&
+                static_cast<CAfxInteropUserData*>(
                     arguments[6]->GetUserData().get())
                     ->GetUserDataType() == AfxUserDataType::AfxDrawingHandle)
               drawingHandle = static_cast<CAfxDrawingHandle*>(
@@ -3370,7 +3215,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
               args->SetSize(5);
               args->SetInt(
                   0,
-                  (int)CefDrawingInteropMessage::D3d9CreateVertexDecalaration);
+                  (int)CefDrawingInteropMessage::D3d9CreateVertexShader);
               val->InsertIdAsTwoInts(args, 1, 2);
               drawingData->InsertIdAsTwoInts(args, 3, 4);
 
@@ -3404,7 +3249,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
               args->SetSize(5);
               args->SetInt(
                   0,
-                  (int)CefDrawingInteropMessage::D3d9CreateVertexDecalaration);
+                  (int)CefDrawingInteropMessage::D3d9CreatePixelShader);
               val->InsertIdAsTwoInts(args, 1, 2);
               drawingData->InsertIdAsTwoInts(args, 3, 4);
 
@@ -3422,7 +3267,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
                CefString& exceptionoverride) {
           if (3 == arguments.size() && arguments[0] && arguments[1]) {
             CAfxD3d9Texture* val = nullptr;
-            if (static_cast<CAfxInteropUserData*>(
+            if (arguments[0]->GetUserData() &&
+                static_cast<CAfxInteropUserData*>(
                     arguments[0]->GetUserData().get())
                     ->GetUserDataType() == AfxUserDataType::AfxD3d9Texture)
               val = static_cast<CAfxD3d9Texture*>(
@@ -3430,7 +3276,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
                       arguments[0]->GetUserData().get()));
 
             CAfxD3d9Texture* val2 = nullptr;
-            if (static_cast<CAfxInteropUserData*>(
+            if (arguments[1]->GetUserData() &&
+                static_cast<CAfxInteropUserData*>(
                     arguments[1]->GetUserData().get())
                     ->GetUserDataType() == AfxUserDataType::AfxD3d9Texture)
               val2 = static_cast<CAfxD3d9Texture*>(
@@ -3474,12 +3321,12 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
             return true;
           } else if (1 == arguments.size() && arguments[0] &&
                      arguments[0]->IsObject()) {
-            auto x = arguments[0]->GetValue(0);
-            auto y = arguments[0]->GetValue(0);
-            auto width = arguments[0]->GetValue(0);
-            auto height = arguments[0]->GetValue(0);
-            auto minZ = arguments[0]->GetValue(0);
-            auto maxZ = arguments[0]->GetValue(0);
+            auto x = arguments[0]->GetValue("x");
+            auto y = arguments[0]->GetValue("y");
+            auto width = arguments[0]->GetValue("width");
+            auto height = arguments[0]->GetValue("height");
+            auto minZ = arguments[0]->GetValue("minZ");
+            auto maxZ = arguments[0]->GetValue("maxZ");
 
             if (x && y && width && height && minZ && maxZ && x->IsUInt() &&
                 y->IsUInt() && width->IsUInt() && height->IsUInt() &&
@@ -3549,7 +3396,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
           if (2 == arguments.size() && arguments[0] && arguments[1] &&
               arguments[0]->IsUInt()) {
             CAfxD3d9Texture* val = nullptr;
-            if (static_cast<CAfxInteropUserData*>(
+            if (arguments[1]->GetUserData() &&
+                static_cast<CAfxInteropUserData*>(
                     arguments[1]->GetUserData().get())
                     ->GetUserDataType() == AfxUserDataType::AfxD3d9Texture)
               val = static_cast<CAfxD3d9Texture*>(
@@ -3602,8 +3450,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
                CefString& exceptionoverride) {
           if (2 == arguments.size() && arguments[0] && arguments[1] &&
               arguments[0]->IsUInt()) {
-            if (arguments[2]->IsArray() &&
-                arguments[2]->GetArrayLength() == 16) {
+            if (arguments[1]->IsArray() &&
+                arguments[1]->GetArrayLength() == 16) {
               auto message = CefProcessMessage::Create("afx-interop");
               auto args = message->GetArgumentList();
               args->SetSize(18);
@@ -3611,10 +3459,10 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
               args->SetInt(1, (int)arguments[0]->GetUIntValue());
               bool bOk = true;
               for (int i = 0; i < 16; ++i) {
-                auto arrVal = arguments[2]->GetValue(i);
+                auto arrVal = arguments[1]->GetValue(i);
 
                 if (arrVal && arrVal->IsDouble()) {
-                  args->SetDouble(2 + i, arrVal->GetDoubleValue());
+                  args->SetDouble(i + 2, arrVal->GetDoubleValue());
                 } else {
                   bOk = false;
                   break;
@@ -3646,7 +3494,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
           if (2 == arguments.size() && arguments[0] && arguments[1] &&
               arguments[0]->IsUInt()) {
             CAfxD3d9IndexBuffer* val = nullptr;
-            if (static_cast<CAfxInteropUserData*>(
+            if (arguments[1]->GetUserData() &&
+                static_cast<CAfxInteropUserData*>(
                     arguments[1]->GetUserData().get())
                     ->GetUserDataType() == AfxUserDataType::AfxD3d9IndexBuffer)
               val = static_cast<CAfxD3d9IndexBuffer*>(
@@ -3679,7 +3528,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
               arguments[2] && arguments[3] && arguments[0]->IsUInt() &&
               arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
             CAfxD3d9IndexBuffer* val = nullptr;
-            if (static_cast<CAfxInteropUserData*>(
+            if (arguments[1]->GetUserData() &&
+                static_cast<CAfxInteropUserData*>(
                     arguments[1]->GetUserData().get())
                     ->GetUserDataType() == AfxUserDataType::AfxD3d9IndexBuffer)
               val = static_cast<CAfxD3d9IndexBuffer*>(
@@ -3733,7 +3583,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
           if (2 == arguments.size() && arguments[0] && arguments[1] &&
               arguments[0]->IsUInt()) {
             CAfxD3d9VertexDeclaration* val = nullptr;
-            if (static_cast<CAfxInteropUserData*>(
+            if (arguments[1]->GetUserData() &&
+                static_cast<CAfxInteropUserData*>(
                     arguments[1]->GetUserData().get())
                     ->GetUserDataType() ==
                 AfxUserDataType::AfxD3d9VertexDeclaration)
@@ -3767,7 +3618,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
           if (2 == arguments.size() && arguments[0] && arguments[1] &&
               arguments[0]->IsUInt()) {
             CAfxD3d9VertexShader* val = nullptr;
-            if (static_cast<CAfxInteropUserData*>(
+            if (arguments[1]->GetUserData() &&
+                static_cast<CAfxInteropUserData*>(
                     arguments[1]->GetUserData().get())
                     ->GetUserDataType() == AfxUserDataType::AfxD3d9VertexShader)
               val = static_cast<CAfxD3d9VertexShader*>(
@@ -3813,7 +3665,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
               auto arrVal = arguments[2]->GetValue(i);
 
               if (arrVal && arrVal->IsBool()) {
-                args->SetBool(2 + i, arrVal->GetBoolValue());
+                args->SetBool(i + 2, arrVal->GetBoolValue());
               } else {
                 bOk = false;
                 break;
@@ -3849,7 +3701,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
               auto arrVal = arguments[2]->GetValue(i);
 
               if (arrVal && arrVal->IsDouble()) {
-                args->SetDouble(2 + i, arrVal->GetDoubleValue());
+                args->SetDouble(i + 2, arrVal->GetDoubleValue());
               } else {
                 bOk = false;
                 break;
@@ -3885,7 +3737,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
               auto arrVal = arguments[2]->GetValue(i);
 
               if (arrVal && arrVal->IsInt()) {
-                args->SetInt(2 + i, arrVal->GetIntValue());
+                args->SetInt(i + 2, arrVal->GetIntValue());
               } else {
                 bOk = false;
                 break;
@@ -3907,7 +3759,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
           if (2 == arguments.size() && arguments[0] && arguments[1] &&
               arguments[0]->IsUInt()) {
             CAfxD3d9PixelShader* val = nullptr;
-            if (static_cast<CAfxInteropUserData*>(
+            if (arguments[1]->GetUserData() &&
+                static_cast<CAfxInteropUserData*>(
                     arguments[1]->GetUserData().get())
                     ->GetUserDataType() == AfxUserDataType::AfxD3d9PixelShader)
               val = static_cast<CAfxD3d9PixelShader*>(
@@ -3953,7 +3806,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
               auto arrVal = arguments[2]->GetValue(i);
 
               if (arrVal && arrVal->IsBool()) {
-                args->SetBool(2 + i, arrVal->GetBoolValue());
+                args->SetBool(i + 2, arrVal->GetBoolValue());
               } else {
                 bOk = false;
                 break;
@@ -3989,7 +3842,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
               auto arrVal = arguments[2]->GetValue(i);
 
               if (arrVal && arrVal->IsDouble()) {
-                args->SetDouble(2 + i, arrVal->GetDoubleValue());
+                args->SetDouble(i + 2, arrVal->GetDoubleValue());
               } else {
                 bOk = false;
                 break;
@@ -4025,7 +3878,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
               auto arrVal = arguments[2]->GetValue(i);
 
               if (arrVal && arrVal->IsInt()) {
-                args->SetInt(2 + i, arrVal->GetIntValue());
+                args->SetInt(i + 2, arrVal->GetIntValue());
               } else {
                 bOk = false;
                 break;
