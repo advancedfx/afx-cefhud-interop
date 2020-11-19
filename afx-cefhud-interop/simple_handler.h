@@ -7,13 +7,12 @@
 
 #include "include/cef_client.h"
 
-#include "afx-cefhud-interop/AfxInterop.h"
-
 #include <map>
+#include <shared_mutex>
 
 class SimpleHandler : public CefClient,
-                      public CefDisplayHandler,
                       public CefRenderHandler,
+                      public CefDisplayHandler,
                       public CefLifeSpanHandler,
                       public CefLoadHandler {
  public:
@@ -29,24 +28,29 @@ class SimpleHandler : public CefClient,
     return this;
   }
 
-  virtual CefRefPtr<CefDisplayHandler> GetDisplayHandler() OVERRIDE {
-    return this;
-  }
   virtual CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() OVERRIDE {
     return this;
   }
+
+  virtual CefRefPtr<CefDisplayHandler> GetDisplayHandler() OVERRIDE {
+    return this;
+  }
+
   virtual CefRefPtr<CefLoadHandler> GetLoadHandler() OVERRIDE { return this; }
 
-  virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
-                                        CefRefPtr<CefFrame> frame,
-                                        CefProcessId source_process,
-                                        CefRefPtr<CefProcessMessage> message) override;
+    virtual bool OnProcessMessageReceived(
+      CefRefPtr<CefBrowser> browser,
+      CefRefPtr<CefFrame> frame,
+      CefProcessId source_process,
+      CefRefPtr<CefProcessMessage> message) OVERRIDE;
+
 
   // CefDisplayHandler methods:
+
   virtual void OnTitleChange(CefRefPtr<CefBrowser> browser,
                              const CefString& title) OVERRIDE;
 
-  virtual void OnPaint(CefRefPtr<CefBrowser> /*browser*/,
+   virtual void OnPaint(CefRefPtr<CefBrowser> /*browser*/,
                        PaintElementType type,
                        const RectList& dirtyRects,
                        const void* buffer,
@@ -55,59 +59,62 @@ class SimpleHandler : public CefClient,
     // this application doesn't support software rasterizing
   }
 
-  // CefRenderHandler methods:
-  virtual void OnAcceleratedPaint(CefRefPtr<CefBrowser> /*browser*/,
+     // CefRenderHandler methods:
+  virtual void OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
                                   PaintElementType type,
                                   const RectList& dirtyRects,
                                   void* share_handle) OVERRIDE;
 
-  virtual void GetViewRect(CefRefPtr<CefBrowser> /*browser*/,
+  virtual void GetViewRect(CefRefPtr<CefBrowser> browser,
                            CefRect& rect) OVERRIDE;
 
-
-
-  // CefLifeSpanHandler methods:
+    // CefLifeSpanHandler methods:
   virtual void OnAfterCreated(CefRefPtr<CefBrowser> browser) OVERRIDE;
   virtual bool DoClose(CefRefPtr<CefBrowser> browser) OVERRIDE;
   virtual void OnBeforeClose(CefRefPtr<CefBrowser> browser) OVERRIDE;
 
   // CefLoadHandler methods:
+
   virtual void OnLoadError(CefRefPtr<CefBrowser> browser,
                            CefRefPtr<CefFrame> frame,
                            ErrorCode errorCode,
                            const CefString& errorText,
                            const CefString& failedUrl) OVERRIDE;
-
+  
   // Request that all existing browser windows close.
   void CloseAllBrowsers(bool force_close);
 
   bool IsClosing() const { return is_closing_; }
-
  private:
-  
 
-  // Platform-specific implementation.
+  bool is_closing_;
+
+  struct BrowserMapElem {
+    CefRefPtr<CefBrowser> Browser;
+    int Width = 640;
+    int Height = 480;
+
+    BrowserMapElem(CefRefPtr<CefBrowser> browser) : Browser(browser) {}
+  };
+
+  std::map<int, BrowserMapElem> m_Browsers;
+
+   // Platform-specific implementation.
   void PlatformTitleChange(CefRefPtr<CefBrowser> browser,
                            const CefString& title);
 
-  // List of existing browser windows. Only accessed on the CEF UI thread.
+  void CreateDrawingInterop(CefRefPtr<CefBrowser> browser,
+                           CefRefPtr<CefListValue> args);
 
-  struct BrowserListElem {
-    CefRefPtr<CefBrowser> Browser;
-    CefRefPtr<advancedfx::interop::CDrawingInterop> DrawingInterop;
+  void CreateEngineInterop(CefRefPtr<CefBrowser> browser,
+                           CefRefPtr<CefListValue> args);
 
-    BrowserListElem(
-        CefRefPtr<CefBrowser> browser,
-        CefRefPtr<advancedfx::interop::CDrawingInterop> drawingInterop)
-        : Browser(browser), DrawingInterop(drawingInterop) {
+  void InteropClosed(unsigned int);
 
-    }
-  };
+  void CreateInterop(CefRefPtr<CefBrowser> browser);
+  void CloseInterop();
 
-  typedef std::list<BrowserListElem> BrowserList;
-  BrowserList browser_list_;
-
-  bool is_closing_;
+  void InteropResize();
 
   // Include the default reference counting implementation.
   IMPLEMENT_REFCOUNTING(SimpleHandler);

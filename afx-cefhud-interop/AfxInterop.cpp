@@ -21,6 +21,10 @@
 namespace advancedfx {
 namespace interop {
 
+const char * g_szAlreadyReleased = "Already released.";
+const char* g_szOutOfFlow = "Out of flow.";
+const char* g_szConnectionError = "Connection error.";
+const char* g_szInvalidArguments = "Invalid arguments.";
 
 enum class GameEventFieldType : int {
   Local = 0,
@@ -129,79 +133,7 @@ enum class DrawingReply : unsigned int {
   D3d9UpdateTexture = 43
 };
 
-enum class CefEngineInteropMessage : int {
-  DeviceReset
-};
-
-enum class CefDrawingInteropMessage : int {
-  SetPipeName,
-  Close,
-
-  Connect,
-  PumpBegin,
-  PumpEnd,
-  BeginFrame,
-	
-  D3d9CreateVertexDecalaration,
-	
-  D3d9CreateIndexBuffer,
-  D3d9CreateVertexBuffer,
-  D3d9CreateTexture,
-	
-  D3d9CreateVertexShader,
-  D3d9CreatePixelShader,
-	
-  D3d9UpdateTexture,
-  D3d9SetViewport,
-  D3d9SetRenderState,
-  D3d9SetSamplerState,
-  D3d9SetTexture,
-  D3d9SetTextureStageState,
-  D3d9SetTransform,
-  D3d9SetIndices,
-  D3d9SetStreamSource,
-  D3d9SetStreamSourceFreq,
-  D3d9SetVertexDeclaration,
-  D3d9SetVertexShader,
-  D3d9SetVertexShaderConstantB,
-  D3d9SetVertexShaderConstantF,
-  D3d9SetVertexShaderConstantI,
-  D3d9SetPixelShader,
-  D3d9SetPixelShaderConstantB,
-  D3d9SetPixelShaderConstantF,
-  D3d9SetPixelShaderConstantI,
-  D3d9DrawPrimitive,
-  D3d9DrawIndexedPrimitive,
-	
-  WaitForGpu,
-  BeginCleanState,
-  EndCleanState,
-
-  CreateCefWindowTextureSharedHandle,
-
-  CreateDrawingData,
-
-  AfxDrawingHandle_Release,
-
-  AfxDrawingData_Release,
-  AfxDrawingData_Update,
-
-  AfxD3d9VertexDeclaration_Release,
-
-  AfxD3d9IndexBuffer_Release,
-  AfxD3d9IndexBuffer_Update,
-
-  AfxD3d9VertexBuffer_Release,
-  AfxD3d9VertexBuffer_Update,
-
-  AfxD3d9Texture_Release,
-  AfxD3d9Texture_Update,
-
-  AfxD3d9PixelShader_Release,
-  AfxD3d9VertexShader_Release
-};
-
-enum class AfxUserDataType : int {
+enum class InteropUserDataType : int {
   AfxDrawingHandle,
   AfxDrawingData,
   AfxD3d9VertexDeclaration,
@@ -1070,11 +1002,11 @@ class CIntCalcCallbacks
   }
 };
 
-class CInterop {
+class CAfxInterop {
  public:
   const INT32 Version = 7;
 
-  CInterop(const char* pipeName) : m_PipeName(pipeName) {}
+  CAfxInterop(const char* pipeName) : m_PipeName(pipeName) {}
 
   virtual bool Connection(void) {
     if (nullptr == m_PipeServer) {
@@ -1129,7 +1061,7 @@ class CInterop {
   std::string m_PipeName;
   CNamedPipeServer* m_PipeServer = nullptr;
 
-  virtual ~CInterop() { Close(); }
+  virtual ~CAfxInterop() { Close(); }
 
   virtual bool OnNewConnection() { return true; }
 
@@ -1141,1230 +1073,1908 @@ class CInterop {
   bool m_Connecting = false;
 };
 
-class CDrawingInteropImpl : public CDrawingInterop, public CInterop {
-  IMPLEMENT_REFCOUNTING(CDrawingInteropImpl);
-
- public:
-
-  virtual void CloseInterop() override { 
-      m_DrawingThreadedQueue.Abort();
-      CInterop::Close();
-  }
-
-  CDrawingInteropImpl(CefRefPtr<CefBrowser> const& browser)
-      : CInterop("advancedfxInterop_drawing"), m_Browser(browser) {
-  
-  }
-  
-  virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
-                                        CefRefPtr<CefFrame> frame,
-                                        CefProcessId source_process,
-                                        CefRefPtr<CefProcessMessage> message) override {
-
-    auto const name = message->GetName().ToString();
-
-    if (name == "afx-interop") {
-      auto const args = message->GetArgumentList();
-      auto const argC = args->GetSize();
-
-      if (1 <= argC) {
-        int msg_id = args->GetInt(0);
-
-        switch ((CefDrawingInteropMessage)msg_id) {
-          case CefDrawingInteropMessage::SetPipeName:
-            m_DrawingThreadedQueue.Queue(
-                [this, pipeName = args->GetString(1).ToString()] {
-                  CInterop::SetPipeName(pipeName.c_str());
-                });
-            return true;
-          case CefDrawingInteropMessage::Close:
-            m_DrawingThreadedQueue.Queue([this] { CInterop::Close(); });
-            return true;
-          case CefDrawingInteropMessage::Connect:
-            m_DrawingThreadedQueue.Queue([this] { CInterop::Connection(); });
-            return true;
-          case CefDrawingInteropMessage::PumpBegin:
-            m_DrawingThreadedQueue.Queue(
-                [this, frameCount = args->GetInt(1),
-                 pass = (unsigned int)args->GetInt(2)] {
-              if (!Connected())
-                return;
-
-              if (!DoThePumping(frameCount, pass))
-                Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::PumpEnd:
-            m_DrawingThreadedQueue.Queue([this] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::Finished))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::BeginFrame:
-            if (1 == argC) {
-              m_DrawingThreadedQueue.Queue(
-                  [this] {
-                       m_Browser->GetHost()->SendExternalBeginFrame();
-                  });
-            } else {
-              m_DrawingThreadedQueue.Queue(
-                  [this, width = args->GetInt(1), height = args->GetInt(2)] {
-                if (width != m_Width || height != m_Height) {
-                  m_Width = width;
-                  m_Height = height;
-
-                  m_Browser->GetHost()->WasResized();
-                }
-                m_Browser->GetHost()->SendExternalBeginFrame();
-              });
-            }
-            return true;
-          case CefDrawingInteropMessage::D3d9CreateVertexDecalaration:
-            m_DrawingThreadedQueue.Queue(
-                [this,
-                 index = (unsigned __int64)args->GetInt(1) |
-                         ((unsigned __int64)args->GetInt(2) << 32),
-                 drawingDataIndex = (unsigned __int64)args->GetInt(3) |
-                                    ((unsigned __int64)args->GetInt(4) << 32)] {
-              if (!m_InFlow)
-                return;
-
-              auto it = m_DrawingData.find(drawingDataIndex);
-
-              if (m_DrawingData.end() == it)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9CreateVertexDeclaration))
-                goto error;
-              if (!m_PipeServer->WriteUInt64((UINT64)index))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT32)it->second.GetSize()))
-                goto error;
-              if (!m_PipeServer->WriteBytes(it->second.GetData(), 0,
-                                            it->second.GetSize()))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9CreateIndexBuffer: {
-            m_DrawingThreadedQueue.Queue(
-                [this,
-                 index = (unsigned __int64)args->GetInt(1) |
-                         ((unsigned __int64)args->GetInt(2) << 32),
-                 length = (unsigned int)args->GetInt(3),
-                 usage = (unsigned int)args->GetInt(4),
-                 format = (unsigned int)args->GetInt(5),
-                 pool = (unsigned int)args->GetInt(6),
-                 sharedHandleIndex =
-                     (unsigned __int64)args->GetInt(7) |
-                     ((unsigned __int64)args->GetInt(8) << 32)] {
-                  if (!m_InFlow)
-                    return;
-
-                  if (!m_PipeServer->WriteUInt32(
-                          (UINT32)DrawingReply::D3d9CreateIndexBuffer))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt32((UINT64)index))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt32((UINT32)length))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt32((UINT32)usage))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt32((UINT32)format))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt32((UINT32)pool))
-                    goto error;
-                  if (0 == sharedHandleIndex) {
-                    if (!m_PipeServer->WriteBoolean(false))
-                      goto error;
-                  } else {
-                    if (!m_PipeServer->WriteBoolean(true))
-                      goto error;
-                    if (!m_PipeServer->WriteHandle(m_ShareHandle))
-                      goto error;
-                  }
-
-                  return;
-
-                error:
-                  Close();
-                });
-          }
-            return true;
-          case CefDrawingInteropMessage::D3d9CreateVertexBuffer:
-            m_DrawingThreadedQueue.Queue(
-                [this,
-                 index = (unsigned __int64)args->GetInt(1) |
-                         ((unsigned __int64)args->GetInt(2) << 32),
-                 length = (unsigned int)args->GetInt(3),
-                 usage = (unsigned int)args->GetInt(4),
-                 fvf = (unsigned int)args->GetInt(5),
-                 pool = (unsigned int)args->GetInt(6),
-                 sharedHandleIndex =
-                     (unsigned __int64)args->GetInt(7) |
-                     ((unsigned __int64)args->GetInt(8) << 32)] {
-                  if (!m_InFlow)
-                    return;
-
-                  if (!m_PipeServer->WriteUInt32(
-                          (UINT32)DrawingReply::D3d9CreateVertexBuffer))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt64((UINT64)index))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt32((UINT32)length))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt32((UINT32)usage))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt32((UINT32)fvf))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt32((UINT32)pool))
-                    goto error;
-                  if (0 == sharedHandleIndex) {
-                    if (!m_PipeServer->WriteBoolean(false))
-                      goto error;
-                  } else {
-                    if (!m_PipeServer->WriteBoolean(true))
-                      goto error;
-                    if (!m_PipeServer->WriteHandle(m_ShareHandle))
-                      goto error;
-                  }
-
-                  return;
-
-                error:
-                  Close();
-                });
-            return true;
-          case CefDrawingInteropMessage::D3d9CreateTexture:
-            m_DrawingThreadedQueue.Queue(
-                [this,
-                 index = (unsigned __int64)args->GetInt(1) |
-                         ((unsigned __int64)args->GetInt(2) << 32),
-                 width = (unsigned int)args->GetInt(3),
-                 height = (unsigned int)args->GetInt(4),
-                 levels = (unsigned int)args->GetInt(5),
-                 usage = (unsigned int)args->GetInt(6),
-                 format = (unsigned int)args->GetInt(7),
-                 pool = (unsigned int)args->GetInt(8),
-                 sharedHandleIndex =
-                     (unsigned __int64)args->GetInt(9) |
-                     ((unsigned __int64)args->GetInt(10) << 32)] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9CreateTexture))
-                goto error;
-              if (!m_PipeServer->WriteUInt64((UINT64)index))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT32)width))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT32)height))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT32)levels))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT32)usage))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT32)format))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT32)pool))
-                goto error;
-              if (0 == sharedHandleIndex) {
-                if (!m_PipeServer->WriteBoolean(false))
-                  goto error;
-              } else {
-                if (!m_PipeServer->WriteBoolean(true))
-                  goto error;
-                if (!m_PipeServer->WriteHandle(m_ShareHandle))
-                  goto error;
-              }
-
-              return;
-
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9CreateVertexShader:
-            m_DrawingThreadedQueue.Queue(
-                [this,
-                 index = (unsigned __int64)args->GetInt(1) |
-                         ((unsigned __int64)args->GetInt(2) << 32),
-                 drawingDataIndex = (unsigned __int64)args->GetInt(3) |
-                                    ((unsigned __int64)args->GetInt(4) << 32)] {
-                  if (!m_InFlow)
-                    return;
-
-                  auto it = m_DrawingData.find(drawingDataIndex);
-
-                  if (m_DrawingData.end() == it)
-                    return;
-
-                  if (!m_PipeServer->WriteUInt32(
-                          (UINT32)DrawingReply::D3d9CreateVertexShader))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt64((UINT64)index))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt32((UINT32)it->second.GetSize()))
-                    goto error;
-                  if (!m_PipeServer->WriteBytes(it->second.GetData(), 0,
-                                                it->second.GetSize()))
-                    goto error;
-
-                  return;
-                error:
-                  Close();
-                });
-            return true;
-          case CefDrawingInteropMessage::D3d9CreatePixelShader:
-            m_DrawingThreadedQueue.Queue(
-                [this,
-                 index = (unsigned __int64)args->GetInt(1) |
-                         ((unsigned __int64)args->GetInt(2) << 32),
-                 drawingDataIndex = (unsigned __int64)args->GetInt(3) |
-                                    ((unsigned __int64)args->GetInt(4) << 32)] {
-              if (!m_InFlow)
-                return;
-
-              auto it = m_DrawingData.find(drawingDataIndex);
-
-              if (m_DrawingData.end() == it)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9CreatePixelShader))
-                goto error;
-              if (!m_PipeServer->WriteUInt64((UINT64)index))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT32)it->second.GetSize()))
-                goto error;
-              if (!m_PipeServer->WriteBytes(it->second.GetData(), 0,
-                                            it->second.GetSize()))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9UpdateTexture:
-            m_DrawingThreadedQueue.Queue(
-                [this,
-                 sourceTextureIndex = (unsigned __int64)args->GetInt(1) |
-                                      ((unsigned __int64)args->GetInt(2) << 32),
-                 destinationTextureIndex =
-                     (unsigned __int64)args->GetInt(3) |
-                     ((unsigned __int64)args->GetInt(4) << 32)] {
-                  if (!m_InFlow)
-                    return;
-
-                  if (!m_PipeServer->WriteUInt32(
-                          (UINT32)DrawingReply::D3d9UpdateTexture))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt64((UINT64)sourceTextureIndex))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt64(
-                          (UINT64)destinationTextureIndex))
-                    goto error;
-
-                  return;
-                error:
-                  Close();
-                });
-            return true;
-          case CefDrawingInteropMessage::D3d9SetViewport:
-            if (1 == argC) {
-              m_DrawingThreadedQueue.Queue([this] {
-                if (!m_InFlow)
-                  return;
-
-                if (!m_PipeServer->WriteUInt32(
-                        (UINT32)DrawingReply::D3d9SetViewport))
-                  goto error;
-                if (!m_PipeServer->WriteBoolean(false))
-                  goto error;
-
-                return;
-              error:
-                Close();
-              });
-            } else {
-              m_DrawingThreadedQueue.Queue(
-                  [this, x = (unsigned int)args->GetInt(1),
-                   y = (unsigned int)args->GetInt(2),
-                   width = (unsigned int)args->GetInt(3),
-                   height = (unsigned int)args->GetInt(4),
-                   minZ = (float)args->GetDouble(5),
-                   maxZ = (float)args->GetDouble(6)] {
-                    if (!m_InFlow)
-                      return;
-
-                    if (!m_PipeServer->WriteUInt32(
-                            (UINT32)DrawingReply::D3d9SetViewport))
-                      goto error;
-                    if (!m_PipeServer->WriteBoolean(true))
-                      goto error;
-                    if (!m_PipeServer->WriteUInt32(x))
-                      goto error;
-                    if (!m_PipeServer->WriteUInt32(y))
-                      goto error;
-                    if (!m_PipeServer->WriteUInt32(width))
-                      goto error;
-                    if (!m_PipeServer->WriteUInt32(height))
-                      goto error;
-                    if (!m_PipeServer->WriteSingle(minZ))
-                      goto error;
-                    if (!m_PipeServer->WriteSingle(maxZ))
-                      goto error;
-
-                    return;
-                  error:
-                    Close();
-                  });
-            }
-            return true;
-          case CefDrawingInteropMessage::D3d9SetRenderState:
-            m_DrawingThreadedQueue.Queue([this,
-                                          state = (unsigned int)args->GetInt(1),
-                                          value =
-                                              (unsigned int)args->GetInt(2)] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetRenderState))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(state))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(value))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9SetSamplerState:
-            m_DrawingThreadedQueue.Queue(
-                [this, sampler = (unsigned int)args->GetInt(1),
-                 type = (unsigned int)args->GetInt(2),
-                 value = (unsigned int)args->GetInt(3)] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetSamplerState))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(sampler))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(type))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(value))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9SetTexture:
-            m_DrawingThreadedQueue.Queue(
-                [this, sampler = (unsigned int)args->GetInt(1),
-                 textureIndex = (unsigned __int64)args->GetInt(2) |
-                                ((unsigned __int64)args->GetInt(3) << 32)] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetTexture))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT32)sampler))
-                goto error;
-              if (!m_PipeServer->WriteUInt64((UINT64)textureIndex))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9SetTextureStageState:
-            m_DrawingThreadedQueue.Queue([this,
-                                          stage = (unsigned int)args->GetInt(1),
-                                          type = (unsigned int)args->GetInt(2),
-                                          value =
-                                              (unsigned int)args->GetInt(3)] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetTextureStageState))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(stage))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(type))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(value))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9SetTransform:
-            if (2 == argC) {
-              m_DrawingThreadedQueue.Queue([this,
-                                            state =
-                                                (unsigned int)args->GetInt(1)] {
-                if (!m_InFlow)
-                  return;
-
-                if (!m_PipeServer->WriteUInt32(
-                        (UINT32)DrawingReply::D3d9SetTransform))
-                  goto error;
-                if (!m_PipeServer->WriteUInt32((UINT32)state))
-                  goto error;
-                if (!m_PipeServer->WriteBoolean(false))
-                  goto error;
-
-                return;
-              error:
-                Close();
-              });
-            } else {
-              m_DrawingThreadedQueue.Queue([this,
-                                            state =
-                                                (unsigned int)args->GetInt(1),
-                   matrix =std::move(FloatVecFromCefArgs(args,2,16))] {
-                if (!m_InFlow)
-                  return;
-
-                if (!m_PipeServer->WriteUInt32(
-                        (UINT32)DrawingReply::D3d9SetTransform))
-                  goto error;
-                if (!m_PipeServer->WriteUInt32((UINT32)state))
-                  goto error;
-                if (!m_PipeServer->WriteBoolean(true))
-                  goto error;
-
-                for (size_t i = 0; i < matrix.size(); ++i) {
-                  if (!m_PipeServer->WriteSingle(matrix[i]))
-                    goto error;
-                }
-
-                return;
-              error:
-                Close();
-              });
-            }
-            return true;
-          case CefDrawingInteropMessage::D3d9SetIndices:
-            m_DrawingThreadedQueue.Queue([this, indicesIndex =
-                (unsigned __int64)args->GetInt(1) |
-                ((unsigned __int64)args->GetInt(2) << 32)] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetIndices))
-                goto error;
-              if (!m_PipeServer->WriteUInt64((UINT64)indicesIndex))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9SetStreamSource:
-            m_DrawingThreadedQueue.Queue(
-                [this, streamNumber = (unsigned int)args->GetInt(1),
-                 streamDataIndex = (unsigned __int64)args->GetInt(2) |
-                                   ((unsigned __int64)args->GetInt(3) << 32),
-                 offsetInBytes = (unsigned int)args->GetInt(4),
-                 stride = (unsigned int)args->GetInt(5)] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetStreamSource))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT64)streamNumber))
-                goto error;
-              if (!m_PipeServer->WriteUInt64((UINT64)streamDataIndex))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT64)offsetInBytes))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT64)stride))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9SetStreamSourceFreq:
-            m_DrawingThreadedQueue.Queue(
-                [this, streamNumber = (unsigned int)args->GetInt(1),
-                 setting = (unsigned int)args->GetInt(2)] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetStreamSourceFreq))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(streamNumber))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(setting))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9SetVertexDeclaration:
-            m_DrawingThreadedQueue.Queue(
-                [this, declIndex = (unsigned __int64)args->GetInt(1) |
-                                   ((unsigned __int64)args->GetInt(2) << 32)] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetVertexDeclaration))
-                goto error;
-              if (!m_PipeServer->WriteUInt64((UINT64)declIndex))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9SetVertexShader:
-            m_DrawingThreadedQueue.Queue(
-                [this,
-                 shaderIndex = (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32)] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetVertexShader))
-                goto error;
-              if (!m_PipeServer->WriteUInt64((UINT64)shaderIndex))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9SetVertexShaderConstantB:
-            m_DrawingThreadedQueue.Queue([this,
-                                          startRegister =
-                                              (unsigned int)args->GetInt(1),
-                                          constantData = std::move(BoolVecFromCefArgs(args, 2, args->GetSize() - 2))] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetVertexShaderConstantB))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
-                goto error;
-              for (size_t i = 0; i < constantData.size(); ++i) {
-                if (!m_PipeServer->WriteBoolean(constantData[i]))
-                  goto error;
-              }
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9SetVertexShaderConstantF:
-            m_DrawingThreadedQueue.Queue(
-                [this, startRegister = (unsigned int)args->GetInt(1),
-                                          constantData = std::move(FloatVecFromCefArgs(
-                                              args, 2, args->GetSize() - 2))] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetVertexShaderConstantF))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
-                goto error;
-              for (size_t i = 0; i < constantData.size(); ++i) {
-                if (!m_PipeServer->WriteSingle((FLOAT)constantData[i]))
-                  goto error;
-              }
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9SetVertexShaderConstantI:
-            m_DrawingThreadedQueue.Queue(
-                [this, startRegister = (unsigned int)args->GetInt(1),
-                 constantData = std::move(IntVecFromCefArgs(
-                                              args, 2, args->GetSize() - 2))] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetVertexShaderConstantF))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
-                goto error;
-              for (size_t i = 0; i < constantData.size(); ++i) {
-                if (!m_PipeServer->WriteInt32((INT32)constantData[i]))
-                  goto error;
-              }
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9SetPixelShader: {
-            unsigned __int64 shaderIndex =
-                (unsigned __int64)args->GetInt(1) |
-                ((unsigned __int64)args->GetInt(2) << 32);
-            m_DrawingThreadedQueue.Queue([this, shaderIndex] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetPixelShader))
-                goto error;
-              if (!m_PipeServer->WriteUInt64((UINT64)shaderIndex))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-          }
-            return true;
-          case CefDrawingInteropMessage::D3d9SetPixelShaderConstantB:
-            m_DrawingThreadedQueue.Queue([this,startRegister =
-                                              (unsigned int)args->GetInt(1),
-                                          constantData = std::move(BoolVecFromCefArgs(
-                                              args, 2, args->GetSize() - 2))] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetPixelShaderConstantB))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
-                goto error;
-              for (size_t i = 0; i < constantData.size(); ++i) {
-                if (!m_PipeServer->WriteBoolean(constantData[i]))
-                  goto error;
-              }
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9SetPixelShaderConstantF:
-            m_DrawingThreadedQueue.Queue([this, startRegister = (unsigned int)args->GetInt(1),
-                 constantData = std::move(
-                     FloatVecFromCefArgs(args, 2, args->GetSize() - 2))] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetPixelShaderConstantF))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
-                goto error;
-              for (size_t i = 0; i < constantData.size(); ++i) {
-                if (!m_PipeServer->WriteSingle((FLOAT)constantData[i]))
-                  goto error;
-              }
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9SetPixelShaderConstantI:
-            m_DrawingThreadedQueue.Queue([this,startRegister = (unsigned int)args->GetInt(1),
-                 constantData = std::move(
-                     IntVecFromCefArgs(args, 2, args->GetSize() - 2))] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9SetPixelShaderConstantF))
-                goto error;
-              if (!m_PipeServer->WriteUInt32((UINT32)constantData.size()))
-                goto error;
-              for (size_t i = 0; i < constantData.size(); ++i) {
-                if (!m_PipeServer->WriteInt32((INT32)constantData[i]))
-                  goto error;
-              }
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9DrawPrimitive:
-            m_DrawingThreadedQueue.Queue(
-            [this, primitiveType = (unsigned int)args->GetInt(1), startVertex = (unsigned int)args->GetInt(2),  primitiveCount = (unsigned int)args->GetInt(3)] {
-                if (!m_InFlow)
-                return;
-
-                if (!m_PipeServer->WriteUInt32(
-                        (UINT32)DrawingReply::D3d9DrawPrimitive))
-                goto error;
-                if (!m_PipeServer->WriteUInt32(primitiveType))
-                goto error;
-                if (!m_PipeServer->WriteUInt32(startVertex))
-                goto error;
-                if (!m_PipeServer->WriteUInt32(primitiveCount))
-                goto error;
-
-                return;
-            error:
-                Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::D3d9DrawIndexedPrimitive:
-            m_DrawingThreadedQueue.Queue([this, primitiveType = (unsigned int)args->GetInt(1), baseVertexIndex = (unsigned int)args->GetInt(2),
-                                          minVertexIndex = (unsigned int)args->GetInt(3), numVertices = (unsigned int)args->GetInt(4),
-                                           startIndex = (unsigned int)args->GetInt(5), primCount = (unsigned int)args->GetInt(6)] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::D3d9DrawIndexedPrimitive))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(primitiveType))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(baseVertexIndex))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(minVertexIndex))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(numVertices))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(startIndex))
-                goto error;
-              if (!m_PipeServer->WriteUInt32(primCount))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::WaitForGpu:
-            m_DrawingThreadedQueue.Queue([this] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::WaitForGpu))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::BeginCleanState:
-            m_DrawingThreadedQueue.Queue([this] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::BeginCleanState))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::EndCleanState:
-            m_DrawingThreadedQueue.Queue([this] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::EndCleanState))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::CreateCefWindowTextureSharedHandle:
-            // We only have one type of shared handle supported at the moment (this one), so no need to do anything here.
-            return true;
-          case CefDrawingInteropMessage::CreateDrawingData:
-            m_DrawingThreadedQueue.Queue([this,size = (unsigned int)args->GetInt(1),dataIndex =
-                (unsigned __int64)args->GetInt(2) |
-                ((unsigned __int64)args->GetInt(3) << 32)] {
-              m_DrawingData.emplace(
-                  std::piecewise_construct, std::forward_as_tuple(dataIndex),
-                  std::forward_as_tuple(
-                      size, malloc(size)));  // malloc might fail, but I am not
-                                             // handling that for now, there's
-                                             // not much the user could do atm.
-            });
-            return true;
-          case CefDrawingInteropMessage::AfxDrawingHandle_Release:
-            // We only have one type of shared handle supported at the moment
-            // (this one), so no need to do anything here.
-            return true;
-          case CefDrawingInteropMessage::AfxDrawingData_Release:
-            m_DrawingThreadedQueue.Queue([this, dataIndex =
-                (unsigned __int64)args->GetInt(1) |
-                ((unsigned __int64)args->GetInt(2) << 32)] { m_DrawingData.erase(dataIndex);
-            });
-            return true;
-          case CefDrawingInteropMessage::AfxDrawingData_Update: {
-            m_DrawingThreadedQueue.Queue(
-                [this, dataIndex = (unsigned __int64)args->GetInt(1) |
-                             ((unsigned __int64)args->GetInt(2) << 32),
-                 offset = (unsigned int)args->GetInt(3), data = std::move(CBinaryData(args->GetBinary(4)))] {
-                  if (data.Data) {
-                    auto it = m_DrawingData.find(dataIndex);
-                    if (it != m_DrawingData.end())
-                      it->second.Update(offset, data.Size, data.Data);
-                  }
-            });
-          }
-            return true;
-          case CefDrawingInteropMessage::AfxD3d9VertexDeclaration_Release:
-            m_DrawingThreadedQueue.Queue(
-                [this, index = (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32)] {
-                  if (!m_InFlow)
-                    return;
-
-                  if (!m_PipeServer->WriteUInt32(
-                          (UINT32)DrawingReply::ReleaseD3d9VertexDeclaration))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt64((UINT64)index))
-                    goto error;
-
-                  return;
-                error:
-                  Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::AfxD3d9IndexBuffer_Release:
-            m_DrawingThreadedQueue.Queue(
-                [this, index = (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32)] {
-                  if (!m_InFlow)
-                    return;
-
-                  if (!m_PipeServer->WriteUInt32(
-                          (UINT32)DrawingReply::ReleaseD3d9IndexBuffer))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt64((UINT64)index))
-                    goto error;
-
-                  return;
-                error:
-                  Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::AfxD3d9IndexBuffer_Update:
-            m_DrawingThreadedQueue.Queue(
-                [this, index = (unsigned __int64)args->GetInt(1) |
-                         ((unsigned __int64)args->GetInt(2) << 32),
-                 dataIndex = (unsigned __int64)args->GetInt(3) |
-                             ((unsigned __int64)args->GetInt(4) << 32),
-                 offsetToLock = (unsigned int)args->GetInt(5),
-                 sizeToLock = (unsigned int)args->GetInt(6)] {
-                  if (!m_InFlow)
-                    return;
-
-                  auto it = m_DrawingData.find(dataIndex);
-                  if (it != m_DrawingData.end()) {
-                    CDrawingData& data = it->second;
-
-                    if (!m_PipeServer->WriteUInt32(
-                            (UINT32)DrawingReply::UpdateD3d9IndexBuffer))
-                      goto error;
-                    if (!m_PipeServer->WriteUInt64((UINT64)index))
-                      goto error;
-                    if (!m_PipeServer->WriteUInt32((UINT32)offsetToLock))
-                      goto error;
-                    if (!m_PipeServer->WriteUInt32((UINT32)sizeToLock))
-                      goto error;
-                    if (!m_PipeServer->WriteBytes(
-                            (unsigned char*)data.GetData() + offsetToLock,
-                            offsetToLock, sizeToLock))
-                      goto error;
-                  }
-
-                  return;
-                error:
-                  Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::AfxD3d9VertexBuffer_Release:
-            m_DrawingThreadedQueue.Queue(
-                [this, index = (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32)] {
-                  if (!m_InFlow)
-                    return;
-
-                  if (!m_PipeServer->WriteUInt32(
-                          (UINT32)DrawingReply::ReleaseD3d9VertexBuffer))
-                    goto error;
-                  if (!m_PipeServer->WriteUInt64((UINT64)index))
-                    goto error;
-
-                  return;
-                error:
-                  Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::AfxD3d9VertexBuffer_Update:
-            m_DrawingThreadedQueue.Queue(
-                [this, index = (unsigned __int64)args->GetInt(1) |
-                         ((unsigned __int64)args->GetInt(2) << 32),
-                 dataIndex = (unsigned __int64)args->GetInt(3) |
-                             ((unsigned __int64)args->GetInt(4) << 32),
-                 offsetToLock = (unsigned int)args->GetInt(5),
-                 sizeToLock = (unsigned int)args->GetInt(6)] {
-              if (!m_InFlow)
-                return;
-
-              auto it = m_DrawingData.find(dataIndex);
-              if (it != m_DrawingData.end()) {
-                CDrawingData& data = it->second;
-
-                if (!m_PipeServer->WriteUInt32(
-                        (UINT32)DrawingReply::UpdateD3d9VertexBuffer))
-                  goto error;
-                if (!m_PipeServer->WriteUInt64((UINT64)index))
-                  goto error;
-                if (!m_PipeServer->WriteUInt32((UINT32)offsetToLock))
-                  goto error;
-                if (!m_PipeServer->WriteUInt32((UINT32)sizeToLock))
-                  goto error;
-                if (!m_PipeServer->WriteBytes(
-                        (unsigned char*)data.GetData() + offsetToLock,
-                        offsetToLock, sizeToLock))
-                  goto error;
-              }
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::AfxD3d9Texture_Release:
-            m_DrawingThreadedQueue.Queue([this, index = (unsigned __int64)args->GetInt(1) |
-                               ((unsigned __int64)args->GetInt(2) << 32)] {
-              if (!m_InFlow)
-                return;
-
-              if (!m_PipeServer->WriteUInt32(
-                      (UINT32)DrawingReply::ReleaseD3d9Texture))
-                goto error;
-              if (!m_PipeServer->WriteUInt64((UINT64)index))
-                goto error;
-
-              return;
-            error:
-              Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::AfxD3d9Texture_Update:
-            if (args->GetType(4) == VTYPE_NULL) {
-              m_DrawingThreadedQueue.Queue(
-                  [this,
-                   index = (unsigned __int64)args->GetInt(1) |
-                           ((unsigned __int64)args->GetInt(2) << 32),
-                   level = (unsigned int)args->GetInt(3),
-                   dataIndex = (unsigned __int64)args->GetInt(5) |
-                               ((unsigned __int64)args->GetInt(6) << 32),
-                   rowOffsetBytes = (unsigned int)args->GetInt(7),
-                   columnOffsetBytes = (unsigned int)args->GetInt(8),
-                   dataBytesPerRow = (unsigned int)args->GetInt(9),
-                   totalBytesPerRow = (unsigned int)args->GetInt(10),
-                   numRows = (unsigned int)args->GetInt(11)] {
-                    if (!m_InFlow)
-                      return;
-
-                    auto it = m_DrawingData.find(dataIndex);
-                    if (it != m_DrawingData.end()) {
-                      CDrawingData& data = it->second;
-
-                      if (!m_PipeServer->WriteUInt32(
-                              (UINT32)DrawingReply::UpdateD3d9Texture))
-                        goto error;
-                      if (!m_PipeServer->WriteUInt64((UINT64)index))
-                        goto error;
-                      if (!m_PipeServer->WriteUInt32((UINT32)level))
-                        goto error;
-                      if (!m_PipeServer->WriteBoolean(false))
-                        goto error;
-                      if (!m_PipeServer->WriteUInt32((UINT32)numRows))
-                        goto error;
-                      if (!m_PipeServer->WriteUInt32(
-                              (UINT32)(dataBytesPerRow - columnOffsetBytes)))
-                        goto error;
-
-                      void* pData =
-                          (unsigned char*)data.GetData() + rowOffsetBytes;
-
-                      for (unsigned int i = 0; i < numRows; ++i) {
-                        if (!m_PipeServer->WriteBytes(
-                                (unsigned char*)pData + columnOffsetBytes, 0,
-                                dataBytesPerRow - columnOffsetBytes))
-                          goto error;
-
-                        pData = (unsigned char*)pData + totalBytesPerRow;
-                      }
-                    }
-                    return;
-                  error:
-                    Close();
-                  });
-            }
-            else {
-              auto dict = args->GetDictionary(4);
-              m_DrawingThreadedQueue.Queue(
-                  [this,
-                   index = (unsigned __int64) args->GetInt(1) |
-                       ((unsigned __int64)args->GetInt(2) << 32),
-                   level = (unsigned int) args->GetInt(3),
-                   rectLeft = (unsigned int) dict->GetInt("left"),
-                   rectTop = (unsigned int) dict->GetInt("top"),
-                   rectRight = (unsigned int) dict->GetInt("right"),
-                   rectBottom = (unsigned int) dict->GetInt("bottom"),
-                   dataIndex = (unsigned __int64) args->GetInt(5) |
-                       ((unsigned __int64)args->GetInt(6) << 32),
-                   rowOffsetBytes = (unsigned int) args->GetInt(7),
-                   columnOffsetBytes = (unsigned int) args->GetInt(8),
-                   dataBytesPerRow = (unsigned int) args->GetInt(9),
-                   totalBytesPerRow = (unsigned int) args->GetInt(10),
-                   numRows = (unsigned int) args->GetInt(11)] {
-                    if (!m_InFlow)
-                      return;
-
-                    auto it = m_DrawingData.find(dataIndex);
-                    if (it != m_DrawingData.end()) {
-                      CDrawingData& data = it->second;
-
-                      if (!m_PipeServer->WriteUInt32(
-                              (UINT32)DrawingReply::UpdateD3d9Texture))
-                        goto error;
-                      if (!m_PipeServer->WriteUInt64((UINT64)index))
-                        goto error;
-                      if (!m_PipeServer->WriteUInt32((UINT32)level))
-                        goto error;
-                      if (!m_PipeServer->WriteBoolean(true))
-                        goto error;
-                      if (!m_PipeServer->WriteUInt32((UINT32)rectLeft))
-                        goto error;
-                      if (!m_PipeServer->WriteUInt32((UINT32)rectTop))
-                        goto error;
-                      if (!m_PipeServer->WriteUInt32((UINT32)rectRight))
-                        goto error;
-                      if (!m_PipeServer->WriteUInt32((UINT32)rectBottom))
-                        goto error;
-                      if (!m_PipeServer->WriteUInt32((UINT32)numRows))
-                        goto error;
-                      if (!m_PipeServer->WriteUInt32(
-                              (UINT32)(dataBytesPerRow - columnOffsetBytes)))
-                        goto error;
-
-                      void* pData =
-                          (unsigned char*)data.GetData() + rowOffsetBytes;
-
-                      for (unsigned int i = 0; i < numRows; ++i) {
-                        if (!m_PipeServer->WriteBytes(
-                                (unsigned char*)pData + columnOffsetBytes, 0,
-                                dataBytesPerRow - columnOffsetBytes))
-                          goto error;
-
-                        pData = (unsigned char*)pData + totalBytesPerRow;
-                      }
-                    }
-                    return;
-                  error:
-                    Close();
-              });
-            }
-            return true;
-          case CefDrawingInteropMessage::AfxD3d9PixelShader_Release:
-              m_DrawingThreadedQueue.Queue(
-                  [this, index = (unsigned __int64)args->GetInt(1) |
-                       ((unsigned __int64)args->GetInt(2) << 32)] {
-                    if (!m_InFlow)
-                      return;
-
-                    if (!m_PipeServer->WriteUInt32(
-                            (UINT32)DrawingReply::ReleaseD3d9PixelShader))
-                      goto error;
-                    if (!m_PipeServer->WriteUInt64((UINT64)index))
-                      goto error;
-
-                    return;
-                  error:
-                    Close();
-            });
-            return true;
-          case CefDrawingInteropMessage::AfxD3d9VertexShader_Release:
-              m_DrawingThreadedQueue.Queue(
-                  [this, index = (unsigned __int64)args->GetInt(1) |
-                                 ((unsigned __int64)args->GetInt(2) << 32)] {
-                    if (!m_InFlow)
-                      return;
-
-                    if (!m_PipeServer->WriteUInt32(
-                            (UINT32)DrawingReply::ReleaseD3d9VertexShader))
-                      goto error;
-                    if (!m_PipeServer->WriteUInt64((UINT64)index))
-                      goto error;
-
-                    return;
-                  error:
-                    Close();
-            });
-            return true;
-        }
-      }
+class CInteropBase : public CefV8Accessor, public CefV8Handler {
+public:
+  virtual bool Execute(const CefString& name,
+                       CefRefPtr<CefV8Value> object,
+                       const CefV8ValueList& arguments,
+                       CefRefPtr<CefV8Value>& retval,
+                       CefString& exception) override {
+    auto it = m_ExecuteMap.find(name.ToString());
+
+    if (it != m_ExecuteMap.end()) {
+      it->second(name, object, arguments, retval, exception);
+      return true;
     }
 
     return false;
   }
 
-  virtual void GetViewRect(CefRefPtr<CefBrowser> browser,
-      CefRect& rect) override {
-    rect.Set(0, 0, m_Width, m_Height);
- }
+  bool Get(const CefString& name,
+           const CefRefPtr<CefV8Value> object,
+           CefRefPtr<CefV8Value>& retval,
+           CefString& exception) override {
+    auto it = m_GetMap.find(name.ToString());
 
-  virtual void SetSharedHandle(void* handle) override { m_ShareHandle = handle; }
+    if (it != m_GetMap.end())
+      return it->second(name, object, retval, exception);
+
+    return false;
+  }
+
+  bool Set(const CefString& name,
+           const CefRefPtr<CefV8Value> object,
+           const CefRefPtr<CefV8Value> value,
+           CefString& exception) override {
+    auto it = m_SetMap.find(name.ToString());
+
+    if (it != m_SetMap.end())
+      return it->second(name, object, value, exception);
+
+    return false;
+  }
+
+protected:
+  class CInteropUserData : public CefBaseRefCounted {
+   public:
+    CInteropUserData(InteropUserDataType userDataType)
+        : m_UserDataType(userDataType) {}
+
+    InteropUserDataType GetUserDataType() const { return m_UserDataType; }
+
+   protected:
+    ~CInteropUserData() {}
+
+   private:
+    InteropUserDataType m_UserDataType;
+  };
+
+  typedef std::function<bool(const CefString& name,
+                             CefRefPtr<CefV8Value> object,
+                             const CefV8ValueList& arguments,
+                             CefRefPtr<CefV8Value>& retval,
+                             CefString& exception)>
+      Execute_t;
+
+  typedef std::function<bool(const CefString& name,
+                             const CefRefPtr<CefV8Value> object,
+                             CefRefPtr<CefV8Value>& retval,
+                             CefString& exception)>
+      Get_t;
+
+  typedef std::function<bool(const CefString& name,
+                             const CefRefPtr<CefV8Value> object,
+                             const CefRefPtr<CefV8Value> value,
+                             CefString& exception)>
+      Set_t;
+
+  typedef std::unordered_map<std::string, Execute_t> ExecuteMap_t;
+  typedef std::unordered_map<std::string, Get_t> GetMap_t;
+  typedef std::unordered_map<std::string, Set_t> SetMap_t;
+
+  ExecuteMap_t m_ExecuteMap;
+  GetMap_t m_GetMap;
+  SetMap_t m_SetMap;
+
+  class CFunc : public CefBaseRefCounted
+  {
+    IMPLEMENT_REFCOUNTING(CFunc);
+
+   public:
+    CFunc(CefRefPtr<CefV8Value> object,
+                  CefRefPtr<CefV8Handler> const& handler,
+                  ExecuteMap_t& executeMap,
+                  GetMap_t& getMap,
+                  const char* name,
+                  Execute_t execute) {
+      m_Fn = CefV8Value::CreateFunction(name, handler);
+
+      executeMap.emplace(name, execute);
+
+      getMap.emplace(
+          std::piecewise_construct, std::forward_as_tuple(name),
+          std::forward_as_tuple(std::bind<bool>(
+              &CFunc::Get, this, std::placeholders::_1, std::placeholders::_2,
+              std::placeholders::_3, std::placeholders::_4)));
+
+      object->SetValue(name, V8_ACCESS_CONTROL_DEFAULT,
+                       V8_PROPERTY_ATTRIBUTE_NONE);
+    }
+
+    ~CFunc() { m_Fn = nullptr; }
+
+    bool Get(const CefString& name,
+             const CefRefPtr<CefV8Value> object,
+             CefRefPtr<CefV8Value>& retval,
+             CefString& exception) {
+      retval = m_Fn;
+      return true;
+      ;
+    }
+
+   protected:
+    CefRefPtr<CefV8Value> m_Fn;
+  };
+
+  class CCallback : public CFunc {
+   public:
+    CCallback(const CefRefPtr<CefV8Context>& context,
+                      const CefRefPtr<CefV8Value>& object,
+                      CefRefPtr<CefV8Handler> const& handler,
+                      ExecuteMap_t& executeMap,
+                      GetMap_t& getMap,
+                      const char* name) : CFunc(object, handler, executeMap, getMap, name,
+               [this](const CefString& name, CefRefPtr<CefV8Value> object,
+                      const CefV8ValueList& arguments,
+                      CefRefPtr<CefV8Value>& retval, CefString& exception) {
+                 if (1 <= arguments.size()) {
+                   const CefRefPtr<CefV8Value>& arg0 = arguments[0];
+                   if (arg0->IsFunction()) {
+                     this->m_CallbackFunc = arguments[0];
+                     return true;
+                   } else if (arg0->IsNull()) {
+                     this->m_CallbackFunc = nullptr;
+                     return true;
+                   }
+                 }
+
+                 return false;
+               }) {
+
+      m_CallbackContext = context;
+    }
+
+    ~CCallback() {
+      m_CallbackFunc = nullptr;
+      m_CallbackContext = nullptr;
+    }
+
+    bool IsValid() { return m_CallbackFunc != nullptr; }
+
+    CefRefPtr<CefV8Value> ExecuteCallback(const CefV8ValueList& arguments) {
+      return m_CallbackFunc->ExecuteFunctionWithContext(m_CallbackContext, NULL,
+                                                        arguments);
+    }
+
+   private:
+    CefRefPtr<CefV8Value> m_CallbackFunc;
+    CefRefPtr<CefV8Context> m_CallbackContext;
+  };
+};
+
+class CDrawingInteropImpl : public CInterop,
+                            public CInteropBase, public CAfxInterop {
+  IMPLEMENT_REFCOUNTING(CDrawingInteropImpl);
+
+ public:
+
+  virtual void CloseInterop() override { 
+    CAfxInterop::Close();
+  }
+
+  CDrawingInteropImpl(CefRefPtr<CefBrowser> browser,
+                      CefRefPtr<CefFrame> frame,
+                      CefRefPtr<CefV8Context> context,
+                      const CefString& argStr)
+      : CAfxInterop("advancedfxInterop_drawing") {
+
+    CefRefPtr<CefV8Value> interop = CefV8Value::CreateObject(this, nullptr);
+    
+    auto window = context->GetGlobal();
+    window->SetValue("afxInterop", interop, V8_PROPERTY_ATTRIBUTE_NONE);
+
+    interop->SetValue("id", V8_ACCESS_CONTROL_DEFAULT,
+                      V8_PROPERTY_ATTRIBUTE_NONE);
+    m_GetMap.emplace(
+        "id",
+        [browser](const CefString& name, const CefRefPtr<CefV8Value> object,
+                  CefRefPtr<CefV8Value>& retval, CefString& exception) {
+          retval = CefV8Value::CreateInt(browser->GetIdentifier());
+          return true;
+        });
+
+    new CFunc(interop, this, m_ExecuteMap, m_GetMap, "init",
+              [this, context, interop, argStr](
+                  const CefString& name, CefRefPtr<CefV8Value> object,
+                  const CefV8ValueList& arguments,
+                  CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
+                if (1 == arguments.size()) {
+                  auto argInitFn = arguments[0];
+
+                  if (argInitFn && argInitFn->IsFunction()) {
+                    CefV8ValueList args;
+                    args.push_back(interop);
+                    args.push_back(CefV8Value::CreateString(argStr));
+
+                    argInitFn->ExecuteFunctionWithContext(context, NULL, args);
+
+                    return true;
+                  }
+                }
+
+                return false;
+              });
+
+    new CFunc(interop, this, m_ExecuteMap, m_GetMap, "sendMessage",
+              [browser, frame](
+                  const CefString& name, CefRefPtr<CefV8Value> object,
+                  const CefV8ValueList& arguments,
+                  CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
+                if (arguments.size() == 2) {
+                  auto argId = arguments[0];
+                  auto argStr = arguments[1];
+
+                  if (argId && argStr && argId->IsInt() && argStr->IsString()) {
+                    auto message = CefProcessMessage::Create(
+                        "afx-send-message");
+                    auto args = message->GetArgumentList();
+                    args->SetSize(3);
+                    args->SetInt(0, browser->GetIdentifier());
+                    args->SetInt(1, argId->GetIntValue());
+                    args->SetString(2, argStr->GetStringValue());
+
+                    frame->SendProcessMessage(PID_BROWSER, message);
+                    return true;
+                  }
+                }
+
+                exceptionoverride = g_szInvalidArguments;
+                return false;
+              });
+
+    m_OnMessage = new CCallback(context, interop, this, m_ExecuteMap, m_GetMap,
+                             "onMessage");
+
+    m_OnError = new CCallback(context, interop, this, m_ExecuteMap, m_GetMap,
+                           "onError");
+
+    interop->SetValue("pipeName", V8_ACCESS_CONTROL_DEFAULT,
+                      V8_PROPERTY_ATTRIBUTE_NONE);
+    m_GetMap.emplace(
+        "pipeName",
+        [this](const CefString& name, const CefRefPtr<CefV8Value> object,
+               CefRefPtr<CefV8Value>& retval, CefString& exception) {
+          retval = CefV8Value::CreateString(CAfxInterop::GetPipeName());
+
+          return true;
+        });
+    m_SetMap.emplace(
+        "pipeName",
+        [this](const CefString& name, const CefRefPtr<CefV8Value> object,
+               const CefRefPtr<CefV8Value> value, CefString& exception) {
+          if (value && value->IsString()) {
+            std::string pipeName(value->GetStringValue().ToString());
+
+            CAfxInterop::SetPipeName(pipeName.c_str());
+            return true;
+          }
+
+          exception = g_szInvalidArguments;
+          return false;
+        });
+
+    m_OnDeviceLost = new CCallback(context, interop, this, m_ExecuteMap,
+                                  m_GetMap, "onDeviceLost");
+
+    m_OnDeviceReset = new CCallback(context, interop, this, m_ExecuteMap,
+                                 m_GetMap, "onDeviceReset");
+
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "connect",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          retval = CefV8Value::CreateBool(CAfxInterop::Connection() && CAfxInterop::Connected());
+          return true;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "close",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          CAfxInterop::Close();
+          return true;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "pumpBegin",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (2 <= arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsInt() && arguments[1]->IsUInt()) {
+
+              if (!Connected()) {
+              exceptionoverride = "Not connected.";
+              return false;
+            }
+
+            if (!DoThePumping(arguments[0]->GetIntValue(),
+                                (unsigned int)arguments[1]->GetUIntValue())) {
+              Close();
+              exceptionoverride = g_szConnectionError;
+              return false;
+            }
+
+            retval = CefV8Value::CreateBool(m_InFlow);
+            return true;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "pumpEnd",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::Finished))
+            goto error;
+
+          return true;
+
+          error:
+            exceptionoverride = g_szConnectionError;
+            return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "setSize",
+        [this,browser,frame](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+            if (2 <= arguments.size() && arguments[0] && arguments[1] &&
+                     arguments[0]->IsInt() && arguments[1]->IsInt()) {
+            int width = arguments[0]->GetIntValue();
+              int height = arguments[1]->GetIntValue();
+
+                if (width != m_Width || height != m_Height) {
+                  m_Width = width;
+                  m_Height = height;
+
+                auto message = CefProcessMessage::Create("afx-drawing-resized");
+                  auto args = message->GetArgumentList();
+                  args->SetSize(2);
+                  args->SetInt(0, width);
+                  args->SetInt(1, height);
+                  frame->SendProcessMessage(PID_BROWSER, message);
+                  return true;
+
+                }
+                return true;
+              }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "beginFrame",
+        [this,browser,frame](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+                auto message = CefProcessMessage::Create("afx-drawing-begin-frame");
+                frame->SendProcessMessage(PID_BROWSER, message);
+                return true;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9CreateVertexDeclaration",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (1 <= arguments.size()) {
+            auto drawingDataArg = arguments[0];
+
+            if (!(nullptr != drawingDataArg && drawingDataArg->GetUserData() &&
+                  static_cast<CInteropUserData*>(
+                      drawingDataArg->GetUserData().get())
+                          ->GetUserDataType() ==
+                      InteropUserDataType::AfxDrawingData)) {
+              auto drawingData =
+                  static_cast<CAfxDrawingData*>(static_cast<CInteropUserData*>(
+                      arguments[0]->GetUserData().get()));
+
+              CAfxD3d9VertexDeclaration* val =
+                  new CAfxD3d9VertexDeclaration(this);
+              retval = val->GetObj();
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9CreateVertexDeclaration))
+                goto error;
+              if (!m_PipeServer->WriteUInt64((UINT64)val->GetIndex()))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)drawingData->GetSize()))
+                goto error;
+              if (!m_PipeServer->WriteBytes(drawingData->GetData(), 0,
+                                            (DWORD)drawingData->GetSize()))
+                goto error;
+
+              return true;
+
+            error:
+              exceptionoverride = g_szConnectionError;
+              return false;
+            }
+          }
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9CreateIndexBuffer",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (5 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[3] && arguments[4] &&
+              arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
+              arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
+            CAfxDrawingHandle* drawingHandle = nullptr;
+
+            if (arguments[4]->GetUserData() &&
+                static_cast<CInteropUserData*>(
+                    arguments[4]->GetUserData().get())
+                        ->GetUserDataType() ==
+                    InteropUserDataType::AfxDrawingHandle)
+              drawingHandle = static_cast<CAfxDrawingHandle*>(
+                  static_cast<CInteropUserData*>(
+                      arguments[4]->GetUserData().get()));
+
+            CAfxD3d9IndexBuffer* val = new CAfxD3d9IndexBuffer(this);
+            retval = val->GetObj();
+
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9CreateIndexBuffer))
+              goto error;
+            if (!m_PipeServer->WriteUInt32((UINT64)val->GetIndex()))
+              goto error;
+            // length:
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[0]->GetUIntValue()))
+              goto error;
+            // usage:
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[1]->GetUIntValue()))
+              goto error;
+            // format:
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[2]->GetUIntValue()))
+              goto error;
+            // pool:
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[3]->GetUIntValue()))
+              goto error;
+            if (nullptr == drawingHandle) {
+              if (!m_PipeServer->WriteBoolean(false))
+                goto error;
+            } else {
+              if (!m_PipeServer->WriteBoolean(true))
+                goto error;
+              if (!m_PipeServer->WriteHandle(m_ShareHandle))
+                goto error;
+            }
+
+            return true;
+
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9CreateVertexBuffer",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (5 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[3] && arguments[4] &&
+              arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
+              arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
+            CAfxDrawingHandle* drawingHandle = nullptr;
+
+            if (arguments[4]->GetUserData() && arguments[4]->GetUserData() &&
+                static_cast<CInteropUserData*>(
+                    arguments[4]->GetUserData().get())
+                        ->GetUserDataType() ==
+                    InteropUserDataType::AfxDrawingHandle)
+              drawingHandle = static_cast<CAfxDrawingHandle*>(
+                  static_cast<CInteropUserData*>(
+                      arguments[4]->GetUserData().get()));
+
+            CAfxD3d9VertexBuffer* val = new CAfxD3d9VertexBuffer(this);
+            retval = val->GetObj();
+
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9CreateVertexBuffer))
+              goto error;
+            if (!m_PipeServer->WriteUInt64((UINT64)val->GetIndex()))
+              goto error;
+            // length
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[0]->GetUIntValue()))
+              goto error;
+            // usage
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[1]->GetUIntValue()))
+              goto error;
+            // fvf
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[2]->GetUIntValue()))
+              goto error;
+            // pool
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[3]->GetUIntValue()))
+              goto error;
+            if (nullptr == drawingHandle) {
+              if (!m_PipeServer->WriteBoolean(false))
+                goto error;
+            } else {
+              if (!m_PipeServer->WriteBoolean(true))
+                goto error;
+              if (!m_PipeServer->WriteHandle(m_ShareHandle))
+                goto error;
+            }
+
+            return true;
+
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9CreateTexture",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (7 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[3] && arguments[4] && arguments[5] &&
+              arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
+              arguments[2]->IsUInt() && arguments[3]->IsUInt() &&
+              arguments[5]->IsUInt() && arguments[4]->IsUInt()) {
+            CAfxDrawingHandle* drawingHandle = nullptr;
+
+            if (arguments[6]->GetUserData() &&
+                static_cast<CInteropUserData*>(
+                    arguments[6]->GetUserData().get())
+                        ->GetUserDataType() ==
+                    InteropUserDataType::AfxDrawingHandle)
+              drawingHandle = static_cast<CAfxDrawingHandle*>(
+                  static_cast<CInteropUserData*>(
+                      arguments[6]->GetUserData().get()));
+
+            CAfxD3d9Texture* val = new CAfxD3d9Texture(this);
+            retval = val->GetObj();
+
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9CreateTexture))
+              goto error;
+            if (!m_PipeServer->WriteUInt64((UINT64)val->GetIndex()))
+              goto error;
+            // width:
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[0]->GetUIntValue()))
+              goto error;
+            // height:
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[1]->GetUIntValue()))
+              goto error;
+            // levels:
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[2]->GetUIntValue()))
+              goto error;
+            // usage:
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[3]->GetUIntValue()))
+              goto error;
+            // format:
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[4]->GetUIntValue()))
+              goto error;
+            // pool:
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[5]->GetUIntValue()))
+              goto error;
+            if (nullptr == drawingHandle) {
+              if (!m_PipeServer->WriteBoolean(false))
+                goto error;
+            } else {
+              if (!m_PipeServer->WriteBoolean(true))
+                goto error;
+              if (!m_PipeServer->WriteHandle(m_ShareHandle))
+                goto error;
+            }
+
+            return true;
+
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9CreateVertexShader",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (1 == arguments.size() && arguments[0] &&
+              arguments[0]->GetUserData() &&
+              static_cast<CInteropUserData*>(arguments[0]->GetUserData().get())
+                      ->GetUserDataType() ==
+                  InteropUserDataType::AfxDrawingData) {
+            auto drawingData =
+                static_cast<CAfxDrawingData*>(static_cast<CInteropUserData*>(
+                    arguments[0]->GetUserData().get()));
+
+            if (drawingData) {
+              CAfxD3d9VertexShader* val = new CAfxD3d9VertexShader(this);
+              retval = val->GetObj();
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9CreateVertexShader))
+                goto error;
+              if (!m_PipeServer->WriteUInt64((UINT64)val->GetIndex()))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)drawingData->GetSize()))
+                goto error;
+              if (!m_PipeServer->WriteBytes(drawingData->GetData(), 0,
+                                            (DWORD)drawingData->GetSize()))
+                goto error;
+
+              return true;
+
+            error:
+              Close();
+              exceptionoverride = g_szConnectionError;
+              return false;
+            }
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9CreatePixelShader",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (1 == arguments.size() && arguments[0] &&
+              arguments[0]->GetUserData() &&
+              static_cast<CInteropUserData*>(arguments[0]->GetUserData().get())
+                      ->GetUserDataType() ==
+                  InteropUserDataType::AfxDrawingData) {
+            auto drawingData =
+                static_cast<CAfxDrawingData*>(static_cast<CInteropUserData*>(
+                    arguments[0]->GetUserData().get()));
+
+            if (drawingData) {
+              CAfxD3d9PixelShader* val = new CAfxD3d9PixelShader(this);
+              retval = val->GetObj();
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9CreatePixelShader))
+                goto error;
+              if (!m_PipeServer->WriteUInt64((UINT64)val->GetIndex()))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)drawingData->GetSize()))
+                goto error;
+              if (!m_PipeServer->WriteBytes(drawingData->GetData(), 0,
+                                            (DWORD)drawingData->GetSize()))
+                goto error;
+
+              return true;
+            error:
+              Close();
+              exceptionoverride = g_szConnectionError;
+              return false;
+            }
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9UpdateTexture",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (3 == arguments.size() && arguments[0] && arguments[1]) {
+            CAfxD3d9Texture* val = nullptr;
+            if (arguments[0]->GetUserData() &&
+                static_cast<CInteropUserData*>(
+                    arguments[0]->GetUserData().get())
+                        ->GetUserDataType() ==
+                    InteropUserDataType::AfxD3d9Texture)
+              val =
+                  static_cast<CAfxD3d9Texture*>(static_cast<CInteropUserData*>(
+                      arguments[0]->GetUserData().get()));
+
+            CAfxD3d9Texture* val2 = nullptr;
+            if (arguments[1]->GetUserData() &&
+                static_cast<CInteropUserData*>(
+                    arguments[1]->GetUserData().get())
+                        ->GetUserDataType() ==
+                    InteropUserDataType::AfxD3d9Texture)
+              val2 =
+                  static_cast<CAfxD3d9Texture*>(static_cast<CInteropUserData*>(
+                      arguments[1]->GetUserData().get()));
+
+              if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9UpdateTexture))
+              goto error;
+            if (!m_PipeServer->WriteUInt64(val ? (UINT64)val->GetIndex() : 0))
+              goto error;
+            if (!m_PipeServer->WriteUInt64(val2 ? (UINT64)val2->GetIndex() : 0))
+              goto error;
+
+            return true;
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetViewport",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (0 == arguments.size()) {
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9SetViewport))
+              goto error_1;
+            if (!m_PipeServer->WriteBoolean(false))
+              goto error_1;
+
+            return true;
+          error_1:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          } else if (1 == arguments.size() && arguments[0] &&
+                     arguments[0]->IsObject()) {
+            auto x = arguments[0]->GetValue("x");
+            auto y = arguments[0]->GetValue("y");
+            auto width = arguments[0]->GetValue("width");
+            auto height = arguments[0]->GetValue("height");
+            auto minZ = arguments[0]->GetValue("minZ");
+            auto maxZ = arguments[0]->GetValue("maxZ");
+
+            if (x && y && width && height && minZ && maxZ && x->IsUInt() &&
+                y->IsUInt() && width->IsUInt() && height->IsUInt() &&
+                minZ->IsDouble() && maxZ->IsDouble()) {
+
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetViewport))
+                goto error_2;
+              if (!m_PipeServer->WriteBoolean(true))
+                goto error_2;
+              if (!m_PipeServer->WriteUInt32(x->GetUIntValue()))
+                goto error_2;
+              if (!m_PipeServer->WriteUInt32(y->GetUIntValue()))
+                goto error_2;
+              if (!m_PipeServer->WriteUInt32(width->GetUIntValue()))
+                goto error_2;
+              if (!m_PipeServer->WriteUInt32(height->GetUIntValue()))
+                goto error_2;
+              if (!m_PipeServer->WriteSingle(minZ->GetUIntValue()))
+                goto error_2;
+              if (!m_PipeServer->WriteSingle(maxZ->GetUIntValue()))
+                goto error_2;
+
+              return true;
+
+            error_2:
+              Close();
+              exceptionoverride = g_szConnectionError;
+              return false;
+            }
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetRenderState",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt() && arguments[1]->IsUInt()) {
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9SetRenderState))
+              goto error;
+            // state
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[0]->GetUIntValue()))
+              goto error;
+            // value
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)arguments[1]->GetUIntValue()))
+              goto error;
+
+            return true;
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetSamplerState",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (3 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[0]->IsUInt() &&
+              arguments[1]->IsUInt() && arguments[2]->IsUInt()) {
+
+              if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9SetSamplerState))
+              goto error;
+              // sampler
+            if (!m_PipeServer->WriteUInt32((UINT32)arguments[0]->GetUIntValue()))
+              goto error;
+            // type
+            if (!m_PipeServer->WriteUInt32((UINT32)arguments[1]->GetUIntValue()))
+              goto error;
+            // value
+            if (!m_PipeServer->WriteUInt32((UINT32)arguments[2]->GetUIntValue()))
+              goto error;
+
+            return true;
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetTexture",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt()) {
+            CAfxD3d9Texture* val = nullptr;
+            if (arguments[1]->GetUserData() &&
+                static_cast<CInteropUserData*>(
+                    arguments[1]->GetUserData().get())
+                        ->GetUserDataType() ==
+                    InteropUserDataType::AfxD3d9Texture)
+              val =
+                  static_cast<CAfxD3d9Texture*>(static_cast<CInteropUserData*>(
+                      arguments[1]->GetUserData().get()));
+
+              if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9SetTexture))
+              goto error;
+
+            // sampler
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)arguments[0]->GetUIntValue()))
+              goto error;
+            // textureIndex
+            if (!m_PipeServer->WriteUInt64(val ? (UINT64)val->GetIndex() : 0))
+              goto error;
+
+            return true;
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetTextureStageState",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (3 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[0]->IsUInt() &&
+              arguments[1]->IsUInt() && arguments[2]->IsUInt()) {
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9SetTextureStageState))
+              goto error;
+            // stage
+            if (!m_PipeServer->WriteUInt32(arguments[0]->GetUIntValue()))
+              goto error;
+            // type
+            if (!m_PipeServer->WriteUInt32(arguments[1]->GetUIntValue()))
+              goto error;
+            // value
+            if (!m_PipeServer->WriteUInt32(arguments[2]->GetUIntValue()))
+              goto error;
+
+            return true;
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetTransform",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt()) {
+            if (arguments[1]->IsArray() &&
+                arguments[1]->GetArrayLength() == 16) {
+              bool bOk = true;
+              for (int i = 0; i < 16; ++i) {
+                auto arrVal = arguments[1]->GetValue(i);
+
+                if (arrVal && arrVal->IsDouble()) {
+                } else {
+                  bOk = false;
+                  break;
+                }
+              }
+              if (bOk) {
+                if (!m_PipeServer->WriteUInt32(
+                        (UINT32)DrawingReply::D3d9SetTransform))
+                  goto error_1;
+                // state
+                if (!m_PipeServer->WriteUInt32(
+                        (UINT32)arguments[0]->GetUIntValue()))
+                  goto error_1;
+                if (!m_PipeServer->WriteBoolean(true))
+                  goto error_1;
+
+                for (int i = 0; i < 16; ++i) {
+                  auto arrVal = arguments[1]->GetValue(i);
+
+                  if (!m_PipeServer->WriteSingle(arrVal->GetDoubleValue()))
+                    goto error_1;
+                }
+
+                return true;
+              error_1:
+                Close();
+                exceptionoverride = g_szConnectionError;
+                return false;
+              }
+            } else {
+                if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetTransform))
+                goto error_2;
+
+                // state:
+                if (!m_PipeServer->WriteUInt32(
+                        (UINT32)arguments[0]->GetUIntValue()))
+                  goto error_2;
+              if (!m_PipeServer->WriteBoolean(false))
+                  goto error_2;
+
+              return true;
+            error_2:
+              Close();
+              exceptionoverride = g_szConnectionError;
+              return false;
+            }
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetIndices",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (1 == arguments.size() && arguments[0]) {
+            CAfxD3d9IndexBuffer* val = nullptr;
+            if (arguments[0]->GetUserData() &&
+                static_cast<CInteropUserData*>(
+                    arguments[0]->GetUserData().get())
+                        ->GetUserDataType() ==
+                    InteropUserDataType::AfxD3d9IndexBuffer)
+              val = static_cast<CAfxD3d9IndexBuffer*>(
+                  static_cast<CInteropUserData*>(
+                      arguments[0]->GetUserData().get()));
+
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9SetIndices))
+              goto error;
+            if (!m_PipeServer->WriteUInt64(val ? (UINT64) val->GetIndex() : 0))
+              goto error;
+
+            return true;
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetStreamSource",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (1 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[3] && arguments[0]->IsUInt() &&
+              arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
+            CAfxD3d9IndexBuffer* val = nullptr;
+            if (arguments[1]->GetUserData() &&
+                static_cast<CInteropUserData*>(
+                    arguments[1]->GetUserData().get())
+                        ->GetUserDataType() ==
+                    InteropUserDataType::AfxD3d9IndexBuffer)
+              val = static_cast<CAfxD3d9IndexBuffer*>(
+                  static_cast<CInteropUserData*>(
+                      arguments[1]->GetUserData().get()));
+
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9SetStreamSource))
+              goto error;
+            // streamNumber
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT64)arguments[0]->GetUIntValue()))
+              goto error;
+            if (!m_PipeServer->WriteUInt64(val ? (UINT64)val->GetIndex() : 0))
+              goto error;
+            // offsetInBytes
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT64)arguments[2]->GetUIntValue()))
+              goto error;
+            // stride
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT64)arguments[3]->GetUIntValue()))
+              goto error;
+
+            return true;
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetStreamSourceFreq",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+                
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt() && arguments[1]->IsUInt()) {
+
+              if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9SetStreamSourceFreq))
+              goto error;
+                          // streamNumber
+                if (!m_PipeServer->WriteUInt32(arguments[0]->GetUIntValue()))
+              goto error;
+                // setting
+            if (!m_PipeServer->WriteUInt32(arguments[1]->GetUIntValue()))
+              goto error;
+
+            return true;
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexDeclaration",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (1 == arguments.size() && arguments[0]) {
+            CAfxD3d9VertexDeclaration* val = nullptr;
+            if (arguments[0]->GetUserData() &&
+                static_cast<CInteropUserData*>(
+                    arguments[0]->GetUserData().get())
+                        ->GetUserDataType() ==
+                    InteropUserDataType::AfxD3d9VertexDeclaration)
+              val = static_cast<CAfxD3d9VertexDeclaration*>(
+                  static_cast<CInteropUserData*>(
+                      arguments[0]->GetUserData().get()));
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9SetVertexDeclaration))
+              goto error;
+            if (!m_PipeServer->WriteUInt64(val ? (UINT64)val->GetIndex() : 0))
+              goto error;
+
+            return true;
+
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShader",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (1 == arguments.size() && arguments[0]) {
+            CAfxD3d9VertexShader* val = nullptr;
+            if (arguments[0]->GetUserData() &&
+                static_cast<CInteropUserData*>(
+                    arguments[0]->GetUserData().get())
+                        ->GetUserDataType() ==
+                    InteropUserDataType::AfxD3d9VertexShader)
+              val = static_cast<CAfxD3d9VertexShader*>(
+                  static_cast<CInteropUserData*>(
+                      arguments[0]->GetUserData().get()));
+
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9SetVertexShader))
+              goto error;
+            if (!m_PipeServer->WriteUInt64(val ? (UINT64)val->GetIndex() : 0))
+              goto error;
+
+            return true;
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShaderConstantB",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt() &&
+              arguments[1]->IsArray()) {
+
+            size_t arrLen = arguments[1]->GetArrayLength();
+
+            bool bOk = true;
+            for (int i = 0; i < arrLen; ++i) {
+              auto arrVal = arguments[1]->GetValue(i);
+
+              if (arrVal && arrVal->IsBool()) {
+              } else {
+                bOk = false;
+                break;
+              }
+            }
+            if (bOk) {
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetVertexShaderConstantB))
+                goto error;
+             // startRegister
+             if (!m_PipeServer->WriteUInt32(arguments[0]->GetUIntValue()))
+               goto error;
+             if (!m_PipeServer->WriteUInt32((UINT32)arrLen))
+                goto error;
+             for (int i = 0; i < arrLen; ++i) {
+                 auto arrVal = arguments[1]->GetValue(i);
+                if (!m_PipeServer->WriteBoolean(arrVal->GetBoolValue()))
+                  goto error;
+              }
+
+              return true;
+            error:
+              Close();
+              exceptionoverride = g_szConnectionError;
+              return false;
+            }
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShaderConstantF",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt() && arguments[1]->IsArray()) {
+
+            size_t arrLen = arguments[1]->GetArrayLength();
+
+            bool bOk = true;
+            for (int i = 0; i < arrLen; ++i) {
+              auto arrVal = arguments[1]->GetValue(i);
+
+              if (arrVal && arrVal->IsDouble()) {
+              } else {
+                bOk = false;
+                break;
+              }
+            }
+            if (bOk) {
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetVertexShaderConstantF))
+                goto error;
+              // startRegister
+              if (!m_PipeServer->WriteUInt32(arguments[0]->GetUIntValue()))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)arrLen))
+                goto error;
+              for (int i = 0; i < arrLen; ++i) {
+                auto arrVal = arguments[1]->GetValue(i);
+                if (!m_PipeServer->WriteSingle(arrVal->GetDoubleValue()))
+                  goto error;
+              }
+
+              return true;
+            error:
+              Close();
+              exceptionoverride = g_szConnectionError;
+              return false;
+            }
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShaderConstantI",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt() && arguments[1]->IsArray()) {
+            size_t arrLen = arguments[1]->GetArrayLength();
+
+            bool bOk = true;
+            for (int i = 0; i < arrLen; ++i) {
+              auto arrVal = arguments[1]->GetValue(i);
+
+              if (arrVal && arrVal->IsInt()) {
+              } else {
+                bOk = false;
+                break;
+              }
+            }
+            if (bOk) {
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetVertexShaderConstantI))
+                goto error;
+              // startRegister
+              if (!m_PipeServer->WriteUInt32(arguments[0]->GetUIntValue()))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)arrLen))
+                goto error;
+              for (int i = 0; i < arrLen; ++i) {
+                auto arrVal = arguments[1]->GetValue(i);
+                if (!m_PipeServer->WriteInt32(arrVal->GetIntValue()))
+                  goto error;
+              }
+
+              return true;
+            error:
+              Close();
+              exceptionoverride = g_szConnectionError;
+              return false;
+            }
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShader",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (1 == arguments.size() && arguments[0]) {
+            CAfxD3d9PixelShader* val = nullptr;
+            if (arguments[0]->GetUserData() &&
+                static_cast<CInteropUserData*>(
+                    arguments[0]->GetUserData().get())
+                        ->GetUserDataType() ==
+                    InteropUserDataType::AfxD3d9PixelShader)
+              val = static_cast<CAfxD3d9PixelShader*>(
+                  static_cast<CInteropUserData*>(
+                      arguments[0]->GetUserData().get()));
+
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9SetPixelShader))
+              goto error;
+            if (!m_PipeServer->WriteUInt64(val ? (UINT64)val->GetIndex() : 0))
+              goto error;
+
+            return true;
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShaderConstantB",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt() && arguments[1]->IsArray()) {
+            size_t arrLen = arguments[1]->GetArrayLength();
+
+            bool bOk = true;
+            for (int i = 0; i < arrLen; ++i) {
+              auto arrVal = arguments[1]->GetValue(i);
+
+              if (arrVal && arrVal->IsBool()) {
+              } else {
+                bOk = false;
+                break;
+              }
+            }
+            if (bOk) {
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetPixelShaderConstantB))
+                goto error;
+              // startRegister
+              if (!m_PipeServer->WriteUInt32(arguments[0]->GetUIntValue()))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)arrLen))
+                goto error;
+              for (int i = 0; i < arrLen; ++i) {
+                auto arrVal = arguments[1]->GetValue(i);
+                if (!m_PipeServer->WriteBoolean(arrVal->GetBoolValue()))
+                  goto error;
+              }
+
+              return true;
+            error:
+              Close();
+              exceptionoverride = g_szConnectionError;
+              return false;
+            }
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShaderConstantF",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt() && arguments[1]->IsArray()) {
+            size_t arrLen = arguments[1]->GetArrayLength();
+
+            bool bOk = true;
+            for (int i = 0; i < arrLen; ++i) {
+              auto arrVal = arguments[1]->GetValue(i);
+
+              if (arrVal && arrVal->IsDouble()) {
+              } else {
+                bOk = false;
+                break;
+              }
+            }
+            if (bOk) {
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetPixelShaderConstantF))
+                goto error;
+              // startRegister
+              if (!m_PipeServer->WriteUInt32(arguments[0]->GetUIntValue()))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)arrLen))
+                goto error;
+              for (int i = 0; i < arrLen; ++i) {
+                auto arrVal = arguments[1]->GetValue(i);
+                if (!m_PipeServer->WriteSingle(arrVal->GetDoubleValue()))
+                  goto error;
+              }
+
+              return true;
+            error:
+              Close();
+              exceptionoverride = g_szConnectionError;
+              return false;
+            }
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShaderConstantI",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (2 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[0]->IsUInt() && arguments[1]->IsArray()) {
+            size_t arrLen = arguments[1]->GetArrayLength();
+
+            bool bOk = true;
+            for (int i = 0; i < arrLen; ++i) {
+              auto arrVal = arguments[1]->GetValue(i);
+
+              if (arrVal && arrVal->IsInt()) {
+              } else {
+                bOk = false;
+                break;
+              }
+            }
+            if (bOk) {
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::D3d9SetPixelShaderConstantI))
+                goto error;
+              // startRegister
+              if (!m_PipeServer->WriteUInt32(arguments[0]->GetUIntValue()))
+                goto error;
+              if (!m_PipeServer->WriteUInt32((UINT32)arrLen))
+                goto error;
+              for (int i = 0; i < arrLen; ++i) {
+                auto arrVal = arguments[1]->GetValue(i);
+                if (!m_PipeServer->WriteInt32(arrVal->GetIntValue()))
+                  goto error;
+              }
+
+              return true;
+            error:
+              Close();
+              exceptionoverride = g_szConnectionError;
+              return false;
+            }
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9DrawPrimitive",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (3 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[0]->IsUInt() &&
+              arguments[1]->IsUInt() && arguments[2]->IsUInt()) {
+
+              if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9DrawPrimitive))
+              goto error;
+            // primitiveType
+            if (!m_PipeServer->WriteUInt32(arguments[0]->GetUIntValue()))
+              goto error;
+            // startVertex
+            if (!m_PipeServer->WriteUInt32(arguments[1]->GetUIntValue()))
+              goto error;
+            // primitiveCount
+            if (!m_PipeServer->WriteUInt32(arguments[2]->GetUIntValue()))
+              goto error;
+
+            return true;
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "d3d9DrawIndexedPrimitive",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (6 == arguments.size() && arguments[0] && arguments[1] &&
+              arguments[2] && arguments[3] && arguments[4] && arguments[5] &&
+              arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
+              arguments[2]->IsUInt() && arguments[3]->IsUInt() &&
+              arguments[4]->IsUInt() && arguments[5]->IsUInt()) {
+            if (!m_PipeServer->WriteUInt32(
+                    (UINT32)DrawingReply::D3d9DrawIndexedPrimitive))
+              goto error;
+            // primitiveType
+            if (!m_PipeServer->WriteUInt32(arguments[0]->GetUIntValue()))
+              goto error;
+            // baseVertexIndex
+            if (!m_PipeServer->WriteUInt32(arguments[1]->GetUIntValue()))
+              goto error;
+            // minVertexIndex
+            if (!m_PipeServer->WriteUInt32(arguments[2]->GetUIntValue()))
+              goto error;
+            // numVertices
+            if (!m_PipeServer->WriteUInt32(arguments[3]->GetUIntValue()))
+              goto error;
+            // startIndex
+            if (!m_PipeServer->WriteUInt32(arguments[4]->GetUIntValue()))
+              goto error;
+            // primCount
+            if (!m_PipeServer->WriteUInt32(arguments[5]->GetUIntValue()))
+              goto error;
+
+            return true;
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "waitForClientGpu",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+                          if (!m_InFlow) {
+            exceptionoverride = g_szOutOfFlow;
+            return false;
+          }
+
+          if (0 == arguments.size()) {
+            if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::WaitForGpu))
+              goto error;
+
+            return true;
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return false;
+        });
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "beginCleanState",
+        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
+            if (!m_InFlow) {
+              exceptionoverride = g_szOutOfFlow;
+              return false;
+            }
+
+          if (0 == arguments.size()) {
+              if (!m_PipeServer->WriteUInt32(
+                      (UINT32)DrawingReply::BeginCleanState))
+                goto error;
+
+              return true;
+          error:
+            Close();
+            exceptionoverride = g_szConnectionError;
+            return false;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+                     return false;
+        });
+    new CFunc(interop, this, m_ExecuteMap, m_GetMap, "endCleanState",
+                   [this](const CefString& name, CefRefPtr<CefV8Value> object,
+                          const CefV8ValueList& arguments,
+                          CefRefPtr<CefV8Value>& retval,
+                          CefString& exceptionoverride) {
+                     if (!m_InFlow) {
+                       exceptionoverride = g_szOutOfFlow;
+                       return false;
+                     }
+
+                     if (0 == arguments.size()) {
+                       if (!m_PipeServer->WriteUInt32(
+                               (UINT32)DrawingReply::EndCleanState))
+                         goto error;
+
+                       return true;
+
+                     error:
+                       Close();
+                       exceptionoverride = g_szConnectionError;
+                       return false;
+                     }
+
+                     exceptionoverride = g_szInvalidArguments;
+                     return false;
+                   });
+    new CFunc(interop, this, m_ExecuteMap, m_GetMap,
+                   "createCefWindowTextureSharedHandle",
+                   [this](const CefString& name, CefRefPtr<CefV8Value> object,
+                          const CefV8ValueList& arguments,
+                          CefRefPtr<CefV8Value>& retval,
+                          CefString& exceptionoverride) {
+
+                     if (0 == arguments.size()) {
+                       CAfxDrawingHandle* val = new CAfxDrawingHandle(this);
+                       retval = val->GetObj();
+
+                       // We only have one type of shared handle supported at
+                       // the moment (this one), so no need to do anything here.
+
+                       return true;
+                     }
+
+                     exceptionoverride = g_szInvalidArguments;
+                     return false;
+                   });
+       new CFunc(interop, this, m_ExecuteMap, m_GetMap, "createDrawingData",
+                   [this](const CefString& name, CefRefPtr<CefV8Value> object,
+                          const CefV8ValueList& arguments,
+                          CefRefPtr<CefV8Value>& retval,
+                          CefString& exceptionoverride) {
+
+                     if (1 == arguments.size() && arguments[0] &&
+                         arguments[0]->IsUInt()) {
+                       unsigned int size = arguments[0]->GetUIntValue();
+                       if (void* pData = malloc(size)) {
+                         CAfxDrawingData* val =
+                             new CAfxDrawingData(size, pData);
+                         retval = val->GetObj();
+                         return true;
+                       }
+
+                       exceptionoverride = "Memory allocation failed.";
+                       return false;
+                     }
+
+                     exceptionoverride = g_szInvalidArguments;
+                     return false;
+                   });
+
+       new CFunc(
+           interop, this, m_ExecuteMap, m_GetMap, "waitForCefFrame",
+           [this](const CefString& name, CefRefPtr<CefV8Value> object,
+                  const CefV8ValueList& arguments,
+                  CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
+
+             if (0 == arguments.size()) {
+               if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::WaitForGpu))
+                 goto error;
+
+               return true;
+             error:
+               Close();
+               exceptionoverride = g_szConnectionError;
+               return false;
+             }
+
+             exceptionoverride = g_szInvalidArguments;
+             return false;
+           });
+  }
+
+  virtual bool OnProcessMessageReceived(
+      CefRefPtr<CefBrowser> browser,
+      CefRefPtr<CefFrame> frame,
+      CefProcessId source_process,
+      CefRefPtr<CefProcessMessage> message) override {
+    auto const name = message->GetName().ToString();
+
+    if (name == "afx-message") {
+      auto const args = message->GetArgumentList();
+      auto const argC = args->GetSize();
+
+      if (1 == argC && VTYPE_STRING == args->GetType(0)) {
+        CefV8ValueList execArgs;
+        execArgs.push_back(CefV8Value::CreateInt(browser->GetIdentifier()));
+        execArgs.push_back(CefV8Value::CreateString(args->GetString(0)));
+
+        m_OnMessage->ExecuteCallback(execArgs);
+      }
+    } else if (name == "afx-error") {
+      auto const args = message->GetArgumentList();
+      auto const argC = args->GetSize();
+
+      if (1 == argC && VTYPE_STRING == args->GetType(0)) {
+        CefV8ValueList execArgs;
+        execArgs.push_back(CefV8Value::CreateInt(browser->GetIdentifier()));
+        execArgs.push_back(CefV8Value::CreateString(args->GetString(0)));
+
+        m_OnError->ExecuteCallback(execArgs);
+      }
+    } else if(name == "afx-painted") {
+      {
+        std::lock_guard<std::mutex> lock(m_PaintedMutex);
+        m_Painted = true;
+      }
+      m_PaintedCv.notify_one();
+    }
+
+    return false;
+  }
+
 
 protected:
   virtual ~CDrawingInteropImpl() {
@@ -2372,34 +2982,893 @@ protected:
   }
 
  private:
-  class CDrawingData {
+
+  class CAfxInteropImpl : public CInteropUserData {
    public:
-    CDrawingData(unsigned int size, void* data) : m_Size(size), m_Data(data){}
+    CAfxInteropImpl(InteropUserDataType userDataType,
+                    CDrawingInteropImpl* drawingInteropImpl)
+        : CInteropUserData(userDataType),
+          m_DrawingInteropImpl(drawingInteropImpl) {}
 
-    void Update(unsigned int offset, size_t size, void * data) {
-      memcpy((unsigned char*)m_Data + offset, data, size);
-    }
+    UINT64 GetIndex() const { return (UINT64)this; }
 
-    void* GetData() { return m_Data;
-    }
-
-    unsigned int GetSize() { return m_Size;
-    }
-
-    private:
-        unsigned int m_Size;
-     void* m_Data;
+   protected:
+    CDrawingInteropImpl* m_DrawingInteropImpl;
   };
 
-  CThreadedQueue m_DrawingThreadedQueue;
-  std::map<unsigned __int64, CDrawingData> m_DrawingData;
-  CefRefPtr<CefBrowser> m_Browser;
+  class CAfxDrawingHandle : public CAfxInteropImpl,
+                            public CefV8Accessor,
+                            public CefV8Handler {
+    IMPLEMENT_REFCOUNTING(CAfxDrawingHandle);
+
+   public:
+    CAfxDrawingHandle(CDrawingInteropImpl* drawingInteropImpl)
+        : CAfxInteropImpl(InteropUserDataType::AfxDrawingHandle,
+                          drawingInteropImpl) {
+      m_Fn_Release = CefV8Value::CreateFunction("release", this);
+
+      m_Obj = CefV8Value::CreateObject(this, nullptr);
+      m_Obj->SetUserData(static_cast<CInteropUserData*>(this));
+      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
+                      V8_PROPERTY_ATTRIBUTE_NONE);
+    }
+
+    virtual bool Execute(const CefString& name,
+                         CefRefPtr<CefV8Value> object,
+                         const CefV8ValueList& arguments,
+                         CefRefPtr<CefV8Value>& retval,
+                         CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      if (name == "release") {
+        return true;
+      }
+
+      return false;
+    }
+
+    virtual bool Get(const CefString& name,
+                     const CefRefPtr<CefV8Value> object,
+                     CefRefPtr<CefV8Value>& retval,
+                     CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      if (name == "release") {
+        retval = m_Fn_Release;
+        return true;
+      }
+
+      return false;
+    }
+
+    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
+
+    bool Set(const CefString& name,
+             const CefRefPtr<CefV8Value> object,
+             const CefRefPtr<CefV8Value> value,
+             CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      return false;
+    }
+
+   private:
+    virtual ~CAfxDrawingHandle() {
+       m_Fn_Release = nullptr;
+       m_Obj = nullptr;
+    }
+
+    CefRefPtr<CefV8Value> m_Fn_Release;
+    CefRefPtr<CefV8Value> m_Obj;
+    bool m_DoReleased = false;
+  };
+
+  class CAfxDrawingData : public CInteropUserData,
+                          public CefV8ArrayBufferReleaseCallback {
+    IMPLEMENT_REFCOUNTING(CAfxDrawingData);
+
+   public:
+    CAfxDrawingData(unsigned int size,
+                    void* data)
+        : CInteropUserData(InteropUserDataType::AfxDrawingData),
+          m_Size(size),
+          m_Data(data) {
+      m_Buffer = CefV8Value::CreateArrayBuffer(data, size, this);
+      m_Buffer->SetUserData(static_cast<CInteropUserData*>(this));
+      m_Obj = m_Buffer;
+    }
+
+    
+    virtual void ReleaseBuffer(void* buffer) override { free(buffer); }
+
+    size_t GetSize() { return m_Size; }
+
+    void* GetData() { return m_Data; }
+
+    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
+
+   private:
+    virtual ~CAfxDrawingData() {
+      m_Obj = nullptr;
+      m_Buffer = nullptr;
+    }
+
+    CefRefPtr<CefV8Value> m_Obj;
+    CefRefPtr<CefV8Value> m_Buffer;
+    size_t m_Size;
+    void* m_Data;
+  };
+
+  class CAfxD3d9VertexDeclaration : public CAfxInteropImpl,
+                                    public CefV8Accessor,
+                                    public CefV8Handler {
+    IMPLEMENT_REFCOUNTING(CAfxD3d9VertexDeclaration);
+
+   public:
+    CAfxD3d9VertexDeclaration(CDrawingInteropImpl* drawingInteropImpl)
+        : CAfxInteropImpl(InteropUserDataType::AfxD3d9VertexDeclaration,
+                          drawingInteropImpl) {
+      m_Fn_Release = CefV8Value::CreateFunction("release", this);
+
+      m_Obj = CefV8Value::CreateObject(this, nullptr);
+      m_Obj->SetUserData(static_cast<CInteropUserData*>(this));
+      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
+                      V8_PROPERTY_ATTRIBUTE_NONE);
+    }
+
+    virtual bool Execute(const CefString& name,
+                         CefRefPtr<CefV8Value> object,
+                         const CefV8ValueList& arguments,
+                         CefRefPtr<CefV8Value>& retval,
+                         CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      if (!m_DrawingInteropImpl->m_InFlow) {
+        exception = g_szOutOfFlow;
+        return false;
+      }
+
+      if (name == "release") {
+        if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                (UINT32)DrawingReply::ReleaseD3d9VertexDeclaration))
+          goto error;
+        if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt64((UINT64)GetIndex()))
+          goto error;
+
+        m_DoReleased = true;
+        return true;
+      error:
+        m_DrawingInteropImpl->Close();
+        exception = g_szConnectionError;
+        return false;
+      }
+
+      return false;
+    }
+
+    virtual bool Get(const CefString& name,
+                     const CefRefPtr<CefV8Value> object,
+                     CefRefPtr<CefV8Value>& retval,
+                     CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      if (name == "release") {
+        retval = m_Fn_Release;
+        return true;
+      }
+
+      return false;
+    }
+
+    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
+
+    bool Set(const CefString& name,
+             const CefRefPtr<CefV8Value> object,
+             const CefRefPtr<CefV8Value> value,
+             CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      return false;
+    }
+
+   private:
+    virtual ~CAfxD3d9VertexDeclaration() {
+      m_Fn_Release = nullptr;
+      m_Obj = nullptr;
+    }
+
+    CefRefPtr<CefV8Value> m_Fn_Release;
+    CefRefPtr<CefV8Value> m_Obj;
+    bool m_DoReleased = false;
+  };
+
+  class CAfxD3d9IndexBuffer : public CAfxInteropImpl,
+                              public CefV8Accessor,
+                              public CefV8Handler {
+    IMPLEMENT_REFCOUNTING(CAfxD3d9IndexBuffer);
+
+   public:
+    CAfxD3d9IndexBuffer(CDrawingInteropImpl* drawingInteropImpl)
+        : CAfxInteropImpl(InteropUserDataType::AfxD3d9IndexBuffer,
+                          drawingInteropImpl) {
+      m_Fn_Release = CefV8Value::CreateFunction("release", this);
+      m_Fn_Update = CefV8Value::CreateFunction("update", this);
+
+      m_Obj = CefV8Value::CreateObject(this, nullptr);
+      m_Obj->SetUserData(static_cast<CInteropUserData*>(this));
+      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
+                      V8_PROPERTY_ATTRIBUTE_NONE);
+      m_Obj->SetValue("update", V8_ACCESS_CONTROL_DEFAULT,
+                      V8_PROPERTY_ATTRIBUTE_NONE);
+    }
+
+    virtual bool Execute(const CefString& name,
+                         CefRefPtr<CefV8Value> object,
+                         const CefV8ValueList& arguments,
+                         CefRefPtr<CefV8Value>& retval,
+                         CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      if (!m_DrawingInteropImpl->m_InFlow) {
+        exception = g_szOutOfFlow;
+        return false;
+      }
+
+      if (name == "release") {
+
+        if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                (UINT32)DrawingReply::ReleaseD3d9IndexBuffer))
+          goto error_1;
+        if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt64(
+                (UINT64)GetIndex()))
+          goto error_1;
+
+        m_DoReleased = true;
+        return true;
+      error_1:
+        m_DrawingInteropImpl->Close();
+        exception = g_szConnectionError;
+        return false;
+      }
+
+      if (name == "update") {
+        if (3 == arguments.size() && arguments[0] && arguments[1] &&
+            arguments[2] && arguments[0]->GetUserData() &&
+            static_cast<CInteropUserData*>(arguments[0]->GetUserData().get())
+                    ->GetUserDataType() ==
+                InteropUserDataType::AfxDrawingData &&
+            arguments[1]->IsUInt() && arguments[2]->IsUInt()) {
+          auto drawingData =
+              static_cast<CAfxDrawingData*>(static_cast<CInteropUserData*>(
+                  arguments[0]->GetUserData().get()));
+
+        size_t offsetToLock = (int)arguments[0]->GetUIntValue();
+        size_t sizeToLock = (int)arguments[1]->GetUIntValue();
+
+          if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                  (UINT32)DrawingReply::UpdateD3d9IndexBuffer))
+            goto error_2;
+          if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt64((UINT64)GetIndex()))
+            goto error_2;
+          // offsetToLock
+          if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                  (UINT32)offsetToLock))
+            goto error_2;
+          // sizeToLock
+          if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                  (UINT32)sizeToLock))
+            goto error_2;
+          if (!m_DrawingInteropImpl->m_PipeServer->WriteBytes(
+                  (unsigned char*)drawingData->GetData() + offsetToLock,
+                  (DWORD)offsetToLock, (DWORD)sizeToLock))
+            goto error_2;
+        
+      error_2:
+        m_DrawingInteropImpl->Close();
+        exception = g_szConnectionError;
+        return false;
+      }
+
+        exception = g_szInvalidArguments;
+        return false;
+      }
+
+      return false;
+    }
+
+    virtual bool Get(const CefString& name,
+                     const CefRefPtr<CefV8Value> object,
+                     CefRefPtr<CefV8Value>& retval,
+                     CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      if (name == "release") {
+        retval = m_Fn_Release;
+        return true;
+      }
+      if (name == "update") {
+        retval = m_Fn_Update;
+        return true;
+      }
+
+      return false;
+    }
+
+    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
+
+    bool Set(const CefString& name,
+             const CefRefPtr<CefV8Value> object,
+             const CefRefPtr<CefV8Value> value,
+             CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      return false;
+    }
+
+   private:
+    virtual ~CAfxD3d9IndexBuffer() {
+        m_Fn_Release = nullptr;
+        m_Fn_Update = nullptr;
+        m_Obj = nullptr;
+    }
+
+    CefRefPtr<CefV8Value> m_Fn_Release;
+    CefRefPtr<CefV8Value> m_Fn_Update;
+    CefRefPtr<CefV8Value> m_Obj;
+    bool m_DoReleased = false;
+  };
+
+  class CAfxD3d9VertexBuffer : public CAfxInteropImpl,
+                               public CefV8Accessor,
+                               public CefV8Handler {
+    IMPLEMENT_REFCOUNTING(CAfxD3d9VertexBuffer);
+
+   public:
+    CAfxD3d9VertexBuffer(CDrawingInteropImpl* drawingInteropImpl)
+        : CAfxInteropImpl(InteropUserDataType::AfxD3d9VertexBuffer,
+                          drawingInteropImpl) {
+      m_Fn_Release = CefV8Value::CreateFunction("release", this);
+      m_Fn_Update = CefV8Value::CreateFunction("update", this);
+
+      m_Obj = CefV8Value::CreateObject(this, nullptr);
+      m_Obj->SetUserData(static_cast<CInteropUserData*>(this));
+      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
+                      V8_PROPERTY_ATTRIBUTE_NONE);
+      m_Obj->SetValue("update", V8_ACCESS_CONTROL_DEFAULT,
+                      V8_PROPERTY_ATTRIBUTE_NONE);
+    }
+
+    virtual bool Execute(const CefString& name,
+                         CefRefPtr<CefV8Value> object,
+                         const CefV8ValueList& arguments,
+                         CefRefPtr<CefV8Value>& retval,
+                         CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      if (!m_DrawingInteropImpl->m_InFlow) {
+        exception = g_szOutOfFlow;
+        return false;
+      }
+
+      if (name == "release") {
+        if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                (UINT32)DrawingReply::ReleaseD3d9VertexBuffer))
+          goto error_1;
+        if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt64(
+                (UINT64)GetIndex()))
+          goto error_1;
+
+        m_DoReleased = true;
+        return true;
+      error_1:
+        m_DrawingInteropImpl->Close();
+        exception = g_szConnectionError;
+        return false;
+      }
+
+      if (name == "update") {
+        if (3 == arguments.size() && arguments[0] && arguments[1] &&
+            arguments[2] && arguments[0]->GetUserData() &&
+            static_cast<CInteropUserData*>(arguments[0]->GetUserData().get())
+                    ->GetUserDataType() ==
+                InteropUserDataType::AfxDrawingData &&
+            arguments[1]->IsUInt() && arguments[2]->IsUInt()) {
+          auto drawingData =
+              static_cast<CAfxDrawingData*>(static_cast<CInteropUserData*>(
+                  arguments[0]->GetUserData().get()));
+
+          size_t offsetToLock = arguments[0]->GetUIntValue();
+          size_t sizeToLock = arguments[1]->GetUIntValue();
+
+          if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                  (UINT32)DrawingReply::UpdateD3d9VertexBuffer))
+            goto error_2;
+          if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt64(
+                  (UINT64)GetIndex()))
+            goto error_2;
+          if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                  (UINT32)offsetToLock))
+            goto error_2;
+          if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                  (UINT32)sizeToLock))
+            goto error_2;
+          if (!m_DrawingInteropImpl->m_PipeServer->WriteBytes(
+                  (unsigned char*)drawingData->GetData() + offsetToLock,
+                  (DWORD)offsetToLock, (DWORD)sizeToLock))
+            goto error_2;
+          return true;
+        error_2:
+          m_DrawingInteropImpl->Close();
+          exception = g_szConnectionError;
+          return false;
+        }
+
+        exception = g_szInvalidArguments;
+        return false;
+      }
+
+      return false;
+    }
+
+    virtual bool Get(const CefString& name,
+                     const CefRefPtr<CefV8Value> object,
+                     CefRefPtr<CefV8Value>& retval,
+                     CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      if (name == "release") {
+        retval = m_Fn_Release;
+        return true;
+      }
+      if (name == "update") {
+        retval = m_Fn_Update;
+        return true;
+      }
+
+      return false;
+    }
+
+    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
+
+    bool Set(const CefString& name,
+             const CefRefPtr<CefV8Value> object,
+             const CefRefPtr<CefV8Value> value,
+             CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      return false;
+    }
+
+   private:
+    virtual ~CAfxD3d9VertexBuffer() {
+      m_Fn_Release = nullptr;
+      m_Fn_Update = nullptr;
+      m_Obj = nullptr;
+    }
+
+    CefRefPtr<CefV8Value> m_Fn_Release;
+    CefRefPtr<CefV8Value> m_Fn_Update;
+    CefRefPtr<CefV8Value> m_Obj;
+    bool m_DoReleased = false;
+  };
+
+  class CAfxD3d9Texture : public CAfxInteropImpl,
+                          public CefV8Accessor,
+                          public CefV8Handler {
+    IMPLEMENT_REFCOUNTING(CAfxD3d9Texture);
+
+   public:
+    CAfxD3d9Texture(CDrawingInteropImpl* drawingInteropImpl)
+        : CAfxInteropImpl(InteropUserDataType::AfxD3d9Texture,
+                          drawingInteropImpl) {
+      m_Fn_Release = CefV8Value::CreateFunction("release", this);
+      m_Fn_Update = CefV8Value::CreateFunction("update", this);
+
+      m_Obj = CefV8Value::CreateObject(this, nullptr);
+      m_Obj->SetUserData(static_cast<CInteropUserData*>(this));
+      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
+                      V8_PROPERTY_ATTRIBUTE_NONE);
+      m_Obj->SetValue("update", V8_ACCESS_CONTROL_DEFAULT,
+                      V8_PROPERTY_ATTRIBUTE_NONE);
+    }
+
+    virtual bool Execute(const CefString& name,
+                         CefRefPtr<CefV8Value> object,
+                         const CefV8ValueList& arguments,
+                         CefRefPtr<CefV8Value>& retval,
+                         CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      if (!m_DrawingInteropImpl->m_InFlow) {
+        exception = g_szOutOfFlow;
+        return false;
+      }
+
+      if (name == "release") {
+        if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                (UINT32)DrawingReply::ReleaseD3d9Texture))
+          goto error_1;
+        if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt64(
+                (UINT64)GetIndex()))
+          goto error_1;
+
+        m_DoReleased = true;
+        return true;
+      error_1:
+        m_DrawingInteropImpl->Close();
+        exception = g_szConnectionError;
+        return false;
+      }
+
+      if (name == "update") {
+        if (8 == arguments.size() && arguments[0] && arguments[1] &&
+            arguments[2] && arguments[3] && arguments[4] && arguments[5] &&
+            arguments[6] && arguments[7] && arguments[0]->IsUInt() &&
+            arguments[1]->IsObject() && arguments[2]->GetUserData() &&
+            static_cast<CInteropUserData*>(arguments[2]->GetUserData().get())
+                    ->GetUserDataType() ==
+                InteropUserDataType::AfxDrawingData &&
+            arguments[3]->IsUInt() && arguments[4]->IsUInt() &&
+            arguments[5]->IsUInt() && arguments[6]->IsUInt() &&
+            arguments[7]->IsUInt()) {
+          auto drawingData =
+              static_cast<CAfxDrawingData*>(static_cast<CInteropUserData*>(
+                  arguments[2]->GetUserData().get()));
+
+          auto rectLeft = arguments[1]->GetValue("left");
+          auto rectTop = arguments[1]->GetValue("top");
+          auto rectRight = arguments[1]->GetValue("right");
+          auto rectBottom = arguments[1]->GetValue("bottom");
+
+          UINT32 rowOffsetBytes = arguments[3]->GetUIntValue();
+          UINT32 columnOffsetBytes = arguments[4]->GetUIntValue();
+          UINT32 dataBytesPerRow = arguments[5]->GetUIntValue();
+          UINT32 totalBytesPerRow = arguments[6]->GetUIntValue();
+          UINT32 numRows = arguments[7]->GetUIntValue();
+
+          if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                  (UINT32)DrawingReply::UpdateD3d9Texture))
+            goto error_2;
+          if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt64(
+                  (UINT64)GetIndex()))
+            goto error_2;
+          if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                  (UINT32)arguments[0]->GetUIntValue()))
+            goto error_2;
+          if (nullptr != rectLeft && nullptr != rectTop &&
+              nullptr != rectRight && nullptr != rectBottom &&
+              rectLeft->IsInt() && rectTop->IsInt() && rectRight->IsInt() &&
+              rectBottom->IsInt()) {
+            if (!m_DrawingInteropImpl->m_PipeServer->WriteBoolean(true))
+              goto error_2;
+            if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                    (INT32)rectLeft->GetIntValue()))
+              goto error_2;
+            if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                    (INT32)rectTop->GetIntValue()))
+              goto error_2;
+            if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                    (INT32)rectRight->GetIntValue()))
+              goto error_2;
+            if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                    (INT32)rectBottom->GetIntValue()))
+              goto error_2;
+          } else {
+            if (!m_DrawingInteropImpl->m_PipeServer->WriteBoolean(false))
+              goto error_2;
+          }
+          if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32((UINT32)numRows))
+            goto error_2;
+          if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                  (UINT32)(dataBytesPerRow - columnOffsetBytes)))
+            goto error_2;
+
+          void* pData = (unsigned char*)drawingData->GetData() + rowOffsetBytes;
+
+          for (unsigned int i = 0; i < numRows; ++i) {
+            if (!m_DrawingInteropImpl->m_PipeServer->WriteBytes(
+                    (unsigned char*)pData + columnOffsetBytes, 0,
+                    dataBytesPerRow - columnOffsetBytes))
+              goto error_2;
+
+            pData = (unsigned char*)pData + totalBytesPerRow;
+          }
+          return true;
+        error_2:
+          m_DrawingInteropImpl->Close();
+          exception = g_szConnectionError;
+          return false;
+        }
+
+        exception = g_szInvalidArguments;
+        return false;
+      }
+
+      return false;
+    }
+
+    virtual bool Get(const CefString& name,
+                     const CefRefPtr<CefV8Value> object,
+                     CefRefPtr<CefV8Value>& retval,
+                     CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      if (name == "release") {
+        retval = m_Fn_Release;
+        return true;
+      }
+      if (name == "update") {
+        retval = m_Fn_Update;
+        return true;
+      }
+
+      return false;
+    }
+
+    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
+
+    bool Set(const CefString& name,
+             const CefRefPtr<CefV8Value> object,
+             const CefRefPtr<CefV8Value> value,
+             CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+      return false;
+    }
+
+   private:
+    virtual ~CAfxD3d9Texture() {
+      m_Fn_Release = nullptr;
+      m_Fn_Update = nullptr;
+      m_Obj = nullptr;
+    }
+
+    CefRefPtr<CefV8Value> m_Fn_Release;
+    CefRefPtr<CefV8Value> m_Fn_Update;
+    CefRefPtr<CefV8Value> m_Obj;
+    bool m_DoReleased = false;
+  };
+
+  class CAfxD3d9PixelShader : public CAfxInteropImpl,
+                              public CefV8Accessor,
+                              public CefV8Handler {
+    IMPLEMENT_REFCOUNTING(CAfxD3d9PixelShader);
+
+   public:
+    CAfxD3d9PixelShader(CDrawingInteropImpl* drawingInteropImpl)
+        : CAfxInteropImpl(InteropUserDataType::AfxD3d9PixelShader,
+                          drawingInteropImpl) {
+      m_Fn_Release = CefV8Value::CreateFunction("release", this);
+
+      m_Obj = CefV8Value::CreateObject(this, nullptr);
+      m_Obj->SetUserData(static_cast<CInteropUserData*>(this));
+      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
+                      V8_PROPERTY_ATTRIBUTE_NONE);
+    }
+
+    virtual bool Execute(const CefString& name,
+                         CefRefPtr<CefV8Value> object,
+                         const CefV8ValueList& arguments,
+                         CefRefPtr<CefV8Value>& retval,
+                         CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      if (!m_DrawingInteropImpl->m_InFlow) {
+        exception = g_szOutOfFlow;
+        return false;
+      }
+
+      if (name == "release") {
+        if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                (UINT32)DrawingReply::ReleaseD3d9PixelShader))
+          goto error;
+        if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt64(
+                (UINT64)GetIndex()))
+          goto error;
+
+        m_DoReleased = true;
+        return true;
+      error:
+        m_DrawingInteropImpl->Close();
+        exception = g_szConnectionError;
+        return false;
+      }
+
+      return false;
+    }
+
+    virtual bool Get(const CefString& name,
+                     const CefRefPtr<CefV8Value> object,
+                     CefRefPtr<CefV8Value>& retval,
+                     CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      if (name == "release") {
+        retval = m_Fn_Release;
+        return true;
+      }
+
+      return false;
+    }
+
+    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
+
+    bool Set(const CefString& name,
+             const CefRefPtr<CefV8Value> object,
+             const CefRefPtr<CefV8Value> value,
+             CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+      return false;
+    }
+
+   private:
+    virtual ~CAfxD3d9PixelShader() {
+        m_Fn_Release = nullptr;
+        m_Obj = nullptr;
+    }
+
+    CefRefPtr<CefV8Value> m_Fn_Release;
+    CefRefPtr<CefV8Value> m_Obj;
+    bool m_DoReleased = false;
+  };
+
+  class CAfxD3d9VertexShader : public CAfxInteropImpl,
+                               public CefV8Accessor,
+                               public CefV8Handler {
+    IMPLEMENT_REFCOUNTING(CAfxD3d9VertexShader);
+
+   public:
+    CAfxD3d9VertexShader(CDrawingInteropImpl* drawingInteropImpl)
+        : CAfxInteropImpl(InteropUserDataType::AfxD3d9VertexShader,
+                          drawingInteropImpl) {
+      m_Fn_Release = CefV8Value::CreateFunction("release", this);
+
+      m_Obj = CefV8Value::CreateObject(this, nullptr);
+      m_Obj->SetUserData(static_cast<CInteropUserData*>(this));
+      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
+                      V8_PROPERTY_ATTRIBUTE_NONE);
+    }
+
+    virtual bool Execute(const CefString& name,
+                         CefRefPtr<CefV8Value> object,
+                         const CefV8ValueList& arguments,
+                         CefRefPtr<CefV8Value>& retval,
+                         CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+
+      if (!m_DrawingInteropImpl->m_InFlow) {
+        exception = g_szOutOfFlow;
+        return false;
+      }
+
+      if (name == "release") {
+        if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt32(
+                (UINT32)DrawingReply::ReleaseD3d9VertexShader))
+          goto error;
+        if (!m_DrawingInteropImpl->m_PipeServer->WriteUInt64(
+                (UINT64)GetIndex()))
+          goto error;
+
+        m_DoReleased = true;
+        return true;
+      error:
+        m_DrawingInteropImpl->Close();
+        exception = g_szConnectionError;
+        return false;
+      }
+
+      return false;
+    }
+
+    virtual bool Get(const CefString& name,
+                     const CefRefPtr<CefV8Value> object,
+                     CefRefPtr<CefV8Value>& retval,
+                     CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+      if (name == "release") {
+        retval = m_Fn_Release;
+        return true;
+      }
+
+      return false;
+    }
+
+    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
+
+    bool Set(const CefString& name,
+             const CefRefPtr<CefV8Value> object,
+             const CefRefPtr<CefV8Value> value,
+             CefString& exception) override {
+      if (m_DoReleased) {
+        exception = g_szAlreadyReleased;
+        return false;
+      }
+      return false;
+    }
+
+   private:
+    virtual ~CAfxD3d9VertexShader() { m_Fn_Release = nullptr;
+      m_Obj = nullptr;
+    }
+
+    CefRefPtr<CefV8Value> m_Fn_Release;
+    CefRefPtr<CefV8Value> m_Obj;
+    bool m_DoReleased = false;
+  };
+
+  CefRefPtr<CCallback> m_OnMessage;
+  CefRefPtr<CCallback> m_OnError;
+  CefRefPtr<CCallback> m_OnDeviceLost;
+  CefRefPtr<CCallback> m_OnDeviceReset;  
 
   bool m_InFlow = false;
 
   HANDLE m_ShareHandle = INVALID_HANDLE_VALUE;
   int m_Width = 640;
   int m_Height = 480;
+
+  bool m_Painted;
+  std::mutex m_PaintedMutex;
+  std::condition_variable m_PaintedCv;
 
   bool DoThePumping(int frameCount, unsigned int pass) {
 
@@ -2422,18 +3891,15 @@ protected:
         case DrawingMessage::OnRenderViewEnd:
         case DrawingMessage::NOP:
           break;
-        case DrawingMessage::DeviceLost:
-          OutputDebugStringA("DeviceLost\n");
+        case DrawingMessage::DeviceLost: {
+          CefV8ValueList execArgs;
+          m_OnDeviceLost->ExecuteCallback(execArgs);
+        }
           bContinue = true;
           break;
         case DrawingMessage::DeviceRestored: {
-          OutputDebugStringA("DeviceRestored\n");
-          auto browserMessage = CefProcessMessage::Create("afx-interop");
-          auto args = browserMessage->GetArgumentList();
-          args->SetSize(1);
-          args->SetInt(0, (int)CefEngineInteropMessage::DeviceReset);
-          m_Browser->GetMainFrame()->SendProcessMessage(PID_RENDERER,
-                                                        browserMessage);
+          CefV8ValueList execArgs;
+          m_OnDeviceReset->ExecuteCallback(execArgs);
         }
           bContinue = true;
           break;
@@ -2463,7 +3929,7 @@ protected:
         if (!m_PipeServer->Flush())
           return false;
 
-        OutputDebugStringA("DrawingReply::Retry\n");
+        //OutputDebugStringA("DrawingReply::Retry\n");
 
         return true;
 
@@ -2475,7 +3941,7 @@ protected:
         if (!m_PipeServer->Flush())
           return false;
 
-        OutputDebugStringA("DrawingReply::Skip\n");
+        //OutputDebugStringA("DrawingReply::Skip\n");
       } else {
         // we are right on.
 
@@ -2542,104 +4008,225 @@ protected:
 
 };
 
-class CDrawingInterop* CreateDrawingInterop(
-    CefRefPtr<CefBrowser> const& browser) {
-  return new CDrawingInteropImpl(browser);
+class CInterop* CreateDrawingInterop(CefRefPtr<CefBrowser> browser,
+                                            CefRefPtr<CefFrame> frame,
+                                     CefRefPtr<CefV8Context> context,
+                                     const CefString& argStr) {
+  return new CDrawingInteropImpl(browser,frame,context,argStr);
 }
 
-class CEngineInteropImpl : public CEngineInterop, public CInterop {
+class CCreateInterop {
+ public:
+  static void FreeAll() {
+    while (!m_Lingering.empty()) {
+      auto it = m_Lingering.begin();
+      delete (*it);
+      m_Lingering.erase(it);
+    }
+  }
+
+  static void Resolve(unsigned int lo, unsigned int hi, int interopId) {
+    CCreateInterop* val =
+        (CCreateInterop*)((unsigned __int64)lo | ((unsigned __int64)hi << 32));
+
+    auto it = m_Lingering.find(val);
+    if (it != m_Lingering.end()) {
+      m_Lingering.erase(it);
+      val->DoResolve(interopId);
+      delete val;
+    }
+  }
+
+  static void Reject(unsigned int lo,
+                     unsigned int hi,
+                     const CefString& message) {
+    CCreateInterop* val =
+        (CCreateInterop*)((unsigned __int64)lo | ((unsigned __int64)hi << 32));
+
+    auto it = m_Lingering.find(val);
+    if (it != m_Lingering.end()) {
+      m_Lingering.erase(it);
+      val->DoReject(message);
+      delete val;
+    }
+  }
+
+  CCreateInterop(CefRefPtr<CefV8Context> context,
+                 CefRefPtr<CefV8Value> fnResolve,
+                 CefRefPtr<CefV8Value> fnReject)
+      : m_Context(context), m_FnResolve(fnResolve), m_FnReject(fnReject) {
+    m_Lingering.insert(this);
+  }
+
+  unsigned int GetLo() {
+    return (unsigned int)((unsigned __int64)this & 0xffffffff);
+  }
+
+  unsigned int GetHi() {
+    return (unsigned int)(((unsigned __int64)this >> 32) & 0xffffffff);
+  }
+
+ private:
+  static std::set<CCreateInterop*> m_Lingering;
+  CefRefPtr<CefV8Context> m_Context;
+  CefRefPtr<CefV8Value> m_FnResolve;
+  CefRefPtr<CefV8Value> m_FnReject;
+
+  void DoResolve(int interopId) {
+    CefV8ValueList arguments;
+    arguments.push_back(CefV8Value::CreateInt(interopId));
+    m_FnResolve->ExecuteFunctionWithContext(m_Context, NULL, arguments);
+  }
+
+  void DoReject(const CefString& message) {
+    CefV8ValueList arguments;
+    arguments.push_back(CefV8Value::CreateString(message));
+    m_FnResolve->ExecuteFunctionWithContext(m_Context, NULL, arguments);
+  }
+};
+
+std::set<CCreateInterop*> CCreateInterop::m_Lingering;
+
+class CEngineInteropImpl : public CInterop,
+                           public CInteropBase,
+                           public CAfxInterop {
   IMPLEMENT_REFCOUNTING(CEngineInteropImpl);
 
  public:
 
-  virtual void CloseInterop() override { CInterop::Close();
+  virtual void CloseInterop() override { CAfxInterop::Close();
   }
 
-  CEngineInteropImpl(CefRefPtr<CefBrowser> const& browser,
-                     CefRefPtr<CefFrame> const& frame,
-                     CefRefPtr<CefV8Context> const& context)
-      : CInterop("advancedfxInterop"),
-        m_Browser(browser),
-        m_Frame(frame),
-        m_Context(context) {
+  CEngineInteropImpl(CefRefPtr<CefBrowser> browser,
+                     CefRefPtr<CefFrame> frame,
+                     CefRefPtr<CefV8Context> context,
+                     const CefString& argStr)
+      : CAfxInterop("advancedfxInterop") {
 
-    auto const object = CefV8Value::CreateObject(this, nullptr);
+    CefRefPtr<CefV8Value> interop = CefV8Value::CreateObject(this, nullptr);
 
     auto window = context->GetGlobal();
-    window->SetValue("afxInterop", object, V8_PROPERTY_ATTRIBUTE_NONE);
+    window->SetValue("afxInterop", interop, V8_PROPERTY_ATTRIBUTE_NONE);
 
-    object->SetValue("pipeName", V8_ACCESS_CONTROL_DEFAULT,
-                     V8_PROPERTY_ATTRIBUTE_NONE);
+    interop->SetValue("id", V8_ACCESS_CONTROL_DEFAULT,
+                      V8_PROPERTY_ATTRIBUTE_NONE);
+    m_GetMap.emplace(
+        "id",
+        [browser](const CefString& name, const CefRefPtr<CefV8Value> object,
+                  CefRefPtr<CefV8Value>& retval, CefString& exception) {
+          retval = CefV8Value::CreateInt(browser->GetIdentifier());
+
+          return true;
+        });
+
+    new CFunc(interop, this, m_ExecuteMap, m_GetMap, "init",
+              [this, context, interop, argStr](
+                  const CefString& name, CefRefPtr<CefV8Value> object,
+                  const CefV8ValueList& arguments,
+                  CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
+                if (1 == arguments.size()) {
+                  auto argInitFn = arguments[0];
+
+                  if (argInitFn && argInitFn->IsFunction()) {
+                    CefV8ValueList args;
+                    args.push_back(interop);
+                    args.push_back(CefV8Value::CreateString(argStr));
+
+                    argInitFn->ExecuteFunctionWithContext(context, NULL, args);
+
+                    return true;
+                  }
+                }
+
+                return false;
+              });
+
+    new CFunc(interop, this, m_ExecuteMap, m_GetMap, "sendMessage",
+              [browser, frame](const CefString& name, CefRefPtr<CefV8Value> object,
+                          const CefV8ValueList& arguments,
+                          CefRefPtr<CefV8Value>& retval,
+                          CefString& exceptionoverride) {
+                if (arguments.size() == 2) {
+                  auto argId = arguments[0];
+                  auto argStr = arguments[1];
+
+                  if (argId && argStr && argId->IsInt() && argStr->IsString()) {
+                    auto message =
+                        CefProcessMessage::Create("afx-send-message");
+                    auto args = message->GetArgumentList();
+                    args->SetSize(3);
+                    args->SetInt(0, browser->GetIdentifier());
+                    args->SetInt(1, argId->GetIntValue());
+                    args->SetString(2, argStr->GetStringValue());
+
+                    frame->SendProcessMessage(PID_BROWSER, message);
+                    return true;
+                  }
+                }
+
+                exceptionoverride = g_szInvalidArguments;
+                return false;
+              });
+
+
+    m_OnMessage = new CCallback(context, interop, this, m_ExecuteMap, m_GetMap,
+                             "onMessage");
+
+    m_OnError = new CCallback(context, interop, this, m_ExecuteMap, m_GetMap,
+                           "onError");
+
+  interop->SetValue("pipeName", V8_ACCESS_CONTROL_DEFAULT,
+                      V8_PROPERTY_ATTRIBUTE_NONE);
     m_GetMap.emplace(
         "pipeName",
         [this](const CefString& name, const CefRefPtr<CefV8Value> object,
                CefRefPtr<CefV8Value>& retval, CefString& exception) {
-          retval = CefV8Value::CreateString(CInterop::GetPipeName());
+          retval = CefV8Value::CreateString(CAfxInterop::GetPipeName());
 
           return true;
         });
-    m_SetMap.emplace("pipeName",
+    m_SetMap.emplace(
+        "pipeName",
         [this](const CefString& name, const CefRefPtr<CefV8Value> object,
                const CefRefPtr<CefV8Value> value, CefString& exception) {
           if (value && value->IsString()) {
             std::string pipeName(value->GetStringValue().ToString());
 
-            CInterop::SetPipeName(pipeName.c_str());
-
-            pipeName.append("_drawing");
-
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(2);
-            args->SetInt(0, (int)CefDrawingInteropMessage::SetPipeName);
-            args->SetString(1, pipeName);
-            SendProcessMessage(PID_BROWSER, message);
+            CAfxInterop::SetPipeName(pipeName.c_str());
             return true;
           }
 
+          exception = g_szInvalidArguments;
           return false;
         });
 
-    m_Connect.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "connect",
+
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "connect",
         [this](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
-          retval = CefV8Value::CreateBool(CInterop::Connection());
+          retval = CefV8Value::CreateBool(CAfxInterop::Connection() && CAfxInterop::Connected());
           return true;
         });
 
-    m_GetConnected.InitFunc(object, this, m_ExecuteMap, m_GetMap, "getConnected",
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "close",
         [this](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
-          retval = CefV8Value::CreateBool(CInterop::Connected());
-          return true;
-        });
-
-    m_Close.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "close",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          CInterop::Close();
-
-          auto message = CefProcessMessage::Create("afx-interop");
-          auto args = message->GetArgumentList();
-          args->SetSize(1);
-          args->SetInt(0, (int)CefDrawingInteropMessage::Close);
-          SendProcessMessage(PID_BROWSER, message);
+          CAfxInterop::Close();
           return true;
         });
                 
-    m_NewConnectionCallback.InitCallback(context, object, this, m_ExecuteMap,
+    m_NewConnectionCallback = new CCallback(context, interop, this, m_ExecuteMap,
                                          m_GetMap, "onNewConnection");
 
-    m_CommandsCallback.InitCallback(context, object, this, m_ExecuteMap,
+    m_CommandsCallback = new CCallback(context, interop, this, m_ExecuteMap,
                                     m_GetMap, "onCommands");
 
-    m_ScheduleCommand.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "scheduleCommand",
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "scheduleCommand",
         [this](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
@@ -2654,28 +4241,30 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
           return false;
         });
 
-    m_RenderViewBeginCallback.InitCallback(context, object, this, m_ExecuteMap,
+    m_RenderViewBeginCallback = new CCallback(
+        context, interop, this, m_ExecuteMap,
                                            m_GetMap, "onRenderViewBegin");
-
-    m_OnViewOverrideCallback.InitCallback(context, object, this, m_ExecuteMap,
+    
+    m_OnViewOverrideCallback = new CCallback(
+        context, interop, this, m_ExecuteMap,
                                           m_GetMap, "onViewOverride");
 
-
-    m_RenderPassCallback.InitCallback(context, object, this, m_ExecuteMap,
+    m_RenderPassCallback = new CCallback(context, interop, this, m_ExecuteMap,
                                       m_GetMap, "onRenderPass");
 
-    m_HudBeginCallback.InitCallback(context, object, this, m_ExecuteMap,
+    m_HudBeginCallback = new CCallback(context, interop, this, m_ExecuteMap,
                                     m_GetMap, "onHudBegin");
 
-    m_HudEndCallback.InitCallback(context, object, this, m_ExecuteMap,
+    m_HudEndCallback = new CCallback(context, interop, this, m_ExecuteMap,
                                     m_GetMap, "onHudEnd");
 
-    m_RenderViewEndCallback.InitCallback(context, object, this, m_ExecuteMap,
+    m_RenderViewEndCallback = new CCallback(
+        context, interop, this, m_ExecuteMap,
                                     m_GetMap, "onRenderViewEnd");
 
-    m_AddCalcHandle.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "addCalcHandle",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "addCalcHandle",
+        [this, context](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
           if (2 == arguments.size() && arguments[0] && arguments[1] &&
@@ -2683,7 +4272,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
             retval = (new CCalcResult(
                           &m_HandleCalcCallbacks,
                           arguments[0]->GetStringValue().ToString().c_str(),
-                          new CCalcCallback(arguments[1], m_Context)))
+                          new CCalcCallback(arguments[1], context)))
                          ->GetObj();
 
             return true;
@@ -2691,9 +4280,9 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
           return false;
         });
-    m_AddCalcVecAng.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "addCalcVecAng",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "addCalcVecAng",
+        [this, context](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
           if (2 == arguments.size() && arguments[0] && arguments[1] &&
@@ -2701,7 +4290,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
             retval = (new CCalcResult(
                           &m_VecAngCalcCallbacks,
                           arguments[0]->GetStringValue().ToString().c_str(),
-                          new CCalcCallback(arguments[1], m_Context)))
+                          new CCalcCallback(arguments[1], context)))
                          ->GetObj();
 
             return true;
@@ -2709,9 +4298,9 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
           return false;
         });
-    m_AddCalcCam.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "addCalcCam",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "addCalcCam",
+        [this, context](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
           if (2 == arguments.size() && arguments[0] && arguments[1] &&
@@ -2719,7 +4308,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
             retval = (new CCalcResult(
                           &m_CamCalcCallbacks,
                           arguments[0]->GetStringValue().ToString().c_str(),
-                          new CCalcCallback(arguments[1], m_Context)))
+                          new CCalcCallback(arguments[1], context)))
                          ->GetObj();
 
             return true;
@@ -2727,9 +4316,9 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
           return false;
         });
-    m_AddCalcFov.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "addCalcFov",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "addCalcFov",
+        [this, context](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
           if (2 == arguments.size() && arguments[0] && arguments[1] &&
@@ -2737,7 +4326,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
             retval = (new CCalcResult(
                           &m_FovCalcCallbacks,
                           arguments[0]->GetStringValue().ToString().c_str(),
-                          new CCalcCallback(arguments[1], m_Context)))
+                          new CCalcCallback(arguments[1], context)))
                          ->GetObj();
 
             return true;
@@ -2745,9 +4334,9 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
           return false;
         });
-    m_AddCalcBool.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "addCalcBool",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "addCalcBool",
+        [this, context](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
           if (2 == arguments.size() && arguments[0] && arguments[1] &&
@@ -2757,7 +4346,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
             retval = (new CCalcResult(
                           &m_BoolCalcCallbacks,
                           arguments[0]->GetStringValue().ToString().c_str(),
-                          new CCalcCallback(arguments[1], m_Context)))
+                          new CCalcCallback(arguments[1], context)))
                          ->GetObj();
 
             return true;
@@ -2765,9 +4354,9 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
           return false;
         });
-    m_AddCalcInt.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "addCalcInt",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "addCalcInt",
+        [this, context](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
           if (2 == arguments.size() && arguments[0] && arguments[1] &&
@@ -2777,7 +4366,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
             retval = (new CCalcResult(
                           &m_IntCalcCallbacks,
                           arguments[0]->GetStringValue().ToString().c_str(),
-                          new CCalcCallback(arguments[1], m_Context)))
+                          new CCalcCallback(arguments[1], context)))
                          ->GetObj();
 
             return true;
@@ -2786,8 +4375,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
           return false;
         });
 
-    m_GameEventAllowAdd.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "gameEventAllowAdd",
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "gameEventAllowAdd",
         [this](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
@@ -2803,8 +4392,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
           return false;
         });
-    m_GameEventAllowRemove.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "gameEventAllowRemove",
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "gameEventAllowRemove",
         [this](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
@@ -2820,8 +4409,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
           return false;
         });
-    m_GameEventDenyAdd.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "gameEventDenyAdd",
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "gameEventDenyAdd",
         [this](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
@@ -2837,8 +4426,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
           return false;
         });
-    m_GameEventDenyRemove.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "gameEventDenyRemove",
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "gameEventDenyRemove",
         [this](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
@@ -2854,8 +4443,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
           return false;
         });
-    m_GameEventSetEnrichment.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "gameEventSetEnrichment",
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "gameEventSetEnrichment",
         [this](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
@@ -2875,11 +4464,11 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
           return false;
         });
 
-    m_GameEventCallback.InitCallback(context, object, this, m_ExecuteMap,
+    m_GameEventCallback = new CCallback(context, interop, this, m_ExecuteMap,
                                          m_GetMap, "onGameEvent");
 
-    m_GameEventSetTransmitClientTime.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "gameEventSetTransmitClientTime",
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "gameEventSetTransmitClientTime",
         [this](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
@@ -2897,8 +4486,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
           return false;
         });
 
-    m_GameEventSetTransmitTick.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "gameEventSetTransmitTick",
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "gameEventSetTransmitTick",
         [this](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
@@ -2915,8 +4504,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
           return false;
         });
 
-    m_GameEventSetTransmitSystemTime.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "gameEventSetTransmitSystemTime",
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "gameEventSetTransmitSystemTime",
         [this](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
@@ -2933,1179 +4522,52 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
           return false;
         });
-
-
-    m_OnDeviceReset.InitCallback(context, object, this, m_ExecuteMap,
-                                     m_GetMap, "onDeviceReset");
-    m_DrawingConnect.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "drawingConnect",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (0 == arguments.size()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(1);
-            args->SetInt(0, (int)CefDrawingInteropMessage::Connect);
-
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_DrawingPumpBegin.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "drawingPumpBegin",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[0]->IsInt() && arguments[1]->IsUInt()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(3);
-            args->SetInt(0, (int)CefDrawingInteropMessage::PumpBegin);
-            args->SetInt(1, arguments[0]->GetIntValue());
-            args->SetInt(2, (unsigned int)arguments[1]->GetUIntValue());
-
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_DrawingPumpEnd.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "drawingPumpEnd",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (0 == arguments.size()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(1);
-            args->SetInt(0, (int)CefDrawingInteropMessage::PumpEnd);
-
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_DrawingBeginFrame.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "drawingBeginFrame",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (0 == arguments.size()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(1);
-            args->SetInt(0, (int)CefDrawingInteropMessage::BeginFrame);
-
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          } else if (2 == arguments.size() && arguments[0] && arguments[1] &&
-                     arguments[0]->IsInt() && arguments[1]->IsInt()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(3);
-            args->SetInt(0, (int)CefDrawingInteropMessage::BeginFrame);
-            args->SetInt(1, arguments[0]->GetIntValue());
-            args->SetInt(2, arguments[1]->GetIntValue());
-
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9CreateVertexDecalaration.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9CreateVertexDeclaration",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[0]->GetUserData() &&
-              static_cast<CAfxInteropUserData*>(
-                  arguments[0]->GetUserData().get())
-                      ->GetUserDataType() == AfxUserDataType::AfxDrawingData) {
-            auto drawingData =
-                static_cast<CAfxDrawingData*>(static_cast<CAfxInteropUserData*>(
-                    arguments[0]->GetUserData().get()));
-
-            if (nullptr != drawingData) {
-              CAfxD3d9VertexDeclaration* val =
-                  new CAfxD3d9VertexDeclaration(this);
-              retval = val->GetObj();
-
-              auto message = CefProcessMessage::Create("afx-interop");
-              auto args = message->GetArgumentList();
-              args->SetSize(5);
-              args->SetInt(
-                  0,
-                  (int)CefDrawingInteropMessage::D3d9CreateVertexDecalaration);
-              val->InsertIdAsTwoInts(args, 1, 2);
-              drawingData->InsertIdAsTwoInts(args, 3, 4);
-
-              SendProcessMessage(PID_BROWSER, message);
-              return true;
-            }
-          }
-
-          return false;
-        });
-    m_D3d9CreateIndexBuffer.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9CreateIndexBuffer",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-                 const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-                 CefString& exceptionoverride) {
-          if (5 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[2] && arguments[3] && arguments[4] &&
-              arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
-              arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
-            CAfxDrawingHandle* drawingHandle = nullptr;
-
-            if (arguments[4]->GetUserData() &&
-                static_cast<CAfxInteropUserData*>(
-                    arguments[4]->GetUserData().get())
-                    ->GetUserDataType() == AfxUserDataType::AfxDrawingHandle)
-              drawingHandle = static_cast<CAfxDrawingHandle*>(
-                  static_cast<CAfxInteropUserData*>(
-                      arguments[4]->GetUserData().get()));
-
-            CAfxD3d9IndexBuffer* val = new CAfxD3d9IndexBuffer(this);
-            retval = val->GetObj();
-
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(9);
-            args->SetInt(0,
-                         (int)CefDrawingInteropMessage::D3d9CreateIndexBuffer);
-            val->InsertIdAsTwoInts(args, 1, 2);
-            args->SetInt(3, (int)arguments[0]->GetUIntValue());
-            args->SetInt(4, (int)arguments[1]->GetUIntValue());
-            args->SetInt(5, (int)arguments[2]->GetUIntValue());
-            args->SetInt(6, (int)arguments[3]->GetUIntValue());
-            if (nullptr != drawingHandle)
-              drawingHandle->InsertIdAsTwoInts(args, 7, 8);
-            else {
-              args->SetInt(7, 0);
-              args->SetInt(8, 0);
-            }
-
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9CreateVertexBuffer.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9CreateVertexBuffer",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (5 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[2] && arguments[3] && arguments[4] &&
-              arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
-              arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
-            CAfxDrawingHandle* drawingHandle = nullptr;
-
-            if (arguments[4]->GetUserData() && arguments[4]
-                    ->GetUserData() && static_cast<CAfxInteropUserData*>(
-                    arguments[4]->GetUserData().get())
-                    ->GetUserDataType() == AfxUserDataType::AfxDrawingHandle)
-              drawingHandle = static_cast<CAfxDrawingHandle*>(
-                  static_cast<CAfxInteropUserData*>(
-                      arguments[4]->GetUserData().get()));
-
-            CAfxD3d9VertexBuffer* val = new CAfxD3d9VertexBuffer(this);
-            retval = val->GetObj();
-
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(9);
-            args->SetInt(0,
-                         (int)CefDrawingInteropMessage::D3d9CreateVertexBuffer);
-            val->InsertIdAsTwoInts(args, 1, 2);
-            args->SetInt(3, (int)arguments[0]->GetUIntValue());
-            args->SetInt(4, (int)arguments[1]->GetUIntValue());
-            args->SetInt(5, (int)arguments[2]->GetUIntValue());
-            args->SetInt(6, (int)arguments[3]->GetUIntValue());
-            if (nullptr != drawingHandle)
-              drawingHandle->InsertIdAsTwoInts(args, 7, 8);
-            else {
-              args->SetInt(7, 0);
-              args->SetInt(8, 0);
-            }
-
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9CreateTexture.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9CreateTexture",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (7 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[2] && arguments[3] && arguments[4] && arguments[5] &&
-              arguments[0]->IsUInt() &&
-              arguments[1]->IsUInt() && arguments[2]->IsUInt() &&
-              arguments[3]->IsUInt() && arguments[5]->IsUInt() &&
-              arguments[4]->IsUInt()) {
-            CAfxDrawingHandle* drawingHandle = nullptr;
-
-            if (arguments[6]->GetUserData() &&
-                static_cast<CAfxInteropUserData*>(
-                    arguments[6]->GetUserData().get())
-                    ->GetUserDataType() == AfxUserDataType::AfxDrawingHandle)
-              drawingHandle = static_cast<CAfxDrawingHandle*>(
-                  static_cast<CAfxInteropUserData*>(
-                      arguments[6]->GetUserData().get()));
-
-            CAfxD3d9Texture* val = new CAfxD3d9Texture(this);
-            retval = val->GetObj();
-
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(11);
-            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9CreateTexture);
-            val->InsertIdAsTwoInts(args, 1, 2);
-            args->SetInt(3, (int)arguments[0]->GetUIntValue());
-            args->SetInt(4, (int)arguments[1]->GetUIntValue());
-            args->SetInt(5, (int)arguments[2]->GetUIntValue());
-            args->SetInt(6, (int)arguments[3]->GetUIntValue());
-            args->SetInt(7, (int)arguments[4]->GetUIntValue());
-            args->SetInt(8, (int)arguments[5]->GetUIntValue());
-            if (nullptr != drawingHandle)
-              drawingHandle->InsertIdAsTwoInts(args, 9, 10);
-            else {
-              args->SetInt(9, 0);
-              args->SetInt(10, 0);
-            }
-
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9CreateVertexShader.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9CreateVertexShader",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-                CefString& exceptionoverride) {
-          if (1 == arguments.size() && arguments[0] &&
-              arguments[0]->GetUserData() &&
-              static_cast<CAfxInteropUserData*>(
-                  arguments[0]->GetUserData().get())
-                      ->GetUserDataType() == AfxUserDataType::AfxDrawingData) {
-            auto drawingData =
-                static_cast<CAfxDrawingData*>(static_cast<CAfxInteropUserData*>(
-                    arguments[0]->GetUserData().get()));
-
-            if (drawingData) {
-              CAfxD3d9VertexShader* val = new CAfxD3d9VertexShader(this);
-              retval = val->GetObj();
-
-              auto message = CefProcessMessage::Create("afx-interop");
-              auto args = message->GetArgumentList();
-              args->SetSize(5);
-              args->SetInt(
-                  0,
-                  (int)CefDrawingInteropMessage::D3d9CreateVertexShader);
-              val->InsertIdAsTwoInts(args, 1, 2);
-              drawingData->InsertIdAsTwoInts(args, 3, 4);
-
-              SendProcessMessage(PID_BROWSER, message);
-              return true;
-            }
-          }
-
-          return false;
-        });
-    m_D3d9CreatePixelShader.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9CreatePixelShader",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (1 == arguments.size() && arguments[0] &&
-              arguments[0]->GetUserData() &&
-              static_cast<CAfxInteropUserData*>(
-                  arguments[0]->GetUserData().get())
-                      ->GetUserDataType() == AfxUserDataType::AfxDrawingData) {
-            auto drawingData =
-                static_cast<CAfxDrawingData*>(static_cast<CAfxInteropUserData*>(
-                    arguments[0]->GetUserData().get()));
-
-            if (drawingData) {
-              CAfxD3d9PixelShader* val = new CAfxD3d9PixelShader(this);
-              retval = val->GetObj();
-
-              auto message = CefProcessMessage::Create("afx-interop");
-              auto args = message->GetArgumentList();
-              args->SetSize(5);
-              args->SetInt(
-                  0,
-                  (int)CefDrawingInteropMessage::D3d9CreatePixelShader);
-              val->InsertIdAsTwoInts(args, 1, 2);
-              drawingData->InsertIdAsTwoInts(args, 3, 4);
-
-              SendProcessMessage(PID_BROWSER, message);
-              return true;
-            }
-          }
-
-          return false;
-        });
-    m_D3d9UpdateTexture.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9UpdateTexture",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (3 == arguments.size() && arguments[0] && arguments[1]) {
-            CAfxD3d9Texture* val = nullptr;
-            if (arguments[0]->GetUserData() &&
-                static_cast<CAfxInteropUserData*>(
-                    arguments[0]->GetUserData().get())
-                    ->GetUserDataType() == AfxUserDataType::AfxD3d9Texture)
-              val = static_cast<CAfxD3d9Texture*>(
-                  static_cast<CAfxInteropUserData*>(
-                      arguments[0]->GetUserData().get()));
-
-            CAfxD3d9Texture* val2 = nullptr;
-            if (arguments[1]->GetUserData() &&
-                static_cast<CAfxInteropUserData*>(
-                    arguments[1]->GetUserData().get())
-                    ->GetUserDataType() == AfxUserDataType::AfxD3d9Texture)
-              val2 = static_cast<CAfxD3d9Texture*>(
-                  static_cast<CAfxInteropUserData*>(
-                      arguments[1]->GetUserData().get()));
-
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(5);
-            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9UpdateTexture);
-            if (val)
-              val->InsertIdAsTwoInts(args, 1, 2);
-            else {
-              args->SetInt(1, 0);
-              args->SetInt(2, 0);
-            }
-            if (val2)
-              val2->InsertIdAsTwoInts(args, 3, 4);
-            else {
-              args->SetInt(3, 0);
-              args->SetInt(4, 0);
-            }
-
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9SetViewport.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetViewport",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (0 == arguments.size()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(1);
-            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetViewport);
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          } else if (1 == arguments.size() && arguments[0] &&
-                     arguments[0]->IsObject()) {
-            auto x = arguments[0]->GetValue("x");
-            auto y = arguments[0]->GetValue("y");
-            auto width = arguments[0]->GetValue("width");
-            auto height = arguments[0]->GetValue("height");
-            auto minZ = arguments[0]->GetValue("minZ");
-            auto maxZ = arguments[0]->GetValue("maxZ");
-
-            if (x && y && width && height && minZ && maxZ && x->IsUInt() &&
-                y->IsUInt() && width->IsUInt() && height->IsUInt() &&
-                minZ->IsDouble() && maxZ->IsDouble()) {
-              auto message = CefProcessMessage::Create("afx-interop");
-              auto args = message->GetArgumentList();
-              args->SetSize(7);
-              args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetViewport);
-              args->SetInt(1, (int)x->GetUIntValue());
-              args->SetInt(2, (int)y->GetUIntValue());
-              args->SetInt(3, (int)width->GetUIntValue());
-              args->SetInt(4, (int)height->GetUIntValue());
-              args->SetDouble(5, (int)minZ->GetUIntValue());
-              args->SetDouble(6, (int)maxZ->GetUIntValue());
-              SendProcessMessage(PID_BROWSER, message);
-              return true;
-            }
-          }
-
-          return false;
-        });
-    m_D3d9SetRenderState.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetRenderState",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[0]->IsUInt() && arguments[1]->IsUInt()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(3);
-            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetRenderState);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            args->SetInt(2, (int)arguments[1]->GetUIntValue());
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9SetSamplerState.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetSamplerState",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (3 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[2] && arguments[0]->IsUInt() &&
-              arguments[1]->IsUInt() && arguments[2]->IsUInt()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(4);
-            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetSamplerState);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            args->SetInt(2, (int)arguments[1]->GetUIntValue());
-            args->SetInt(3, (int)arguments[2]->GetUIntValue());
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9SetTexture.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetTexture",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[0]->IsUInt()) {
-            CAfxD3d9Texture* val = nullptr;
-            if (arguments[1]->GetUserData() &&
-                static_cast<CAfxInteropUserData*>(
-                    arguments[1]->GetUserData().get())
-                    ->GetUserDataType() == AfxUserDataType::AfxD3d9Texture)
-              val = static_cast<CAfxD3d9Texture*>(
-                  static_cast<CAfxInteropUserData*>(
-                      arguments[1]->GetUserData().get()));
-
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(4);
-            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetTexture);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            if (val)
-              val->InsertIdAsTwoInts(args, 2, 3);
-            else {
-              args->SetInt(2, 0);
-              args->SetInt(3, 0);
-            }
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9SetTextureStageState.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetTextureStageState",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (3 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[2] && arguments[0]->IsUInt() &&
-              arguments[1]->IsUInt() && arguments[2]->IsUInt()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(4);
-            args->SetInt(
-                0, (int)CefDrawingInteropMessage::D3d9SetTextureStageState);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            args->SetInt(2, (int)arguments[1]->GetUIntValue());
-            args->SetInt(3, (int)arguments[2]->GetUIntValue());
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9SetTransform.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetTransform",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[0]->IsUInt()) {
-            if (arguments[1]->IsArray() &&
-                arguments[1]->GetArrayLength() == 16) {
-              auto message = CefProcessMessage::Create("afx-interop");
-              auto args = message->GetArgumentList();
-              args->SetSize(18);
-              args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetTransform);
-              args->SetInt(1, (int)arguments[0]->GetUIntValue());
-              bool bOk = true;
-              for (int i = 0; i < 16; ++i) {
-                auto arrVal = arguments[1]->GetValue(i);
-
-                if (arrVal && arrVal->IsDouble()) {
-                  args->SetDouble(i + 2, arrVal->GetDoubleValue());
-                } else {
-                  bOk = false;
-                  break;
-                }
-              }
-              if (bOk) {
-                SendProcessMessage(PID_BROWSER, message);
-                return true;
-              }
-            } else {
-              auto message = CefProcessMessage::Create("afx-interop");
-              auto args = message->GetArgumentList();
-              args->SetSize(2);
-              args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetTransform);
-              args->SetInt(1, (int)arguments[0]->GetUIntValue());
-
-              SendProcessMessage(PID_BROWSER, message);
-              return true;
-            }
-          }
-
-          return false;
-        });
-    m_D3d9SetIndices.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetIndices",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[0]->IsUInt()) {
-            CAfxD3d9IndexBuffer* val = nullptr;
-            if (arguments[1]->GetUserData() &&
-                static_cast<CAfxInteropUserData*>(
-                    arguments[1]->GetUserData().get())
-                    ->GetUserDataType() == AfxUserDataType::AfxD3d9IndexBuffer)
-              val = static_cast<CAfxD3d9IndexBuffer*>(
-                  static_cast<CAfxInteropUserData*>(
-                      arguments[1]->GetUserData().get()));
-
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(4);
-            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetIndices);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            if (val)
-              val->InsertIdAsTwoInts(args, 2, 3);
-            else {
-              args->SetInt(2, 0);
-              args->SetInt(3, 0);
-            }
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9SetStreamSource.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetStreamSource",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (1 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[2] && arguments[3] && arguments[0]->IsUInt() &&
-              arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
-            CAfxD3d9IndexBuffer* val = nullptr;
-            if (arguments[1]->GetUserData() &&
-                static_cast<CAfxInteropUserData*>(
-                    arguments[1]->GetUserData().get())
-                    ->GetUserDataType() == AfxUserDataType::AfxD3d9IndexBuffer)
-              val = static_cast<CAfxD3d9IndexBuffer*>(
-                  static_cast<CAfxInteropUserData*>(
-                      arguments[1]->GetUserData().get()));
-
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(6);
-            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetStreamSource);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            if (val)
-              val->InsertIdAsTwoInts(args, 2, 3);
-            else {
-              args->SetInt(2, 0);
-              args->SetInt(3, 0);
-            }
-            args->SetInt(4, (int)arguments[2]->GetUIntValue());
-            args->SetInt(5, (int)arguments[3]->GetUIntValue());
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9SetStreamSourceFreq.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetStreamSourceFreq",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[0]->IsUInt() && arguments[1]->IsUInt()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(3);
-            args->SetInt(
-                0, (int)CefDrawingInteropMessage::D3d9SetStreamSourceFreq);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            args->SetInt(2, (int)arguments[1]->GetUIntValue());
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9SetVertexDeclaration.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexDeclaration",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[0]->IsUInt()) {
-            CAfxD3d9VertexDeclaration* val = nullptr;
-            if (arguments[1]->GetUserData() &&
-                static_cast<CAfxInteropUserData*>(
-                    arguments[1]->GetUserData().get())
-                    ->GetUserDataType() ==
-                AfxUserDataType::AfxD3d9VertexDeclaration)
-              val = static_cast<CAfxD3d9VertexDeclaration*>(
-                  static_cast<CAfxInteropUserData*>(
-                      arguments[1]->GetUserData().get()));
-
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(4);
-            args->SetInt(
-                0, (int)CefDrawingInteropMessage::D3d9SetVertexDeclaration);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            if (val)
-              val->InsertIdAsTwoInts(args, 2, 3);
-            else {
-              args->SetInt(2, 0);
-              args->SetInt(3, 0);
-            }
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9SetVertexShader.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShader",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[0]->IsUInt()) {
-            CAfxD3d9VertexShader* val = nullptr;
-            if (arguments[1]->GetUserData() &&
-                static_cast<CAfxInteropUserData*>(
-                    arguments[1]->GetUserData().get())
-                    ->GetUserDataType() == AfxUserDataType::AfxD3d9VertexShader)
-              val = static_cast<CAfxD3d9VertexShader*>(
-                  static_cast<CAfxInteropUserData*>(
-                      arguments[1]->GetUserData().get()));
-
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(4);
-            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetVertexShader);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            if (val)
-              val->InsertIdAsTwoInts(args, 2, 3);
-            else {
-              args->SetInt(2, 0);
-              args->SetInt(3, 0);
-            }
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9SetVertexShaderConstantB.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShaderConstantB",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[2] && arguments[0]->IsUInt() &&
-              arguments[2]->IsArray()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-
-            size_t arrLen = arguments[2]->GetArrayLength();
-
-            args->SetSize(2 + arrLen);
-            args->SetInt(
-                0, (int)CefDrawingInteropMessage::D3d9SetVertexShaderConstantB);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            bool bOk = true;
-            for (int i = 0; i < arrLen; ++i) {
-              auto arrVal = arguments[2]->GetValue(i);
-
-              if (arrVal && arrVal->IsBool()) {
-                args->SetBool(i + 2, arrVal->GetBoolValue());
-              } else {
-                bOk = false;
-                break;
-              }
-            }
-            if (bOk) {
-              SendProcessMessage(PID_BROWSER, message);
-              return true;
-            }
-          }
-
-          return false;
-        });
-    m_D3d9SetVertexShaderConstantF.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShaderConstantF",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[2] && arguments[0]->IsUInt() &&
-              arguments[2]->IsArray()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-
-            size_t arrLen = arguments[2]->GetArrayLength();
-
-            args->SetSize(2 + arrLen);
-            args->SetInt(
-                0, (int)CefDrawingInteropMessage::D3d9SetVertexShaderConstantF);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            bool bOk = true;
-            for (int i = 0; i < arrLen; ++i) {
-              auto arrVal = arguments[2]->GetValue(i);
-
-              if (arrVal && arrVal->IsDouble()) {
-                args->SetDouble(i + 2, arrVal->GetDoubleValue());
-              } else {
-                bOk = false;
-                break;
-              }
-            }
-            if (bOk) {
-              SendProcessMessage(PID_BROWSER, message);
-              return true;
-            }
-          }
-
-          return false;
-        });
-    m_D3d9SetVertexShaderConstantI.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetVertexShaderConstantI",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[2] && arguments[0]->IsUInt() &&
-              arguments[2]->IsArray()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-
-            size_t arrLen = arguments[2]->GetArrayLength();
-
-            args->SetSize(2 + arrLen);
-            args->SetInt(
-                0, (int)CefDrawingInteropMessage::D3d9SetVertexShaderConstantI);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            bool bOk = true;
-            for (int i = 0; i < arrLen; ++i) {
-              auto arrVal = arguments[2]->GetValue(i);
-
-              if (arrVal && arrVal->IsInt()) {
-                args->SetInt(i + 2, arrVal->GetIntValue());
-              } else {
-                bOk = false;
-                break;
-              }
-            }
-            if (bOk) {
-              SendProcessMessage(PID_BROWSER, message);
-              return true;
-            }
-          }
-
-          return false;
-        });
-    m_D3d9SetPixelShader.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShader",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[0]->IsUInt()) {
-            CAfxD3d9PixelShader* val = nullptr;
-            if (arguments[1]->GetUserData() &&
-                static_cast<CAfxInteropUserData*>(
-                    arguments[1]->GetUserData().get())
-                    ->GetUserDataType() == AfxUserDataType::AfxD3d9PixelShader)
-              val = static_cast<CAfxD3d9PixelShader*>(
-                  static_cast<CAfxInteropUserData*>(
-                      arguments[1]->GetUserData().get()));
-
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(4);
-            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9SetPixelShader);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            if (val)
-              val->InsertIdAsTwoInts(args, 2, 3);
-            else {
-              args->SetInt(2, 0);
-              args->SetInt(3, 0);
-            }
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9SetPixelShaderConstantB.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShaderConstantB",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[2] && arguments[0]->IsUInt() &&
-              arguments[2]->IsArray()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-
-            size_t arrLen = arguments[2]->GetArrayLength();
-
-            args->SetSize(2 + arrLen);
-            args->SetInt(
-                0, (int)CefDrawingInteropMessage::D3d9SetPixelShaderConstantB);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            bool bOk = true;
-            for (int i = 0; i < arrLen; ++i) {
-              auto arrVal = arguments[2]->GetValue(i);
-
-              if (arrVal && arrVal->IsBool()) {
-                args->SetBool(i + 2, arrVal->GetBoolValue());
-              } else {
-                bOk = false;
-                break;
-              }
-            }
-            if (bOk) {
-              SendProcessMessage(PID_BROWSER, message);
-              return true;
-            }
-          }
-
-          return false;
-        });
-    m_D3d9SetPixelShaderConstantF.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShaderConstantF",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[2] && arguments[0]->IsUInt() &&
-              arguments[2]->IsArray()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-
-            size_t arrLen = arguments[2]->GetArrayLength();
-
-            args->SetSize(2 + arrLen);
-            args->SetInt(
-                0, (int)CefDrawingInteropMessage::D3d9SetPixelShaderConstantF);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            bool bOk = true;
-            for (int i = 0; i < arrLen; ++i) {
-              auto arrVal = arguments[2]->GetValue(i);
-
-              if (arrVal && arrVal->IsDouble()) {
-                args->SetDouble(i + 2, arrVal->GetDoubleValue());
-              } else {
-                bOk = false;
-                break;
-              }
-            }
-            if (bOk) {
-              SendProcessMessage(PID_BROWSER, message);
-              return true;
-            }
-          }
-
-          return false;
-        });
-    m_D3d9SetPixelShaderConstantI.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9SetPixelShaderConstantI",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[2] && arguments[0]->IsUInt() &&
-              arguments[2]->IsArray()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-
-            size_t arrLen = arguments[2]->GetArrayLength();
-
-            args->SetSize(2 + arrLen);
-            args->SetInt(
-                0, (int)CefDrawingInteropMessage::D3d9SetPixelShaderConstantI);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            bool bOk = true;
-            for (int i = 0; i < arrLen; ++i) {
-              auto arrVal = arguments[2]->GetValue(i);
-
-              if (arrVal && arrVal->IsInt()) {
-                args->SetInt(i + 2, arrVal->GetIntValue());
-              } else {
-                bOk = false;
-                break;
-              }
-            }
-            if (bOk) {
-              SendProcessMessage(PID_BROWSER, message);
-              return true;
-            }
-          }
-
-          return false;
-        });
-    m_D3d9DrawPrimitive.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9DrawPrimitive",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (3 == arguments.size() && arguments[0] && arguments[1] &&
-              arguments[2] && arguments[0]->IsUInt() &&
-              arguments[1]->IsUInt() && arguments[2]->IsUInt()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(4);
-            args->SetInt(0, (int)CefDrawingInteropMessage::D3d9DrawPrimitive);
-            args->SetInt(1, (int)arguments[0]->GetUIntValue());
-            args->SetInt(2, (int)arguments[1]->GetUIntValue());
-            args->SetInt(3, (int)arguments[2]->GetUIntValue());
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_D3d9DrawIndexedPrimitive.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "d3d9DrawIndexedPrimitive",
-        [this](const CefString& name,
-                         CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval,
-                         CefString& exceptionoverride) {
-      if (6 == arguments.size() && arguments[0] && arguments[1] &&
-          arguments[2] && arguments[3] && arguments[4] && arguments[5] &&
-          arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
-          arguments[2]->IsUInt() && arguments[3]->IsUInt() &&
-          arguments[4]->IsUInt() && arguments[5]->IsUInt()) {
-        auto message = CefProcessMessage::Create("afx-interop");
-        auto args = message->GetArgumentList();
-        args->SetSize(7);
-        args->SetInt(0,
-                     (int)CefDrawingInteropMessage::D3d9DrawIndexedPrimitive);
-        args->SetInt(1, (int)arguments[0]->GetUIntValue());
-        args->SetInt(2, (int)arguments[1]->GetUIntValue());
-        args->SetInt(3, (int)arguments[2]->GetUIntValue());
-        args->SetInt(4, (int)arguments[0]->GetUIntValue());
-        args->SetInt(5, (int)arguments[1]->GetUIntValue());
-        args->SetInt(6, (int)arguments[2]->GetUIntValue());
-        SendProcessMessage(PID_BROWSER, message);
-        return true;
-      }
-
-      return false;
-  });
-    m_WaitForGpu.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "waitForGpu",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (0 == arguments.size()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(1);
-            args->SetInt(0, (int)CefDrawingInteropMessage::WaitForGpu);
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_BeginCleanState.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "beginCleanState",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (0 == arguments.size()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(1);
-            args->SetInt(0, (int)CefDrawingInteropMessage::BeginCleanState);
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_EndCleanState.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "endCleanState",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (0 == arguments.size()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-            args->SetSize(1);
-            args->SetInt(0, (int)CefDrawingInteropMessage::EndCleanState);
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_CreateCefWindowTextureSharedHandle.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "createCefWindowTextureSharedHandle",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (0 == arguments.size()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-
-            CAfxDrawingHandle* val = new CAfxDrawingHandle(this);
-            retval = val->GetObj();
-
-            args->SetSize(3);
-            args->SetInt(0, (int)CefDrawingInteropMessage::
-                                CreateCefWindowTextureSharedHandle);
-            val->InsertIdAsTwoInts(args, 1, 2);
-
-            SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          return false;
-        });
-    m_CreateDrawingData.InitFunc(
-        object, this, m_ExecuteMap, m_GetMap, "createDrawingData",
-        [this](const CefString& name, CefRefPtr<CefV8Value> object,
-           const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-           CefString& exceptionoverride) {
-          if (1 == arguments.size() && arguments[0] && arguments[0]->IsUInt()) {
-            auto message = CefProcessMessage::Create("afx-interop");
-            auto args = message->GetArgumentList();
-
-            unsigned int size = arguments[0]->GetUIntValue();
-            if (void* pData = malloc(size)) {
-              CAfxDrawingData* val = new CAfxDrawingData(this, size, pData);
-              retval = val->GetObj();
-
-              args->SetSize(4);
-              args->SetInt(0, (int)CefDrawingInteropMessage::CreateDrawingData);
-              args->SetInt(1, (int)arguments[0]->GetUIntValue());
-              val->InsertIdAsTwoInts(args, 2, 3);
-
-              SendProcessMessage(PID_BROWSER, message);
-              return true;
-            }
-          }
-
-          return false;
-        });
   }
 
-  virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
-                                        CefRefPtr<CefFrame> frame,
-                                        CefProcessId source_process,
-                                        CefRefPtr<CefProcessMessage> message) {
+virtual bool OnProcessMessageReceived(
+      CefRefPtr<CefBrowser> browser,
+      CefRefPtr<CefFrame> frame,
+      CefProcessId source_process,
+      CefRefPtr<CefProcessMessage> message) override {
     auto const name = message->GetName().ToString();
 
-    if (name == "afx-interop") {
+    if (name == "afx-message") {
       auto const args = message->GetArgumentList();
       auto const argC = args->GetSize();
 
-      if (1 <= argC) {
-        int msg_id = args->GetInt(0);
+      if (1 == argC && VTYPE_STRING == args->GetType(0)) {
+        CefV8ValueList execArgs;
+        execArgs.push_back(CefV8Value::CreateInt(browser->GetIdentifier()));
+        execArgs.push_back(CefV8Value::CreateString(args->GetString(0)));
 
-        switch ((CefEngineInteropMessage)msg_id) {
-            case CefEngineInteropMessage::DeviceReset:
-            m_OnDeviceReset.ExecuteCallback(CefV8ValueList());
-                return true;
-        }
-
+        m_OnMessage->ExecuteCallback(execArgs);
       }
+    } else if (name == "afx-error") {
+      auto const args = message->GetArgumentList();
+      auto const argC = args->GetSize();
+
+      if (1 == argC && VTYPE_STRING == args->GetType(0)) {
+        CefV8ValueList execArgs;
+        execArgs.push_back(CefV8Value::CreateInt(browser->GetIdentifier()));
+        execArgs.push_back(CefV8Value::CreateString(args->GetString(0)));
+
+        m_OnError->ExecuteCallback(execArgs);
+      }
+    } else if (name == "afx-interop-resolve") {
+      auto const args = message->GetArgumentList();
+
+      CCreateInterop::Resolve((unsigned int)args->GetInt(0),
+                              (unsigned int)args->GetInt(1), args->GetInt(2));
+    } else if (name == "afx-interop-reject") {
+      auto const args = message->GetArgumentList();
+
+      CCreateInterop::Reject((unsigned int)args->GetInt(0),
+                             (unsigned int)args->GetInt(1), args->GetString(2));
     }
 
     return false;
   }
 
-  virtual bool Execute(const CefString& name,
-                       CefRefPtr<CefV8Value> object,
-                       const CefV8ValueList& arguments,
-                       CefRefPtr<CefV8Value>& retval,
-                       CefString& exception) override {
-  
-    auto it = m_ExecuteMap.find(name.ToString());
-
-    if (it != m_ExecuteMap.end()) {
-      it->second(name, object, arguments, retval, exception);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool Get(const CefString& name,
-      const CefRefPtr<CefV8Value> object,
-      CefRefPtr<CefV8Value>& retval,
-      CefString& exception) override {
-
-      auto it = m_GetMap.find(name.ToString());
-
-      if (it != m_GetMap.end())
-        return it->second(name, object, retval, exception);
-
-      return false;
-  }
-
-  bool Set(const CefString& name,
-           const CefRefPtr<CefV8Value> object,
-           const CefRefPtr<CefV8Value> value,
-           CefString& exception) override {
-    auto it = m_SetMap.find(name.ToString());
-
-    if (it != m_SetMap.end())
-      return it->second(name, object, value, exception);
-
-    return false;
-  }
 
  protected:
 
@@ -4168,7 +4630,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
               ++commandIndex;
             }
 
-            if (m_CommandsCallback.IsValid()) m_CommandsCallback.ExecuteCallback(args);
+            if (m_CommandsCallback->IsValid()) m_CommandsCallback->ExecuteCallback(args);
           }
 
           if (!m_PipeServer->WriteCompressedUInt32((UINT32)m_Commands.size()))
@@ -4318,12 +4780,12 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
           outAfterHud = false;
           outAfterRenderView = false;
 
-          if (m_RenderViewBeginCallback.IsValid()) {
+          if (m_RenderViewBeginCallback->IsValid()) {
             CefV8ValueList args;
             args.push_back(CreateAfxRenderInfo(renderInfo));
 
             CefRefPtr<CefV8Value> retval =
-                m_RenderViewBeginCallback.ExecuteCallback(args);
+                m_RenderViewBeginCallback->ExecuteCallback(args);
 
             if (NULL != retval && retval->IsObject()) {
               CefRefPtr<CefV8Value> beforeTranslucentShadow =
@@ -4389,19 +4851,19 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
         } break;
 
         case EngineMessage::OnRenderViewEnd:
-          if (m_RenderViewEndCallback.IsValid())
-            m_RenderViewEndCallback.ExecuteCallback(CefV8ValueList());
+          if (m_RenderViewEndCallback->IsValid())
+            m_RenderViewEndCallback->ExecuteCallback(CefV8ValueList());
           done = true;
           break;
 
         case EngineMessage::BeforeHud:
-          if (m_HudBeginCallback.IsValid())
-            m_HudBeginCallback.ExecuteCallback(CefV8ValueList());
+          if (m_HudBeginCallback->IsValid())
+            m_HudBeginCallback->ExecuteCallback(CefV8ValueList());
           break;
 
         case EngineMessage::AfterHud:
-          if (m_HudEndCallback.IsValid())
-            m_HudEndCallback.ExecuteCallback(CefV8ValueList());
+          if (m_HudEndCallback->IsValid())
+            m_HudEndCallback->ExecuteCallback(CefV8ValueList());
           break;
 
         case EngineMessage::BeforeTranslucentShadow:
@@ -4439,7 +4901,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
           if (!m_PipeServer->ReadSingle(Fov))
             return false;
 
-          if (m_OnViewOverrideCallback.IsValid()) {
+          if (m_OnViewOverrideCallback->IsValid()) {
 
         CefRefPtr<CefV8Value> obj =
                 CefV8Value::CreateObject(nullptr, nullptr);
@@ -4461,7 +4923,7 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
 
             CefV8ValueList args;
             CefRefPtr<CefV8Value> retval =
-                m_OnViewOverrideCallback.ExecuteCallback(args);
+                m_OnViewOverrideCallback->ExecuteCallback(args);
 
             bool overriden = false;
 
@@ -4583,7 +5045,8 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
     if (!m_PipeServer->Flush())
       return false;
 
-    if(m_NewConnectionCallback.IsValid()) m_NewConnectionCallback.ExecuteCallback(CefV8ValueList());
+    if (m_NewConnectionCallback->IsValid())
+      m_NewConnectionCallback->ExecuteCallback(CefV8ValueList());
     return true;
   }
 
@@ -4672,1054 +5135,22 @@ class CEngineInteropImpl : public CEngineInterop, public CInterop {
     return obj;
   }
 
-  CefRefPtr<CefBrowser> const m_Browser;
-  CefRefPtr<CefFrame> const m_Frame;
-  CefRefPtr<CefV8Context> const m_Context;
-
-  typedef std::function<bool(const CefString& name,
-                             CefRefPtr<CefV8Value> object,
-                             const CefV8ValueList& arguments,
-                             CefRefPtr<CefV8Value>& retval,
-                             CefString& exception)>
-      Execute_t;
-
-  typedef std::function<bool(const CefString& name,
-                             const CefRefPtr<CefV8Value> object,
-                             CefRefPtr<CefV8Value>& retval,
-                             CefString& exception)>
-      Get_t;
-
-  typedef std::function<bool(const CefString& name,
-                             const CefRefPtr<CefV8Value> object,
-                             const CefRefPtr<CefV8Value> value,
-                             CefString& exception)>
-      Set_t;
-
-  typedef std::unordered_map<std::string, Execute_t> ExecuteMap_t;
-  typedef std::unordered_map<std::string, Get_t> GetMap_t;
-  typedef std::unordered_map<std::string, Set_t> SetMap_t;
-
-  ExecuteMap_t m_ExecuteMap;
-  GetMap_t m_GetMap;
-  SetMap_t m_SetMap;
-
-
-  class CFunc{
-   public:
-    void InitFunc(CefRefPtr<CefV8Value> object,
-                  CefRefPtr<CefV8Handler> const& handler,
-                  ExecuteMap_t& executeMap,
-                  GetMap_t& getMap,
-                  const char* name,
-                  Execute_t execute) {
-      m_Fn = CefV8Value::CreateFunction(name, handler);
-
-      executeMap.emplace(name, execute);
-
-      getMap.emplace(std::piecewise_construct, std::forward_as_tuple(name),
-                     std::forward_as_tuple(std::bind<bool>(
-                         &CFunc::Get, this, std::placeholders::_1,
-                         std::placeholders::_2, std::placeholders::_3,
-                         std::placeholders::_4)));
-
-      object->SetValue(name, V8_ACCESS_CONTROL_DEFAULT,
-                       V8_PROPERTY_ATTRIBUTE_NONE);
-    }
-
-    ~CFunc() { m_Fn = nullptr; }
-
-    bool Get(const CefString& name,
-             const CefRefPtr<CefV8Value> object,
-             CefRefPtr<CefV8Value>& retval,
-             CefString& exception) {
-
-      retval = m_Fn;
-      return true;;
-    }
-
-   protected:
-    CefRefPtr<CefV8Value> m_Fn;
-  };
-
-  class CCallback : public CFunc {
-   public:
-    void InitCallback(const CefRefPtr<CefV8Context>& context,
-                      const CefRefPtr<CefV8Value>& object,
-              CefRefPtr<CefV8Handler> const& handler,
-              ExecuteMap_t& executeMap,
-              GetMap_t& getMap,
-                      const char* name){
-
-      InitFunc(object, handler, executeMap, getMap, name,
-               [this](const CefString& name, CefRefPtr<CefV8Value> object,
-                      const CefV8ValueList& arguments,
-                      CefRefPtr<CefV8Value>& retval, CefString& exception) {
-                 if (1 <= arguments.size()) {
-                   const CefRefPtr<CefV8Value>& arg0 = arguments[0];
-                   if (arg0->IsFunction()) {
-                     m_CallbackFunc = arguments[0];
-                     return true;
-                   } else if (arg0->IsNull()) {
-                     m_CallbackFunc = nullptr;
-                     return true;
-                   }
-                 }
-
-                 return false;
-               });
-
-      m_CallbackContext = context;
-    }
-
-    ~CCallback() {
-      m_CallbackFunc = nullptr;
-      m_CallbackContext = nullptr;
-    }
-
-    bool IsValid() {
-        return m_CallbackFunc != nullptr;
-    }
-
-    CefRefPtr<CefV8Value> ExecuteCallback(const CefV8ValueList& arguments) {
-
-      return m_CallbackFunc->ExecuteFunctionWithContext(m_CallbackContext, NULL,
-                                                        arguments);
-    }
-
-   private:
-    CefRefPtr<CefV8Value> m_CallbackFunc;
-    CefRefPtr<CefV8Context> m_CallbackContext;
-  };
-
-  class CAfxInteropUserData : public CefBaseRefCounted {
-   public:
-    CAfxInteropUserData(AfxUserDataType userDataType)
-        : m_UserDataType(userDataType) {}
-
-    AfxUserDataType GetUserDataType() const { return m_UserDataType; }
-
-   protected:
-       ~CAfxInteropUserData() {
-
-    }
-
-   private:
-    AfxUserDataType m_UserDataType;
-  };
-
-  void SendProcessMessage(CefProcessId target_process,
-                          CefRefPtr<CefProcessMessage> &message) {
-
-      m_Frame->SendProcessMessage(target_process, message);
-  }
-
-  class CAfxInteropImpl : public CAfxInteropUserData {
-   public:
-    CAfxInteropImpl(AfxUserDataType userDataType,
-                    CEngineInteropImpl * engineInteropImpl)
-        : CAfxInteropUserData(userDataType),
-          m_EngineInteropImpl(engineInteropImpl) {}
-
-    void InsertIdAsTwoInts(CefRefPtr<CefListValue>& list, int lo, int hi) {
-      list->SetInt(lo, ((int64)this) & 0xffffffff);
-      list->SetInt(hi, ((int64)this >> 32) & 0xffffffff);
-    }
-
-   protected:
-
-    void SendDrawingMessage(CefRefPtr<CefProcessMessage> &message) {
-      m_EngineInteropImpl->SendProcessMessage(PID_BROWSER, message);
-    }
-
-   private:
-    CEngineInteropImpl* m_EngineInteropImpl;
-  };
-
-  class CAfxDrawingHandle : public CAfxInteropImpl,
-                            public CefV8Accessor,
-                            public CefV8Handler {
-
-    IMPLEMENT_REFCOUNTING(CAfxDrawingHandle);
-
-   public:
-    CAfxDrawingHandle(CEngineInteropImpl* engineInteropImpl)
-        : CAfxInteropImpl(AfxUserDataType::AfxDrawingHandle,
-                          engineInteropImpl) {
-      m_Fn_Release = CefV8Value::CreateFunction("release", this);
-
-      m_Obj = CefV8Value::CreateObject(this, nullptr);
-      m_Obj->SetUserData(static_cast<CAfxInteropUserData*>(this));
-      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
-                      V8_PROPERTY_ATTRIBUTE_NONE);
-    }
-
-    virtual bool Execute(const CefString& name,
-                         CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval,
-                         CefString& exception) override {
-
-      if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-        DoRelease();
-        return true;
-      }
-
-      return false;
-    }
-
-    virtual bool Get(const CefString& name,
-                     const CefRefPtr<CefV8Value> object,
-                     CefRefPtr<CefV8Value>& retval,
-                     CefString& /*exception*/) override {
-
-      if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-        retval = m_Fn_Release;
-        return true;
-      }
-
-      return false;
-    }
-
-    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
-
-    bool Set(const CefString& name,
-             const CefRefPtr<CefV8Value> object,
-             const CefRefPtr<CefV8Value> value,
-             CefString& /*exception*/) override {
-      if (m_DoReleased)
-        return false;
-      return false;
-    }
-
-   private:
-    virtual ~CAfxDrawingHandle() { DoRelease(); }
-
-    CefRefPtr<CefV8Value> m_Fn_Release;
-    CefRefPtr<CefV8Value> m_Obj;
-    bool m_DoReleased = false;
-
-    void DoRelease() {
-      if (m_DoReleased)
-        return;
-
-      m_DoReleased = true;
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(3);
-      args->SetInt(0, (int)CefDrawingInteropMessage::AfxDrawingHandle_Release);
-      InsertIdAsTwoInts(args, 1, 2);
-
-      SendDrawingMessage(message);
-    }
-  };
-
-  class CAfxDrawingData : public CAfxInteropImpl,
-                            public CefV8Accessor,
-                            public CefV8Handler, public CefV8ArrayBufferReleaseCallback {
- 
-     IMPLEMENT_REFCOUNTING(CAfxDrawingData);
-
-   public:
-    CAfxDrawingData(CEngineInteropImpl* engineInteropImpl,
-                    unsigned int size,
-                    void* data)
-        : CAfxInteropImpl(AfxUserDataType::AfxDrawingData,
-                          engineInteropImpl) , m_Size(size), m_Data(data) {
-      m_Fn_Release = CefV8Value::CreateFunction("release", this);
-      m_Fn_Update = CefV8Value::CreateFunction("update", this);
-
-      m_Obj = CefV8Value::CreateObject(this, nullptr);
-      m_Obj->SetUserData(static_cast<CAfxInteropUserData*>(this));
-      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
-                      V8_PROPERTY_ATTRIBUTE_NONE);
-      m_Obj->SetValue("buffer", V8_ACCESS_CONTROL_DEFAULT,
-                      V8_PROPERTY_ATTRIBUTE_NONE);
-      m_Obj->SetValue("update", V8_ACCESS_CONTROL_DEFAULT,
-                      V8_PROPERTY_ATTRIBUTE_NONE);
-
-      m_Buffer = CefV8Value::CreateArrayBuffer(data, size, this);
-    }
-
-    virtual bool Execute(const CefString& name,
-                         CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval,
-                         CefString& exception) override {
-      if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-        DoRelease();
-        return true;
-      }
-
-      if (name == "update") {
-        if (2 == arguments.size() && arguments[0] && arguments[1] &&
-            arguments[0]->IsUInt() && arguments[1]->IsUInt()) {
-
-            //TODO: Make this more efficient maybe.
-
-            size_t offset = arguments[0]->GetUIntValue();
-            size_t size = arguments[0]->GetUIntValue();
-
-            if (offset + size > m_Size)
-              return false;
-
-            while(0 < size) {
-              size_t curSize = 1024;
-              if (size < curSize)
-                curSize = size;
-
-              auto message = CefProcessMessage::Create("afx-interop");
-              auto args = message->GetArgumentList();
-              args->SetSize(5);
-              args->SetInt(
-                  0, (int)CefDrawingInteropMessage::AfxDrawingData_Update);
-              InsertIdAsTwoInts(args, 1, 2);
-              args->SetInt(3, (int)offset);
-              args->SetBinary(4, CefBinaryValue::Create(
-                                     (unsigned char*)m_Data + offset, curSize));
-
-              offset += curSize;
-              size -= curSize;
-
-              SendDrawingMessage(message);
-            }
-
-            return true;
-        }
-      }
-
-      return false;
-    }
-
-    virtual bool Get(const CefString& name,
-                     const CefRefPtr<CefV8Value> object,
-                     CefRefPtr<CefV8Value>& retval,
-                     CefString& /*exception*/) override {
-      if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-        retval = m_Fn_Release;
-        return true;
-      }
-      if (name == "buffer") {
-        retval = m_Buffer;
-        return true;
-      }
-      if (name == "update") {
-        retval = m_Fn_Update;
-        return true;
-      }
-
-      return false;
-    }
-
-    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
-
-    bool Set(const CefString& name,
-             const CefRefPtr<CefV8Value> object,
-             const CefRefPtr<CefV8Value> value,
-             CefString& /*exception*/) override {
-      if (m_DoReleased)
-        return false;
-
-      return false;
-    }
-
-    virtual void ReleaseBuffer(void* buffer) override {
-      free(buffer);
-    }
-
-   private:
-    virtual ~CAfxDrawingData() {
-      DoRelease();
-      m_Buffer = nullptr;
-    }
-
-    CefRefPtr<CefV8Value> m_Fn_Release;
-    CefRefPtr<CefV8Value> m_Fn_Update;
-    CefRefPtr<CefV8Value> m_Obj;
-    CefRefPtr<CefV8Value> m_Buffer;
-    bool m_DoReleased = false;
-    size_t m_Size;
-    void * m_Data;
-
-    void DoRelease() {
-      if (m_DoReleased)
-        return;
-
-      m_DoReleased = true;
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(3);
-      args->SetInt(0, (int)CefDrawingInteropMessage::AfxDrawingData_Release);
-      InsertIdAsTwoInts(args, 1, 2);
-
-      SendDrawingMessage(message);
-    }
-  };
-
- class CAfxD3d9VertexDeclaration : public CAfxInteropImpl,
-                            public CefV8Accessor,
-                            public CefV8Handler {
-
-     IMPLEMENT_REFCOUNTING(CAfxD3d9VertexDeclaration);
-
-   public:
-   CAfxD3d9VertexDeclaration(CEngineInteropImpl* engineInteropImpl)
-        : CAfxInteropImpl(AfxUserDataType::AfxD3d9VertexDeclaration,
-                          engineInteropImpl) {
-      m_Fn_Release = CefV8Value::CreateFunction("release", this);
-
-      m_Obj = CefV8Value::CreateObject(this, nullptr);
-      m_Obj->SetUserData(static_cast<CAfxInteropUserData*>(this));
-      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
-                      V8_PROPERTY_ATTRIBUTE_NONE);
-    }
-
-    virtual bool Execute(const CefString& name,
-                         CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval,
-                         CefString& exception) override {
-      if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-        DoRelease();
-        return true;
-      }
-
-      return false;
-    }
-
-    virtual bool Get(const CefString& name,
-                     const CefRefPtr<CefV8Value> object,
-                     CefRefPtr<CefV8Value>& retval,
-                     CefString& /*exception*/) override {
-      if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-        retval = m_Fn_Release;
-        return true;
-      }
-
-      return false;
-    }
-
-    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
-
-    bool Set(const CefString& name,
-             const CefRefPtr<CefV8Value> object,
-             const CefRefPtr<CefV8Value> value,
-             CefString& /*exception*/) override {
-      if (m_DoReleased)
-        return false;
-      return false;
-    }
-
-   private:
-    virtual ~CAfxD3d9VertexDeclaration() { DoRelease(); }
-
-    CefRefPtr<CefV8Value> m_Fn_Release;
-    CefRefPtr<CefV8Value> m_Obj;
-    bool m_DoReleased = false;
-
-    void DoRelease() {
-      if (m_DoReleased)
-        return;
-
-      m_DoReleased = true;
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(3);
-      args->SetInt(0, (int)CefDrawingInteropMessage::AfxD3d9VertexDeclaration_Release);
-      InsertIdAsTwoInts(args, 1, 2);
-
-      SendDrawingMessage(message);
-    }
-  };
-
- class CAfxD3d9IndexBuffer : public CAfxInteropImpl,
-                            public CefV8Accessor,
-                            public CefV8Handler {
-
-     IMPLEMENT_REFCOUNTING(CAfxD3d9IndexBuffer);
-
-   public:
-   CAfxD3d9IndexBuffer(CEngineInteropImpl* engineInteropImpl)
-        : CAfxInteropImpl(AfxUserDataType::AfxD3d9IndexBuffer,
-                          engineInteropImpl) {
-      m_Fn_Release = CefV8Value::CreateFunction("release", this);
-      m_Fn_Update = CefV8Value::CreateFunction("update", this);
-
-      m_Obj = CefV8Value::CreateObject(this, nullptr);
-      m_Obj->SetUserData(static_cast<CAfxInteropUserData*>(this));
-      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
-                      V8_PROPERTY_ATTRIBUTE_NONE);
-      m_Obj->SetValue("update", V8_ACCESS_CONTROL_DEFAULT,
-                      V8_PROPERTY_ATTRIBUTE_NONE);
-   }
-
-    virtual bool Execute(const CefString& name,
-                         CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval,
-                         CefString& exception) override {
-     if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-       DoRelease();
-        return true;
-      }
-
-      if (name == "update") {
-        if (3 == arguments.size() && arguments[0] && arguments[1] &&
-            arguments[2] && arguments[0]->GetUserData() &&
-            static_cast<CAfxInteropUserData*>(arguments[0]->GetUserData().get())
-                    ->GetUserDataType() == AfxUserDataType::AfxDrawingData &&
-            arguments[1]->IsUInt() && arguments[2]->IsUInt()) {
-          auto drawingData =
-              static_cast<CAfxDrawingData*>(static_cast<CAfxInteropUserData*>(
-                  arguments[0]->GetUserData().get()));
-
-          auto message = CefProcessMessage::Create("afx-interop");
-          auto args = message->GetArgumentList();
-          args->SetSize(7);
-          args->SetInt(
-              0, (int)CefDrawingInteropMessage::AfxD3d9IndexBuffer_Update);
-          InsertIdAsTwoInts(args, 1, 2);
-          drawingData->InsertIdAsTwoInts(args, 3, 4);
-          args->SetInt(5, (int)arguments[0]->GetUIntValue());
-          args->SetInt(6, (int)arguments[1]->GetUIntValue());
-
-          SendDrawingMessage(message);
-
-          return true;
-        }
-
-        return false;
-      }
-
-      return false;
-    }
-
-    virtual bool Get(const CefString& name,
-                     const CefRefPtr<CefV8Value> object,
-                     CefRefPtr<CefV8Value>& retval,
-                     CefString& /*exception*/) override {
-      if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-        retval = m_Fn_Release;
-        return true;
-      }
-      if (name == "update") {
-        retval = m_Fn_Update;
-        return true;
-      }
-
-      return false;
-    }
-
-    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
-
-    bool Set(const CefString& name,
-             const CefRefPtr<CefV8Value> object,
-             const CefRefPtr<CefV8Value> value,
-             CefString& /*exception*/) override {
-      if (m_DoReleased)
-        return false;
-      return false;
-    }
-
-   private:
-    virtual ~CAfxD3d9IndexBuffer() { DoRelease(); }
-
-    CefRefPtr<CefV8Value> m_Fn_Release;
-    CefRefPtr<CefV8Value> m_Fn_Update;
-    CefRefPtr<CefV8Value> m_Obj;
-    bool m_DoReleased = false;
-
-    void DoRelease() {
-      if (m_DoReleased)
-        return;
-
-      m_DoReleased = true;
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(3);
-      args->SetInt(0, (int)CefDrawingInteropMessage::AfxD3d9IndexBuffer_Release);
-      InsertIdAsTwoInts(args, 1, 2);
-
-      SendDrawingMessage(message);
-    }
-  };
-
-class CAfxD3d9VertexBuffer : public CAfxInteropImpl,
-                              public CefV8Accessor,
-                              public CefV8Handler {
-
-     IMPLEMENT_REFCOUNTING(CAfxD3d9VertexBuffer);
-
-   public:
-  CAfxD3d9VertexBuffer(CEngineInteropImpl* engineInteropImpl)
-        : CAfxInteropImpl(AfxUserDataType::AfxD3d9VertexBuffer,
-                          engineInteropImpl) {
-      m_Fn_Release = CefV8Value::CreateFunction("release", this);
-      m_Fn_Update = CefV8Value::CreateFunction("update", this);
-
-      m_Obj = CefV8Value::CreateObject(this, nullptr);
-      m_Obj->SetUserData(static_cast<CAfxInteropUserData*>(this));
-      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
-                      V8_PROPERTY_ATTRIBUTE_NONE);
-      m_Obj->SetValue("update", V8_ACCESS_CONTROL_DEFAULT,
-                      V8_PROPERTY_ATTRIBUTE_NONE);
-    }
-
-    virtual bool Execute(const CefString& name,
-                         CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval,
-                         CefString& exception) override {
-      if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-        DoRelease();
-        return true;
-      }
-
-      if (name == "update") {
-        if (3 == arguments.size() && arguments[0] && arguments[1] &&
-            arguments[2] && arguments[0]->GetUserData() &&
-            static_cast<CAfxInteropUserData*>(arguments[0]->GetUserData().get())
-                    ->GetUserDataType() == AfxUserDataType::AfxDrawingData &&
-            arguments[1]->IsUInt() && arguments[2]->IsUInt()) {
-          auto drawingData =
-              static_cast<CAfxDrawingData*>(static_cast<CAfxInteropUserData*>(
-                  arguments[0]->GetUserData().get()));
-
-          auto message = CefProcessMessage::Create("afx-interop");
-          auto args = message->GetArgumentList();
-          args->SetSize(7);
-          args->SetInt(
-              0, (int)CefDrawingInteropMessage::AfxD3d9VertexBuffer_Update);
-          InsertIdAsTwoInts(args, 1, 2);
-          drawingData->InsertIdAsTwoInts(args, 3, 4);
-          args->SetInt(5, (int)arguments[0]->GetUIntValue());
-          args->SetInt(6, (int)arguments[1]->GetUIntValue());
-
-          SendDrawingMessage(message);
-
-          return true;
-        }
-
-        return false;
-      }
-
-      return false;
-    }
-
-    virtual bool Get(const CefString& name,
-                     const CefRefPtr<CefV8Value> object,
-                     CefRefPtr<CefV8Value>& retval,
-                     CefString& /*exception*/) override {
-      if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-        retval = m_Fn_Release;
-        return true;
-      }
-      if (name == "update") {
-        retval = m_Fn_Update;
-        return true;
-      }
-
-      return false;
-    }
-
-    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
-
-    bool Set(const CefString& name,
-             const CefRefPtr<CefV8Value> object,
-             const CefRefPtr<CefV8Value> value,
-             CefString& /*exception*/) override {
-      if (m_DoReleased)
-        return false;
-      return false;
-    }
-
-   private:
-    virtual ~CAfxD3d9VertexBuffer() { DoRelease(); }
-
-    CefRefPtr<CefV8Value> m_Fn_Release;
-    CefRefPtr<CefV8Value> m_Fn_Update;
-    CefRefPtr<CefV8Value> m_Obj;
-    bool m_DoReleased = false;
-
-    void DoRelease() {
-      if (m_DoReleased)
-        return;
-
-      m_DoReleased = true;
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(3);
-      args->SetInt(0,
-                   (int)CefDrawingInteropMessage::AfxD3d9VertexBuffer_Release);
-      InsertIdAsTwoInts(args, 1, 2);
-
-      SendDrawingMessage(message);
-    }
-  };
-
-class CAfxD3d9Texture : public CAfxInteropImpl,
-                               public CefV8Accessor,
-                               public CefV8Handler {
-    IMPLEMENT_REFCOUNTING(CAfxD3d9Texture);
-
-   public:
-  CAfxD3d9Texture(CEngineInteropImpl* engineInteropImpl)
-        : CAfxInteropImpl(AfxUserDataType::AfxD3d9Texture,
-                          engineInteropImpl) {
-      m_Fn_Release = CefV8Value::CreateFunction("release", this);
-      m_Fn_Update = CefV8Value::CreateFunction("update", this);
-
-      m_Obj = CefV8Value::CreateObject(this, nullptr);
-      m_Obj->SetUserData(static_cast<CAfxInteropUserData*>(this));
-      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
-                      V8_PROPERTY_ATTRIBUTE_NONE);
-      m_Obj->SetValue("update", V8_ACCESS_CONTROL_DEFAULT,
-                      V8_PROPERTY_ATTRIBUTE_NONE);
-    }
-
-    virtual bool Execute(const CefString& name,
-                         CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval,
-                         CefString& exception) override {
-      if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-        DoRelease();
-        return true;
-      }
-
-      if (name == "update") {
-        if (8 == arguments.size() && arguments[0] && arguments[1] &&
-            arguments[2] && arguments[3] && arguments[4] && arguments[5] &&
-            arguments[6] && arguments[7] &&
-            arguments[0]->IsUInt() &&
-            arguments[1]->IsObject() &&
-            arguments[2]->GetUserData() &&
-            static_cast<CAfxInteropUserData*>(arguments[2]->GetUserData().get())
-                    ->GetUserDataType() == AfxUserDataType::AfxDrawingData &&
-            arguments[3]->IsUInt() && arguments[4]->IsUInt() &&
-            arguments[5]->IsUInt() && arguments[6]->IsUInt() && arguments[7]->IsUInt()) {
-          auto drawingData =
-              static_cast<CAfxDrawingData*>(static_cast<CAfxInteropUserData*>(
-                  arguments[2]->GetUserData().get()));
-
-          auto message = CefProcessMessage::Create("afx-interop");
-          auto args = message->GetArgumentList();
-          args->SetSize(12);
-          args->SetInt(
-              0, (int)CefDrawingInteropMessage::AfxD3d9Texture_Update);
-          InsertIdAsTwoInts(args, 1, 2);
-          args->SetInt(3, (int)arguments[0]->GetUIntValue());
-
-          auto rectLeft = arguments[1]->GetValue("left");
-          auto rectTop = arguments[1]->GetValue("top");
-          auto rectRight = arguments[1]->GetValue("right");
-          auto rectBottom = arguments[1]->GetValue("bottom");
-
-          if (nullptr != rectLeft && nullptr != rectTop && nullptr != rectRight && nullptr != rectBottom && rectLeft->IsInt() && rectTop->IsInt() && rectRight->IsInt() && rectBottom->IsInt())
-          {
-            auto dict = CefDictionaryValue::Create();
-            dict->SetInt("left", rectLeft->GetIntValue());
-            dict->SetInt("top", rectTop->GetIntValue());
-            dict->SetInt("right", rectRight->GetIntValue());
-            dict->SetInt("bottom", rectBottom->GetIntValue());
-
-            args->SetDictionary(4, dict);
-          } else {
-            args->SetNull(4);
-          }
-
-          drawingData->InsertIdAsTwoInts(args, 5, 6);
-          args->SetInt(7, (int)arguments[3]->GetUIntValue());
-          args->SetInt(8, (int)arguments[4]->GetUIntValue());
-          args->SetInt(9, (int)arguments[5]->GetUIntValue());
-          args->SetInt(10, (int)arguments[6]->GetUIntValue());
-          args->SetInt(11, (int)arguments[7]->GetUIntValue());
-
-          SendDrawingMessage(message);
-
-          return true;
-        }
-
-        return false;
-      }
-
-      return false;
-    }
-
-    virtual bool Get(const CefString& name,
-                     const CefRefPtr<CefV8Value> object,
-                     CefRefPtr<CefV8Value>& retval,
-                     CefString& /*exception*/) override {
-      if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-        retval = m_Fn_Release;
-        return true;
-      }
-      if (name == "update") {
-        retval = m_Fn_Update;
-        return true;
-      }
-
-      return false;
-    }
-
-    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
-
-    bool Set(const CefString& name,
-             const CefRefPtr<CefV8Value> object,
-             const CefRefPtr<CefV8Value> value,
-             CefString& /*exception*/) override {
-      if (m_DoReleased)
-        return false;
-      return false;
-    }
-
-   private:
-    virtual ~CAfxD3d9Texture() { DoRelease(); }
-
-    CefRefPtr<CefV8Value> m_Fn_Release;
-    CefRefPtr<CefV8Value> m_Fn_Update;
-    CefRefPtr<CefV8Value> m_Obj;
-    bool m_DoReleased = false;
-
-    void DoRelease() {
-      if (m_DoReleased)
-        return;
-
-      m_DoReleased = true;
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(3);
-      args->SetInt(0, (int)CefDrawingInteropMessage::AfxD3d9Texture_Release);
-      InsertIdAsTwoInts(args, 1, 2);
-
-      SendDrawingMessage(message);
-    }
-  };
-
-  class CAfxD3d9PixelShader : public CAfxInteropImpl,
-                                    public CefV8Accessor,
-                                    public CefV8Handler {
-    IMPLEMENT_REFCOUNTING(CAfxD3d9PixelShader);
-
-   public:
-    CAfxD3d9PixelShader(CEngineInteropImpl* engineInteropImpl)
-        : CAfxInteropImpl(AfxUserDataType::AfxD3d9PixelShader,
-                          engineInteropImpl) {
-      m_Fn_Release = CefV8Value::CreateFunction("release", this);
-
-      m_Obj = CefV8Value::CreateObject(this, nullptr);
-      m_Obj->SetUserData(static_cast<CAfxInteropUserData*>(this));
-      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
-                      V8_PROPERTY_ATTRIBUTE_NONE);
-    }
-
-    virtual bool Execute(const CefString& name,
-                         CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval,
-                         CefString& exception) override {
-      if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-        DoRelease();
-        return true;
-      }
-
-      return false;
-    }
-
-    virtual bool Get(const CefString& name,
-                     const CefRefPtr<CefV8Value> object,
-                     CefRefPtr<CefV8Value>& retval,
-                     CefString& /*exception*/) override {
-      if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-        retval = m_Fn_Release;
-        return true;
-      }
-
-      return false;
-    }
-
-    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
-
-    bool Set(const CefString& name,
-             const CefRefPtr<CefV8Value> object,
-             const CefRefPtr<CefV8Value> value,
-             CefString& /*exception*/) override {
-      if (m_DoReleased)
-        return false;
-      return false;
-    }
-
-   private:
-    virtual ~CAfxD3d9PixelShader() { DoRelease(); }
-
-    CefRefPtr<CefV8Value> m_Fn_Release;
-    CefRefPtr<CefV8Value> m_Obj;
-    bool m_DoReleased = false;
-
-    void DoRelease() {
-      if (m_DoReleased)
-        return;
-
-      m_DoReleased = true;
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(3);
-      args->SetInt(
-          0, (int)CefDrawingInteropMessage::AfxD3d9PixelShader_Release);
-      InsertIdAsTwoInts(args, 1, 2);
-
-      SendDrawingMessage(message);
-    }
-  };
-
-  class CAfxD3d9VertexShader : public CAfxInteropImpl,
-                              public CefV8Accessor,
-                              public CefV8Handler {
-
-    IMPLEMENT_REFCOUNTING(CAfxD3d9VertexShader);
-
-   public:
-    CAfxD3d9VertexShader(CEngineInteropImpl* engineInteropImpl)
-        : CAfxInteropImpl(AfxUserDataType::AfxD3d9VertexShader,
-                          engineInteropImpl) {
-      m_Fn_Release = CefV8Value::CreateFunction("release", this);
-
-      m_Obj = CefV8Value::CreateObject(this, nullptr);
-      m_Obj->SetUserData(static_cast<CAfxInteropUserData*>(this));
-      m_Obj->SetValue("release", V8_ACCESS_CONTROL_DEFAULT,
-                      V8_PROPERTY_ATTRIBUTE_NONE);
-    }
-
-    virtual bool Execute(const CefString& name,
-                         CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval,
-                         CefString& exception) override {
-      if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-        DoRelease();
-        return true;
-      }
-
-      return false;
-    }
-
-    virtual bool Get(const CefString& name,
-                     const CefRefPtr<CefV8Value> object,
-                     CefRefPtr<CefV8Value>& retval,
-                     CefString& /*exception*/) override {
-      if (m_DoReleased)
-        return false;
-
-      if (name == "release") {
-        retval = m_Fn_Release;
-        return true;
-      }
-
-      return false;
-    }
-
-    CefRefPtr<CefV8Value> GetObj() { return m_Obj; }
-
-    bool Set(const CefString& name,
-             const CefRefPtr<CefV8Value> object,
-             const CefRefPtr<CefV8Value> value,
-             CefString& /*exception*/) override {
-      if (m_DoReleased)
-        return false;
-      return false;
-    }
-
-   private:
-    virtual ~CAfxD3d9VertexShader() { DoRelease(); }
-
-    CefRefPtr<CefV8Value> m_Fn_Release;
-    CefRefPtr<CefV8Value> m_Obj;
-    bool m_DoReleased = false;
-
-    void DoRelease() {
-      if (m_DoReleased)
-        return;
-
-      m_DoReleased = true;
-
-      auto message = CefProcessMessage::Create("afx-interop");
-      auto args = message->GetArgumentList();
-      args->SetSize(3);
-      args->SetInt(0,
-                   (int)CefDrawingInteropMessage::AfxD3d9VertexShader_Release);
-      InsertIdAsTwoInts(args, 1, 2);
-
-      SendDrawingMessage(message);
-    }
-  };
-
-  CFunc m_Connect;
-  CFunc m_GetConnected;
-  CFunc m_Close;
-  CCallback m_NewConnectionCallback;
-  CCallback m_CommandsCallback;
-  CCallback m_ScheduleCommand;
-
-  CCallback m_RenderViewBeginCallback;
-  CCallback m_RenderViewEndCallback;
+  CefRefPtr<CCallback> m_OnMessage;
+  CefRefPtr<CCallback> m_OnError;
+
+  CefRefPtr<CCallback> m_NewConnectionCallback;
+  CefRefPtr<CCallback> m_CommandsCallback;
+  CefRefPtr<CCallback> m_ScheduleCommand;
+
+  CefRefPtr<CCallback> m_RenderViewBeginCallback;
+  CefRefPtr<CCallback> m_RenderViewEndCallback;
 
   std::queue<std::string> m_Commands;
 
-  CCallback m_OnViewOverrideCallback;
-  CCallback m_RenderPassCallback;
-  CCallback m_HudBeginCallback;
-  CCallback m_HudEndCallback;
+  CefRefPtr<CCallback> m_OnViewOverrideCallback;
+  CefRefPtr<CCallback> m_RenderPassCallback;
+  CefRefPtr<CCallback> m_HudBeginCallback;
+  CefRefPtr<CCallback> m_HudEndCallback;
 
   CHandleCalcCallbacks m_HandleCalcCallbacks;
   CVecAngCalcCallbacks m_VecAngCalcCallbacks;
@@ -5728,61 +5159,7 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
   CBoolCalcCallbacks m_BoolCalcCallbacks;
   CIntCalcCallbacks m_IntCalcCallbacks;
 
-  CFunc m_AddCalcHandle;
-  CFunc m_AddCalcVecAng;
-  CFunc m_AddCalcCam;
-  CFunc m_AddCalcFov;
-  CFunc m_AddCalcBool;
-  CFunc m_AddCalcInt;
-
-  CFunc m_GameEventAllowAdd;
-  CFunc m_GameEventAllowRemove;
-  CFunc m_GameEventDenyAdd;
-  CFunc m_GameEventDenyRemove;
-  CFunc m_GameEventSetEnrichment;
-  CCallback m_GameEventCallback;
-  CFunc m_GameEventSetTransmitClientTime;
-  CFunc m_GameEventSetTransmitTick;
-  CFunc m_GameEventSetTransmitSystemTime;
-
-  CCallback m_OnDeviceReset;
-
-  CFunc m_DrawingConnect;
-  CFunc m_DrawingPumpBegin;
-  CFunc m_DrawingPumpEnd;
-  CFunc m_DrawingBeginFrame;
-  CFunc m_D3d9CreateVertexDecalaration;
-  CFunc m_D3d9CreateIndexBuffer;
-  CFunc m_D3d9CreateVertexBuffer;
-  CFunc m_D3d9CreateTexture;
-  CFunc m_D3d9CreateVertexShader;
-  CFunc m_D3d9CreatePixelShader;
-  CFunc m_D3d9UpdateTexture;
-  CFunc m_D3d9SetViewport;
-  CFunc m_D3d9SetRenderState;
-  CFunc m_D3d9SetSamplerState;
-  CFunc m_D3d9SetTexture;
-  CFunc m_D3d9SetTextureStageState;
-  CFunc m_D3d9SetTransform;
-  CFunc m_D3d9SetIndices;
-  CFunc m_D3d9SetStreamSource;
-  CFunc m_D3d9SetStreamSourceFreq;
-  CFunc m_D3d9SetVertexDeclaration;
-  CFunc m_D3d9SetVertexShader;
-  CFunc m_D3d9SetVertexShaderConstantB;
-  CFunc m_D3d9SetVertexShaderConstantF;
-  CFunc m_D3d9SetVertexShaderConstantI;
-  CFunc m_D3d9SetPixelShader;
-  CFunc m_D3d9SetPixelShaderConstantB;
-  CFunc m_D3d9SetPixelShaderConstantF;
-  CFunc m_D3d9SetPixelShaderConstantI;
-  CFunc m_D3d9DrawPrimitive;
-  CFunc m_D3d9DrawIndexedPrimitive;
-  CFunc m_WaitForGpu;
-  CFunc m_BeginCleanState;
-  CFunc m_EndCleanState;
-  CFunc m_CreateCefWindowTextureSharedHandle;
-  CFunc m_CreateDrawingData;
+  CefRefPtr<CCallback> m_GameEventCallback;
 
   bool DoRenderPass(enum RenderPassType_e pass) {
     View_s view;
@@ -5862,13 +5239,13 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
     if (!m_PipeServer->ReadSingle(view.ProjectionMatrix.M33))
       return false;
 
-    if (m_RenderPassCallback.IsValid()) {
+    if (m_RenderPassCallback->IsValid()) {
 
       CefV8ValueList args;
       args.push_back(CefV8Value::CreateInt((int)pass));
       args.push_back(CreateAfxView(view));
 
-      m_RenderPassCallback.ExecuteCallback(args);
+      m_RenderPassCallback->ExecuteCallback(args);
     }
 
     return true;
@@ -6188,20 +5565,21 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
 
     objEvent->SetValue("keys", objKeys, V8_PROPERTY_ATTRIBUTE_NONE);
 
-    if (m_GameEventCallback.IsValid()) {
+    if (m_GameEventCallback->IsValid()) {
       CefV8ValueList args;
       args.push_back(objEvent);
-      m_GameEventCallback.ExecuteCallback(args);
+      m_GameEventCallback->ExecuteCallback(args);
     }
 
     return true;
   }
 
   bool WriteGameEventSettings(bool delta) {
-    if (!m_PipeServer->WriteBoolean(m_GameEventCallback.IsValid() ? true : false))
+    if (!m_PipeServer->WriteBoolean(m_GameEventCallback->IsValid() ? true
+                                                                   : false))
       return false;
 
-    if (!m_GameEventCallback.IsValid())
+    if (!m_GameEventCallback->IsValid())
       return true;
 
     if (!delta) {
@@ -6418,11 +5796,230 @@ class CAfxD3d9Texture : public CAfxInteropImpl,
   };
 };
 
-class CEngineInterop* CreateEngineInterop(
-    CefRefPtr<CefBrowser> const& browser,
-    CefRefPtr<CefFrame> const& frame,
-    CefRefPtr<CefV8Context> const& context) {
-  return new CEngineInteropImpl(browser, frame, context);
+class CInterop* CreateEngineInterop(CefRefPtr<CefBrowser> browser,
+                                          CefRefPtr<CefFrame> frame,
+                                    CefRefPtr<CefV8Context> context,
+                                    const CefString& argStr) {
+  return new CEngineInteropImpl(browser,frame,context, argStr);
+}
+
+
+class CInteropImpl : public CInterop, public CInteropBase {
+  IMPLEMENT_REFCOUNTING(CInteropImpl);
+
+ public:
+  CInteropImpl( CefRefPtr<CefBrowser> browser,
+               CefRefPtr<CefFrame> frame,
+               CefRefPtr<CefV8Context> context,
+               const CefString& argStr) {
+
+    CefRefPtr<CefV8Value> interop = CefV8Value::CreateObject(this, nullptr);
+
+    auto window = context->GetGlobal();
+    window->SetValue("afxInterop", interop, V8_PROPERTY_ATTRIBUTE_NONE);
+
+    interop->SetValue("id", V8_ACCESS_CONTROL_DEFAULT,
+                      V8_PROPERTY_ATTRIBUTE_NONE);
+    m_GetMap.emplace(
+    "id",
+    [browser](const CefString& name, const CefRefPtr<CefV8Value> object,
+                CefRefPtr<CefV8Value>& retval, CefString& exception) {
+        retval = CefV8Value::CreateInt(browser->GetIdentifier());
+
+        return true;
+    });
+
+    new CFunc(
+        interop, this, m_ExecuteMap, m_GetMap, "init",
+        [this, context, interop, argStr](
+            const CefString& name, CefRefPtr<CefV8Value> object,
+            const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+            CefString& exceptionoverride) {
+          if (1 == arguments.size()) {
+            auto argInitFn = arguments[0];
+
+            if (argInitFn && argInitFn->IsFunction()) {
+              CefV8ValueList args;
+              args.push_back(interop);
+              args.push_back(CefV8Value::CreateString(argStr));
+
+              argInitFn->ExecuteFunctionWithContext(context, NULL, args);
+
+              return true;
+            }
+          }
+
+          return false;
+        });
+
+        new CFunc(interop, this, m_ExecuteMap, m_GetMap, "createDrawingInterop",
+              [this, browser, frame, context](
+                  const CefString& name, CefRefPtr<CefV8Value> object,
+                  const CefV8ValueList& arguments,
+                  CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
+                if (4 == arguments.size()) {
+                  auto argUrl = arguments[0];
+                  auto argStr = arguments[1];
+                  auto argFnResolve = arguments[2];
+                  auto argFnReject = arguments[3];
+
+                  if (argUrl && argStr && argFnResolve && argFnReject &&
+                      argUrl->IsString() && argStr->IsString() &&
+                      argFnResolve->IsFunction() && argFnReject->IsFunction()) {
+                    CCreateInterop* createInterop =
+                        new CCreateInterop(context, argFnResolve, argFnReject);
+
+                    auto message =
+                        CefProcessMessage::Create("afx-create-drawing");
+                    auto args = message->GetArgumentList();
+                    args->SetSize(4);
+                    args->SetInt(0, (int)createInterop->GetLo());
+                    args->SetInt(1, (int)createInterop->GetHi());
+                    args->SetString(2, argUrl->GetStringValue());
+                    args->SetString(3, argStr->GetStringValue());
+
+                    frame->SendProcessMessage(
+                        PID_BROWSER, message);
+                    return true;
+                  }
+                }
+
+                exceptionoverride = g_szInvalidArguments;
+                return false;
+              });
+
+        new CFunc(interop, this, m_ExecuteMap, m_GetMap, "createEngineInterop",
+              [this, browser, frame, context](
+                  const CefString& name, CefRefPtr<CefV8Value> object,
+                  const CefV8ValueList& arguments,
+                  CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
+                if (4 == arguments.size()) {
+                  auto argUrl = arguments[0];
+                  auto argStr = arguments[1];
+                  auto argFnResolve = arguments[2];
+                  auto argFnReject = arguments[3];
+
+                  if (argUrl && argStr && argFnResolve && argFnReject &&
+                      argUrl->IsString() && argStr->IsString() &&
+                      argFnResolve->IsFunction() && argFnReject->IsFunction()) {
+                    CCreateInterop* createInterop =
+                        new CCreateInterop(context, argFnResolve, argFnReject);
+
+                    auto message =
+                        CefProcessMessage::Create("afx-create-engine");
+                    auto args = message->GetArgumentList();
+                    args->SetSize(4);
+                    args->SetInt(0, (int)createInterop->GetLo());
+                    args->SetInt(1, (int)createInterop->GetHi());
+                    args->SetString(2, argUrl->GetStringValue());
+                    args->SetString(3, argStr->GetStringValue());
+
+                    frame->SendProcessMessage(PID_BROWSER,
+                                                                message);
+                    return true;
+                  }
+                }
+
+                exceptionoverride = g_szInvalidArguments;
+                return false;
+              });
+        
+    new CFunc(
+            interop, this, m_ExecuteMap, m_GetMap, "sendMessage",
+            [browser,frame](const CefString& name, CefRefPtr<CefV8Value> object,
+                        const CefV8ValueList& arguments,
+                        CefRefPtr<CefV8Value>& retval,
+                        CefString& exceptionoverride) {
+              if (arguments.size() == 2) {
+                auto argId = arguments[0];
+                auto argStr = arguments[1];
+
+                if (argId && argStr && argId->IsInt() && argStr->IsString()) {
+                  auto message = CefProcessMessage::Create("afx-send-message");
+                  auto args = message->GetArgumentList();
+                  args->SetSize(3);
+                  args->SetInt(0, browser->GetIdentifier());
+                  args->SetInt(1, argId->GetIntValue());
+                  args->SetString(2, argStr->GetStringValue());
+
+                  frame->SendProcessMessage(PID_BROWSER, message);
+                  return true;
+                }
+              }
+
+              exceptionoverride = g_szInvalidArguments;
+              return false;
+            });
+
+    m_OnMessage = new CCallback(context, interop, this, m_ExecuteMap, m_GetMap,
+                             "onMessage");
+
+    m_OnError = new CCallback(context, interop, this, m_ExecuteMap, m_GetMap,
+                            "onError");
+  }
+
+  virtual bool OnProcessMessageReceived(
+      CefRefPtr<CefBrowser> browser,
+      CefRefPtr<CefFrame> frame,
+      CefProcessId source_process,
+      CefRefPtr<CefProcessMessage> message) override {
+
+    auto const name = message->GetName().ToString();
+
+    if (name == "afx-message") {
+      auto const args = message->GetArgumentList();
+      auto const argC = args->GetSize();
+
+      if (1 == argC && VTYPE_STRING == args->GetType(0)) {
+
+        CefV8ValueList execArgs;
+        execArgs.push_back(CefV8Value::CreateInt(browser->GetIdentifier()));
+        execArgs.push_back(CefV8Value::CreateString(args->GetString(0)));
+
+        m_OnMessage->ExecuteCallback(execArgs);
+      }
+    }
+    else if (name == "afx-error") {
+      auto const args = message->GetArgumentList();
+      auto const argC = args->GetSize();
+
+      if (1 == argC && VTYPE_STRING == args->GetType(0)) {
+        CefV8ValueList execArgs;
+        execArgs.push_back(CefV8Value::CreateInt(browser->GetIdentifier()));
+        execArgs.push_back(CefV8Value::CreateString(args->GetString(0)));
+
+        m_OnError->ExecuteCallback(execArgs);
+      }
+    } else if (name == "afx-interop-resolve") {
+      auto const args = message->GetArgumentList();
+      
+      CCreateInterop::Resolve((unsigned int)args->GetInt(0),
+                              (unsigned int)args->GetInt(1), args->GetInt(2));
+    } else if (name == "afx-interop-reject") {
+      auto const args = message->GetArgumentList();
+
+      CCreateInterop::Reject((unsigned int)args->GetInt(0),
+                              (unsigned int)args->GetInt(1), args->GetString(2));
+    }
+
+    return false;
+  }
+
+  virtual void CloseInterop() override {}
+
+
+ private:
+  CefRefPtr<CCallback> m_OnMessage;
+  CefRefPtr<CCallback> m_OnError;
+
+  virtual ~CInteropImpl() { CCreateInterop::FreeAll(); }
+};
+
+class CInterop* CreateInterop(CefRefPtr<CefBrowser> browser,
+                              CefRefPtr<CefFrame> frame,
+                              CefRefPtr<CefV8Context> context,
+                              const CefString& argStr) {
+  return new CInteropImpl(browser,frame,context,argStr);
 }
 
 }  // namespace interop

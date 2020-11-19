@@ -167,47 +167,44 @@ AfxRect: {
 	bottom: Int
 };
 
-AfxDrawingHandle = {
-	release: Function(), // Actively release. Strongly recommended if you don't need it anymore to save resources.
+AfxDrawingHandle: {
+	release: Function(), // Always release.Strongly recommended if you don't need it anymore to save resources.
 };
 
-AfxDrawingData = {
-	release: Function(), // Actively release. Strongly recommended if you don't need it anymore to save resources.
-	buffer: ArrayBuffer, // Get access to buffer. If you changed the buffer you must call update.
-	update: Function(offset: UInt, size: UInt), // Call this with the range you updated after changing the contents.
-});
+AfxDrawingData: extends ArrayBuffer {
+};
 
 AfxD3d9VertexDeclaration = {
-	release: Function(), // Actively release the vertex declaration on the client. Strongly recommended if you don't need it anymore to save resources.
+	release: Function(), // Always release the vertex declaration on the client! Strongly recommended if you don't need it anymore to save resources.
 };
 
 AfxD3d9IndexBuffer = {
-	release: Function(), // Actively release the index buffer on the client. Strongly recommended if you don't need it anymore to save resources.
+	release: Function(), // Always release the index buffer on the client! Strongly recommended if you don't need it anymore to save resources.
 	
 	// WARNING: Input is currently not fully sanitized and validated, providing bogous values might cause CEF or CS:GO to crash!
 	update: Function(data: AfxDrawingData, offset: UInt, size: UInt)
 };
 
 AfxD3d9VertexBuffer= {
-	release: Function(), // Actively release the vertex buffer on the client. Strongly recommended if you don't need it anymore to save resources.
+	release: Function(), // Always release the vertex buffer on the client! Strongly recommended if you don't need it anymore to save resources.
 	
 	// WARNING: Input is currently not fully sanitized and validated, providing bogous values might cause CEF or CS:GO to crash!
 	update: Function(data: AfxDrawingData, offset: UInt, size: UInt)
 };
 
 AfxD3d9Texture: {
-	release: Function(), // Actively release the texture on the client. Strongly recommended if you don't need it anymore to save resources.
+	release: Function(), // Always release the texture on the client! Strongly recommended if you don't need it anymore to save resources.
 	
 	// WARNING: Input is currently not fully sanitized and validated, providing bogous values might cause CEF or CS:GO to crash!
 	update: Function(level: UInt, rect: null|AfxRect, data: AfxDrawingData, rowOffsetBytes: UInt, columnOffsetBytes: UInt, dataBytesPerRow: UInt, totalBytesPerRow: UInt, numRows: UInt)
 };
 
 AfxD3d9PixelShader: {
-	release: Function(), // Actively release the shader on the client. Strongly recommended if you don't need it anymore to save resources.	
+	release: Function(), // Always release the shader on the client! Strongly recommended if you don't need it anymore to save resources.	
 };
 
 AfxD3d9VertexShader: {
-	release: Function(), // Actively release the shader on the client. Strongly recommended if you don't need it anymore to save resources.
+	release: Function(), // Always release the shader on the client! Strongly recommended if you don't need it anymore to save resources.
 };
 
 AfxD3d9Viewport: {
@@ -293,7 +290,7 @@ AfxInterop = {
 	d3d9DrawPrimitive: Function(primitiveType: UInt, startVertex: UInt, primitiveCount: UInt), // https://docs.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-drawprimitive
 	d3d9DrawIndexedPrimitive: Function(primitiveType: UInt, baseVertexIndex: Int, minVertexIndex: UInt, numVertices: UInt, startIndex: UInt, primCount: UInt), // https://docs.microsoft.com/en-us/windows/win32/api/d3d9helper/nf-d3d9helper-idirect3ddevice9-drawindexedprimitive
 	
-	waitForGpu: Function(), // Waits for the GPU before continuing, this is important when using shared resources (e.g. textures).
+	waitForGpu: Function(), // Waits for the client GPU before continuing, this is important when using shared resources (e.g. textures).
 	beginCleanState: Function(), // Puts the 3D state into a safe initial state, recommended. Must not be nested.
 	endCleanState: Function(), // Ends the safe state.
 

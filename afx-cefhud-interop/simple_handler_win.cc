@@ -14,22 +14,3 @@ void SimpleHandler::PlatformTitleChange(CefRefPtr<CefBrowser> browser,
   CefWindowHandle hwnd = browser->GetHost()->GetWindowHandle();
   SetWindowText(hwnd, std::wstring(title).c_str());
 }
-
-void SimpleHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
-                                       PaintElementType type,
-                                       const RectList& dirtyRects,
-                                       void* share_handle) {
-  switch (type) {
-    case PET_VIEW: {
-      BrowserList::iterator bit = browser_list_.begin();
-      for (; bit != browser_list_.end(); ++bit) {
-        if ((bit->Browser)->IsSame(browser)) {
-          bit->DrawingInterop->SetSharedHandle(share_handle);
-          break;
-        }
-      }
-    } break;
-    case PET_POPUP:
-      break;
-  }
-}

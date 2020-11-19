@@ -30,32 +30,44 @@ class SimpleApp : public CefApp,
   }
 
   // CefBrowserProcessHandler methods:
+
   virtual void OnContextInitialized() OVERRIDE;
 
+
   // CefRenderProcessHandler methods:
+
+  virtual void OnBrowserCreated(CefRefPtr<CefBrowser> browser,
+          CefRefPtr<CefDictionaryValue> extra_info) OVERRIDE {
+    m_ExtraInfo = extra_info->Copy(true);
+  }
+
   virtual void OnContextCreated(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefFrame> frame,
                                 CefRefPtr<CefV8Context> context) OVERRIDE {
-
-    browser_list_.emplace_back(
-            browser,
-            advancedfx::interop::CreateEngineInterop(browser, frame, context));
+    if (frame->IsMain()) {
+      if(m_ExtraInfo->HasKey("interopType") && m_ExtraInfo->HasKey("argStr")) {
+        if (m_ExtraInfo->GetString("interopType").compare("drawing") == 0)
+          m_Interop = advancedfx::interop::CreateDrawingInterop(browser, frame,
+                                                                context, m_ExtraInfo->GetString("argStr"));
+        else if (m_ExtraInfo->GetString("interopType").compare("engine") == 0)
+          m_Interop = advancedfx::interop::CreateEngineInterop(browser, frame, context, m_ExtraInfo->GetString("argStr"));
+        else if (m_ExtraInfo->GetString("interopType").compare("index") == 0)
+          m_Interop = advancedfx::interop::CreateInterop(
+              browser, frame, context, m_ExtraInfo->GetString("argStr"));
+      }
+    }
   }
-  
+
   virtual void OnContextReleased(CefRefPtr<CefBrowser> browser,
                                  CefRefPtr<CefFrame> frame,
                                  CefRefPtr<CefV8Context> context) OVERRIDE {
 
-  // Remove from the list of existing browsers.
-    BrowserList::iterator bit = browser_list_.begin();
-    for (; bit != browser_list_.end(); ++bit) {
-      if ((bit->Browser)->IsSame(browser)) {
-        bit->EngineInterop->CloseInterop();
-        browser_list_.erase(bit);
-        break;
+      if (frame->IsMain() && nullptr != m_Interop) {
+        m_Interop->CloseInterop();
+        m_Interop = nullptr;
       }
-    }
   }
+
   virtual bool OnProcessMessageReceived(
       CefRefPtr<CefBrowser> browser,
       CefRefPtr<CefFrame> frame,
@@ -92,21 +104,12 @@ class SimpleApp : public CefApp,
   }
 
  private:
+
+  CefRefPtr<CefDictionaryValue> m_ExtraInfo;
+  CefRefPtr<advancedfx::interop::CInterop> m_Interop;
+
   // Include the default reference counting implementation.
   IMPLEMENT_REFCOUNTING(SimpleApp);
-
-  struct BrowserListElem {
-    CefRefPtr<CefBrowser> Browser;
-    CefRefPtr<advancedfx::interop::CEngineInterop> EngineInterop;
-
-    BrowserListElem(
-        CefRefPtr<CefBrowser> browser,
-        CefRefPtr<advancedfx::interop::CEngineInterop> engineInterop)
-        : Browser(browser), EngineInterop(engineInterop) {}
-  };
-
-  typedef std::list<BrowserListElem> BrowserList;
-  BrowserList browser_list_;
 };
 
 #endif  // CEF_TESTS_CEFSIMPLE_SIMPLE_APP_H_

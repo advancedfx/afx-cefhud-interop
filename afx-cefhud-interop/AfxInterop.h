@@ -13,7 +13,7 @@
 namespace advancedfx {
 namespace interop {
 
-class CEngineInterop : public CefV8Accessor, public CefV8Handler {
+class CInterop : public virtual CefBaseRefCounted {
  public:
   virtual void CloseInterop() = 0;
 
@@ -24,30 +24,19 @@ class CEngineInterop : public CefV8Accessor, public CefV8Handler {
       CefRefPtr<CefProcessMessage> message) = 0;
 };
 
-class CEngineInterop* CreateEngineInterop(
-      CefRefPtr<CefBrowser> const& browser,
-      CefRefPtr<CefFrame> const& frame,
-    CefRefPtr<CefV8Context> const& context);
+class CInterop* CreateInterop(CefRefPtr<CefBrowser> browser,
+                              CefRefPtr<CefFrame> frame,
+                              CefRefPtr<CefV8Context> context, const CefString & argStr);
 
+class CInterop* CreateEngineInterop(CefRefPtr<CefBrowser> browser,
+                                          CefRefPtr<CefFrame> frame,
+                                    CefRefPtr<CefV8Context> context,
+                                    const CefString& argStr);
 
-class CDrawingInterop : public CefBaseRefCounted {
- public:
-  virtual void CloseInterop() = 0;
-
-  virtual bool OnProcessMessageReceived(
-      CefRefPtr<CefBrowser> browser,
-                                        CefRefPtr<CefFrame> frame,
-                                        CefProcessId source_process,
-                                        CefRefPtr<CefProcessMessage> message) = 0;
-  
-  virtual void GetViewRect(CefRefPtr<CefBrowser> browser,
-                           CefRect& rect) = 0;
-
-  virtual void SetSharedHandle(void * handle) = 0;
-};
-
-class CDrawingInterop* CreateDrawingInterop(
-    CefRefPtr<CefBrowser> const& browser);
+class CInterop* CreateDrawingInterop(CefRefPtr<CefBrowser> browser,
+                                            CefRefPtr<CefFrame> frame,
+                                     CefRefPtr<CefV8Context> context,
+                                     const CefString& argStr);
 
 }  // namespace interop
 }  // namespace advancedfx

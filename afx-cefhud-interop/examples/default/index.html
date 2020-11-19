@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<!--
+
+## Usage:
+
+Launch CS:GO from HLAE with -afxInteropLight.
+
+For testing execute (will log to debug.log in current directoy):
+afx-cefhud-interop.exe "--url=file:///C:/source/afx-cefhud-interop/afx-cefhud-interop/examples/default/index.html" --enable-logging --v=1
+
+For live execute:
+afx-cefhud-interop.exe "--url=file:///C:/source/afx-cefhud-interop/afx-cefhud-interop/examples/default/index.html" --enable-logging --log-severity=error
+
+Enter afx_interop connect 1 into CS:GO console.
+
+Console inteface:
+afx_interop send cefhud [...]
+
+-->
+<html>
+<head>
+<title>Default example</title>
+</head>
+<body>
+<h1>Default example</h1>
+<script>
+
+function AfxInterop(interop, args) {
+	
+	var self = this;
+	
+	this.interop = interop;
+	this.args = args;
+	
+	this.messageHandlers = {
+	};
+	
+	interop.onMessage = this.onMessage;
+	interop.onError = this.onError;
+	
+	this.drawingInteropId = null;
+	this.engineInteropId = null;
+	
+	var fileFolderPath = window.location.toString();
+	fileFolderPath = fileFolderPath.replace("/index.html","");
+	
+	interop.createDrawingInterop(
+		fileFolderPath+"/drawing.html",
+		JSON.stringify({
+			"indexInteropId": this.interop.id,
+			"pipeName": "afxInterop_drawing"
+		}),
+		function(drawingInteropId){
+			console.log("Created drawing interop #"+drawingInteropId);
+			self.drawingInteropId = drawingInteropId;
+			
+			
+			self.interop.createEngineInterop(
+				fileFolderPath+"/engine.html",
+				JSON.stringify({
+					"indexInteropId": self.interop.id,
+					"drawingInteropId": self.drawingInteropId,
+					"pipeName": "afxInterop"
+				}),
+				function(engineInteropId){
+					console.log("Created engine interop #"+engineInteropId);
+					self.engineInteropId = drawingInteropId;
+				},
+				function(errorMessage){
+					throw "Creating engine interop failed: "+errorMessage;
+				}
+			);
+		},
+		function(errorMessage){
+			throw "Creating drawing interop failed: "+errorMessage;
+		}
+	);
+}
+
+AfxInterop.prototype.onMessage = function(senderId, message) {
+	const args = JSON.parse(message);
+	this.messageHandlers[args.id].call(this, args.args);
+}
+
+AfxInterop.prototype.onError = function(senderId, message) {
+	
+	if(this.drawingInteropId === senderId)
+		throw ("Drawing interop #"+senderId+" error: "+message);
+	else if(this.engineInteropId === senderId)
+		throw ("Engine interop #"+senderId+" error: "+message);
+	else
+		throw ("Interop #"+senderId+" error: "+message);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+window.afxInterop.init(function(interop, message){
+	console.log(message);
+	new AfxInterop(interop, JSON.parse(message));
+});
+
+</script>
+</body>
+</html>
