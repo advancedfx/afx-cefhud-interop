@@ -25,6 +25,18 @@ afx_interop send cefhud [...]
 <h1>Default example</h1>
 <script>
 
+////////////////////////////////////////////////////////////////////////////////
+
+function getErrorObject(){
+	try { throw Error('') } catch(err) { return err; }
+}
+
+function logErrorObject() {
+	console.log(getErrorObject().stack);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 function AfxInterop(interop, args) {
 	
 	var self = this;
@@ -35,8 +47,12 @@ function AfxInterop(interop, args) {
 	this.messageHandlers = {
 	};
 	
-	interop.onMessage = this.onMessage;
-	interop.onError = this.onError;
+	interop.onMessage = function(senderId, message){
+		self.onMessage(senderId, message);
+	};
+	interop.onError = function(senderId, message){
+		self.onError(senderId, message);
+	};
 	
 	this.drawingInteropId = null;
 	this.engineInteropId = null;
@@ -74,14 +90,12 @@ function AfxInterop(interop, args) {
 			throw "Creating drawing interop failed: "+errorMessage;
 		}
 	);
-	
-	this.interop.sendMessage(this.interop.id, "TEST");
 }
 
 AfxInterop.prototype.onMessage = function(senderId, message) {
-	console.log(message);
 	const args = JSON.parse(message);
-	this.messageHandlers[args.id].call(this, args.args);
+	this.messageHandlers[args.id].apply(this, args.args);
+	console.log("AfxInterop.prototype.onMessage error: "+error);
 }
 
 AfxInterop.prototype.onError = function(senderId, message) {

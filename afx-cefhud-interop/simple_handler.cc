@@ -113,7 +113,7 @@ void SimpleHandler::CreateDrawingInterop(CefRefPtr<CefBrowser> browser,
                                                 // external_begin_frame_enabled
 
   CefWindowInfo window_info;
-  window_info.SetAsPopup(NULL, "cefdrawing"); 
+  window_info.SetAsWindowless(nullptr);
   window_info.shared_texture_enabled = true;
   window_info.external_begin_frame_enabled = true;
 
@@ -273,9 +273,6 @@ bool SimpleHandler::OnProcessMessageReceived(
   if (name == "afx-drawing-begin-frame") {
     auto it = m_Browsers.find(browser->GetIdentifier());
     if (it != m_Browsers.end()) {
-      auto args = message->GetArgumentList();
-      it->second.Width = args->GetInt(0);
-      it->second.Height = args->GetInt(1);
       it->second.Browser->GetHost()->SendExternalBeginFrame();
       return true;
     }

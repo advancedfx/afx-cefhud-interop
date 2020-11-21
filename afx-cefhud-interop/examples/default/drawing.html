@@ -435,7 +435,7 @@ const D3DTRANSFORMSTATETYPE = {
 	D3DTS_WORLD3 : (256 + 3),
 };
 
-///////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 function base64ToArrayBuffer(base64_string) {
 	var data = atob(base64_string);
@@ -451,9 +451,9 @@ function base64ToArrayBuffer(base64_string) {
 
 function AfxDrawingInterop(interop,args) {
 	
-	interop.pipeName = args.pipeName;
-	
 	var self = this;
+	
+	interop.pipeName = args.pipeName;
 	
 	this.interop = interop;
 	this.args = args;
@@ -467,6 +467,8 @@ function AfxDrawingInterop(interop,args) {
 	this.cefTexture = null;
 	this.divGameEvents = document.getElementById('gameEvents');
 	
+	this.engineInteropId = null;
+	
 	this.shaderData = {
 		"afx_drawtexture_ps20.acs": this.createFirstAcsShaderEntryData("AAAAAAEAAAAAAAAAEAAAAAAC///+/yMAQ1RBQhwAAABfAAAAAAL//wEAAAAcAAAAAIEAAFgAAAAwAAAAAwAAAAEAAgBIAAAAAAAAAGdfc0RlcHRoVGV4dHVyZVNhbXBsZXIAqwQADAABAAEAAQAAAAAAAABwc18yXzAATWljcm9zb2Z0IChSKSBITFNMIFNoYWRlciBDb21waWxlciAxMC4xAKsfAAACAAAAgAAAA7AfAAACAAAAkAAID6BCAAADAAAPgAAA5LAACOSgAQAAAgAID4AAAOSA//8AAA=="),
 	};
@@ -477,26 +479,35 @@ function AfxDrawingInterop(interop,args) {
 	
 	this.messageHandlers = {
 		"connect": function(senderId) {
+			this.engineInteropId = senderId;
 			this.connect(senderId);
 		},
 		"disconnect" : function(senderId) {
 			this.disconnect(senderId);
+			this.engineInteropId = null;
 		},
-		"onRenderView": function(renderInfo){
-			this.frameCount = renderInfo.frameCount;
-			var texWidth = renderInfo.view.width - renderInfo.view.x;
-			var texHeight = renderInfo.view.height - renderInfo.view.y;
-			
-			if(this.width !== texWidth || this.height !== texHeight)
+		"onRenderViewBegin": function(renderInfo){
+			if(this.interop.pumpBegin(renderInfo.frameCount, 0))
 			{
-				this.cefTextureHandle = null;
-				this.width = texWidth;
-				this.height = texHeight;
-				this.interop.setSize(texWidth, texHeight);
+				this.renderInfo = renderInfo;
+			
+				this.frameCount = renderInfo.frameCount;
+				var texWidth = renderInfo.view.width - renderInfo.view.x;
+				var texHeight = renderInfo.view.height - renderInfo.view.y;
+				
+				if(this.width !== texWidth || this.height !== texHeight)
+				{
+					this.cefTextureHandle = null;
+					this.width = texWidth;
+					this.height = texHeight;
+					this.interop.setSize(texWidth, texHeight);
+				}
+				
+				this.interop.pumpEnd();
 			}
 		},
 		"onGameEvent": function(e){
-			while(divGameEvents.childNodes.length > 10) divGameEvents.lastElementChild.remove();
+			while(this.divGameEvents.childNodes.length > 10) this.divGameEvents.lastElementChild.remove();
 
 			var docP = document.createElement('p');
 			docP.appendChild(document.createTextNode(JSON.stringify(e)));
@@ -504,37 +515,48 @@ function AfxDrawingInterop(interop,args) {
 			//console.log(JSON.stringify(e));
 		},
 		"onHudEnd": function(frameCount,pass){
-			this.interop.beginFrame();
-			
-			this.interop.sync(this.frameCount);
-			
-			if(null == this.shaders["afx_drawtexture_ps20"])
-				this.shaders["afx_drawtexture_ps20"] = this.interop.d3d9CreatePixelShader(shaderData["afx_drawtexture_ps20.acs"]);
-				
-			if(null == this.vertexDeclarations["pos3_uv2"])
-				this.vertexDeclarations["pos3_uv2"] = this.interop.d3d9CreateVertexDeclaration(vertexElements["pos3_uv2"]);
-			
-			var cefTextureHandle = this.interop.waitForCefFrame();
-			
-			if(null == this.cefTextureHandle || this.cefTextureHandle != cefTextureHandle)
+			if(this.interop.pumpBegin(frameCount, pass))
 			{
-				this.cefTextureHandle = cefTextureHandle;
-				if(this.cefTexture) {
-					cefTexture.release();
-					cefTexture = null;
+				this.interop.beginFrame();
+				
+				if(null == this.shaders["afx_drawtexture_ps20"])
+					this.shaders["afx_drawtexture_ps20"] = this.interop.d3d9CreatePixelShader(this.shaderData["afx_drawtexture_ps20.acs"]);
+					
+				if(null == this.vertexDeclarations["pos3_uv2"])
+					this.vertexDeclarations["pos3_uv2"] = this.interop.d3d9CreateVertexDeclaration(this.vertexElements["pos3_uv2"]);
+				
+				var cefTextureHandle = this.interop.waitForCefFrame();
+				
+				if(null == this.cefTextureHandle || this.cefTextureHandle != cefTextureHandle)
+				{
+					this.cefTextureHandle = cefTextureHandle;
+					if(this.cefTexture) {
+						cefTexture.release();
+						cefTexture = null;
+					}
 				}
+				
+				if(null == this.cefTexture)
+					cefTexture = this.interop.d3d9CreateTexture(this.width, this.height, 1, D3DUSAGE.D3DUSAGE_RENDERTARGET, 21 /* D3DFMT_A8R8G8B8 */, D3DPOOL.D3DPOOL_DEFAULT, this.cefTextureHandle);
+				
+				this.drawRect2d(this.cefTexture, this.renderInfo.view.x, this.renderInfo.view.y, this.renderInfo.view.width, this.renderInfo.view.height, 0, 0, 1, 1);
+				
+				this.interop.waitForClientGpu();
+				
+				this.interop.pumpEnd();
 			}
-			
-			if(null == this.cefTexture)
-				cefTexture = this.interop.d3d9CreateTexture(texWidth, texHeight, 1, D3DUSAGE.D3DUSAGE_RENDERTARGET, 21 /* D3DFMT_A8R8G8B8 */, D3DPOOL.D3DPOOL_DEFAULT, cefTextureHandle);
-			
-			this.drawRect2d(cefTexture, this.renderInfo.view.x, this.renderInfo.view.y, this.renderInfo.view.width, this.renderInfo.view.height, 0, 0, 1, 1);
-			
-			this.interop.waitForClientGpu();
 		}
 	};
 	
-	interop.onMessage = this.onMessage;
+	interop.onMessage = function(senderId, message){
+		self.onMessage(senderId, message);
+	};
+	interop.onError = function(senderId, message){
+		self.onError(senderId, message);
+	};
+	interop.onDeviceReset = function(){
+		self.onDeviceReset();
+	};
 	
 	this.vertexElements = {
 		"pos3_uv2": this.buildD3d9VertexElements([
@@ -548,9 +570,9 @@ function AfxDrawingInterop(interop,args) {
 			{
 				stream: 1,
 				offset: 3*4,
-				type: D3DDECLTYPE.D3DDECLTYPE_FLOAT1,
+				type: D3DDECLTYPE.D3DDECLTYPE_FLOAT2,
 				method: D3DDECLMETHOD.D3DDECLMETHOD_DEFAULT,
-				usage: D3DDECLUSAGE.D3DDECLUSAGE_TEXCOORD, usageIndex: 1
+				usage: D3DDECLUSAGE.D3DDECLUSAGE_TEXCOORD, usageIndex: 0
 			},
 		])
 	};
@@ -562,6 +584,15 @@ function AfxDrawingInterop(interop,args) {
 	this.vertexBuffers = {
 		"rect": null
 	}
+}
+
+AfxDrawingInterop.prototype.onMessage = function(senderId, message) {
+	const args = JSON.parse(message);
+	this.messageHandlers[args.id].apply(this, args.args);
+}
+
+AfxDrawingInterop.prototype.onError = function(senderId, message) {
+	throw ("Interop #"+senderId+" error: "+message);
 }
 
 AfxDrawingInterop.prototype.onDeviceReset = function() {
@@ -583,12 +614,6 @@ AfxDrawingInterop.prototype.onDeviceReset = function() {
 		this.vertexDeclarations["pos3_uv2"].release();
 		this.vertexDeclarations["pos3_uv2"] = null;
 	}
-}
-
-AfxDrawingInterop.prototype.onMessage = function(senderId, message) {
-	console.log(message);
-	const args = JSON.parse(message);
-	this.messageHandlers[args.id].call(this, args.args);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -623,8 +648,6 @@ AfxDrawingInterop.prototype.createFirstAcsShaderEntryData = function(base64_stri
 				dv.setUint8(i, bufferView.getUint8(offset+i));
 			}
 			
-			dd.update(0,dd.buffer.byteLength);
-			
 			return dd;
 		}
 	}
@@ -634,7 +657,7 @@ AfxDrawingInterop.prototype.drawRect2d = function(texture,x,y,width,height,x0,y0
 
 	this.interop.beginCleanState();
 	
-	this.interop.d3d9SetVertexDeclaration(vertexDeclarations["pos3_uv2"]);
+	this.interop.d3d9SetVertexDeclaration(this.vertexDeclarations["pos3_uv2"]);
 	
 	this.interop.d3d9SetViewport({
 		"x": x,
@@ -650,7 +673,7 @@ AfxDrawingInterop.prototype.drawRect2d = function(texture,x,y,width,height,x0,y0
 	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_SEPARATEALPHABLENDENABLE, BOOL.FALSE);
 	
 	this.interop.d3d9SetVertexShader(null);
-	this.interop.d3d9SetPixelShader(shaders["afx_drawtexture_ps20"]);
+	this.interop.d3d9SetPixelShader(this.shaders["afx_drawtexture_ps20"]);
 	
 	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_CULLMODE, D3DCULL.D3DCULL_NONE);
 	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_ZWRITEENABLE, BOOL.FALSE);
@@ -662,7 +685,7 @@ AfxDrawingInterop.prototype.drawRect2d = function(texture,x,y,width,height,x0,y0
 	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_LIGHTING, BOOL.FALSE);
 	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_SRCBLEND, D3DBLEND.D3DBLEND_SRCALPHA);
 	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_DESTBLEND, D3DBLEND.D3DBLEND_INVSRCALPHA);
-	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_FILLMODE, D3DBLEND.D3DFILL_SOLID);
+	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_FILLMODE, D3DFILLMODE.D3DFILL_SOLID);
 
 	this.interop.d3d9SetTextureStageState(0, D3DTEXTURESTAGESTATETYPE.D3DTSS_COLOROP, D3DTEXTUREOP.D3DTOP_SELECTARG1);
 	this.interop.d3d9SetTextureStageState(0, D3DTEXTURESTAGESTATETYPE.D3DTSS_COLORARG1, D3DTEXTUREARG.D3DTA_TEXTURE);
@@ -703,8 +726,8 @@ AfxDrawingInterop.prototype.drawRect2d = function(texture,x,y,width,height,x0,y0
 	{
 		// TODO: Consider to add and use this.interop.d3d9DrawPrimitiveUP instead.
 	
-		var drawingData = this.interop.createDrawingData(4 * (4*3+4*2));
-		var dv = new DataView(drawingData.buffer);
+		var dd = this.interop.createDrawingData(4 * (4*3+4*2));
+		var dv = new DataView(dd.buffer);
 		
 		dv.setFloat32( 0*4, 0, true);
 		dv.setFloat32( 1*4, height, true);
@@ -732,6 +755,8 @@ AfxDrawingInterop.prototype.drawRect2d = function(texture,x,y,width,height,x0,y0
 		
 		var vertexBuffer = this.interop.d3d9CreateVertexBuffer(4, D3DUSAGE.D3DUSAGE_WRITEONLY, 0, D3DPOOL.D3DPOOL_DEFAULT, null);
 		
+		vertexBuffer.update(dd, 0, dd.buffer.byteLength);
+		
 		this.interop.d3d9SetStreamSource(0, vertexBuffer, 0, 20);
 		
 		this.interop.d3d9DrawPrimitive(D3DPRIMITIVETYPE.D3DPT_TRIANGLESTRIP, 0, 2);
@@ -745,7 +770,7 @@ AfxDrawingInterop.prototype.drawRect2d = function(texture,x,y,width,height,x0,y0
 
 AfxDrawingInterop.prototype.buildD3d9VertexElements = function(definitions) {
 
-	var dd = this.createDrawingData(8 * (definitions.length + 1));
+	var dd = this.interop.createDrawingData(8 * (definitions.length + 1));
 	var dv = new DataView(dd.buffer);
 	var i = 0;
 	for(; i < definitions.length; ++i)
@@ -766,8 +791,6 @@ AfxDrawingInterop.prototype.buildD3d9VertexElements = function(definitions) {
 	dv.setUint8(i*8 +  6, 0);
 	dv.setUint8(i*8 +  7, 0);
 	
-	dd.update(0,dd.buffer.byteLength);
-	
 	return dd;
 }
 
@@ -785,7 +808,7 @@ AfxDrawingInterop.prototype.connect = function(senderId) {
 	
 	this.interop.sendMessage(senderId, JSON.stringify({
 		"id": "drawingConnected",
-		"args": this.interop.id
+		"args": [this.interop.id]
 	}));
 }
 
@@ -802,7 +825,7 @@ AfxDrawingInterop.prototype.disconnect = function(senderId) {
 	
 	this.interop.sendMessage(senderId, JSON.stringify({
 		"id": "drawingDisconnected",
-		"args": this.interop.id
+		"args": [this.interop.id]
 	}));
 }
 

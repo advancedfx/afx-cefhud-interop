@@ -18,6 +18,7 @@ class CInterop : public CefBaseRefCounted {
  public:
   virtual void CloseInterop() = 0;
 
+  // Must be called on TID_RENDERER.
   virtual bool OnProcessMessageReceived(
       CefRefPtr<CefBrowser> browser,
       CefRefPtr<CefFrame> frame,

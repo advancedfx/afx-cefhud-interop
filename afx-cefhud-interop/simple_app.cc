@@ -148,9 +148,10 @@ bool SimpleApp::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                          CefProcessId source_process,
                                          CefRefPtr<CefProcessMessage> message) {
 
-  if (nullptr != m_Interop)
-    m_Interop->OnProcessMessageReceived(browser, frame, source_process,
+  if (nullptr != m_Interop) {
+    return m_Interop->OnProcessMessageReceived(browser, frame, source_process,
                                         message);
+  }
 
   return false;
 }
