@@ -116,6 +116,9 @@ class SimpleHandler : public CefClient,
 
   void InteropResize();
 
+  void SendAfxMessage(CefRefPtr<CefBrowser> browser,
+                      CefRefPtr<CefListValue> args);
+
   // Include the default reference counting implementation.
   IMPLEMENT_REFCOUNTING(SimpleHandler);
 };

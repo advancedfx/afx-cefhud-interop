@@ -586,6 +586,7 @@ AfxDrawingInterop.prototype.onDeviceReset = function() {
 }
 
 AfxDrawingInterop.prototype.onMessage = function(senderId, message) {
+	console.log(message);
 	const args = JSON.parse(message);
 	this.messageHandlers[args.id].call(this, args.args);
 }
@@ -777,7 +778,7 @@ AfxDrawingInterop.prototype.connect = function(senderId) {
 		
 		this.interval = setInterval(function(){
 			self.connect(senderId);
-		}, 1);
+		}, 100);
 		
 		return;
 	}

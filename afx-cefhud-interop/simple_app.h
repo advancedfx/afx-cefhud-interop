@@ -44,16 +44,33 @@ class SimpleApp : public CefApp,
   virtual void OnContextCreated(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefFrame> frame,
                                 CefRefPtr<CefV8Context> context) OVERRIDE {
+
+
     if (frame->IsMain()) {
       if(m_ExtraInfo->HasKey("interopType") && m_ExtraInfo->HasKey("argStr")) {
-        if (m_ExtraInfo->GetString("interopType").compare("drawing") == 0)
-          m_Interop = advancedfx::interop::CreateDrawingInterop(browser, frame,
-                                                                context, m_ExtraInfo->GetString("argStr"));
-        else if (m_ExtraInfo->GetString("interopType").compare("engine") == 0)
-          m_Interop = advancedfx::interop::CreateEngineInterop(browser, frame, context, m_ExtraInfo->GetString("argStr"));
-        else if (m_ExtraInfo->GetString("interopType").compare("index") == 0)
-          m_Interop = advancedfx::interop::CreateInterop(
-              browser, frame, context, m_ExtraInfo->GetString("argStr"));
+        if (m_ExtraInfo->GetString("interopType").compare("drawing") == 0) {
+          auto window = context->GetGlobal();
+          window->SetValue(
+              "afxInterop",
+              advancedfx::interop::CreateDrawingInterop(
+                  browser, frame, context, m_ExtraInfo->GetString("argStr"), &m_Interop),
+              V8_PROPERTY_ATTRIBUTE_NONE);
+        }
+        else if (m_ExtraInfo->GetString("interopType").compare("engine") == 0) {
+          auto window = context->GetGlobal();
+          window->SetValue("afxInterop",
+                           advancedfx::interop::CreateEngineInterop(
+                               browser, frame, context,
+                               m_ExtraInfo->GetString("argStr"), &m_Interop),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+        }
+        else if (m_ExtraInfo->GetString("interopType").compare("index") == 0) {
+          auto window = context->GetGlobal();
+          window->SetValue("afxInterop",advancedfx::interop::CreateInterop(
+                               browser, frame, context,
+                               m_ExtraInfo->GetString("argStr"), &m_Interop),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+        }
       }
     }
   }

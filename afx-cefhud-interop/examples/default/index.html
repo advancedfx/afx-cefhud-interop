@@ -48,19 +48,18 @@ function AfxInterop(interop, args) {
 		fileFolderPath+"/drawing.html",
 		JSON.stringify({
 			"indexInteropId": this.interop.id,
-			"pipeName": "afxInterop_drawing"
+			"pipeName": "advancedfxInterop_drawing"
 		}),
 		function(drawingInteropId){
 			console.log("Created drawing interop #"+drawingInteropId);
 			self.drawingInteropId = drawingInteropId;
-			
 			
 			self.interop.createEngineInterop(
 				fileFolderPath+"/engine.html",
 				JSON.stringify({
 					"indexInteropId": self.interop.id,
 					"drawingInteropId": self.drawingInteropId,
-					"pipeName": "afxInterop"
+					"pipeName": "advancedfxInterop"
 				}),
 				function(engineInteropId){
 					console.log("Created engine interop #"+engineInteropId);
@@ -75,9 +74,12 @@ function AfxInterop(interop, args) {
 			throw "Creating drawing interop failed: "+errorMessage;
 		}
 	);
+	
+	this.interop.sendMessage(this.interop.id, "TEST");
 }
 
 AfxInterop.prototype.onMessage = function(senderId, message) {
+	console.log(message);
 	const args = JSON.parse(message);
 	this.messageHandlers[args.id].call(this, args.args);
 }

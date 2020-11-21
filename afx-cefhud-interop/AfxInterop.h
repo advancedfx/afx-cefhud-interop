@@ -1,5 +1,6 @@
 #pragma once
 
+#include <include/cef_base.h>
 #include <include/cef_v8.h>
 
 #include <list>
@@ -13,7 +14,7 @@
 namespace advancedfx {
 namespace interop {
 
-class CInterop : public virtual CefBaseRefCounted {
+class CInterop : public CefBaseRefCounted {
  public:
   virtual void CloseInterop() = 0;
 
@@ -24,19 +25,25 @@ class CInterop : public virtual CefBaseRefCounted {
       CefRefPtr<CefProcessMessage> message) = 0;
 };
 
-class CInterop* CreateInterop(CefRefPtr<CefBrowser> browser,
+CefRefPtr<CefV8Value> CreateInterop(CefRefPtr<CefBrowser> browser,
                               CefRefPtr<CefFrame> frame,
-                              CefRefPtr<CefV8Context> context, const CefString & argStr);
+                                          CefRefPtr<CefV8Context> context,
+                                          const CefString& argStr,
+                                          CefRefPtr<CInterop>* out = nullptr);
 
-class CInterop* CreateEngineInterop(CefRefPtr<CefBrowser> browser,
-                                          CefRefPtr<CefFrame> frame,
-                                    CefRefPtr<CefV8Context> context,
-                                    const CefString& argStr);
+CefRefPtr<CefV8Value> CreateEngineInterop(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefFrame> frame,
+    CefRefPtr<CefV8Context> context,
+    const CefString& argStr,
+    CefRefPtr<CInterop>* out = nullptr);
 
-class CInterop* CreateDrawingInterop(CefRefPtr<CefBrowser> browser,
-                                            CefRefPtr<CefFrame> frame,
-                                     CefRefPtr<CefV8Context> context,
-                                     const CefString& argStr);
+CefRefPtr<CefV8Value> CreateDrawingInterop(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefFrame> frame,
+    CefRefPtr<CefV8Context> context,
+    const CefString& argStr,
+    CefRefPtr<CInterop>* out = nullptr);
 
 }  // namespace interop
 }  // namespace advancedfx

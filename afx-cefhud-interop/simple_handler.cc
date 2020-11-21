@@ -226,6 +226,22 @@ void SimpleHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
     browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, message);
 }
 
+void SimpleHandler::SendAfxMessage(CefRefPtr<CefBrowser> browser,
+                                   CefRefPtr<CefListValue> args) {
+
+  auto it = m_Browsers.find(args->GetInt(0));
+  if (it != m_Browsers.end()) {
+    auto sendMessage = CefProcessMessage::Create("afx-message");
+    auto sendArgs = sendMessage->GetArgumentList();
+    sendArgs->SetSize(2);
+    sendArgs->SetInt(0, browser->GetIdentifier());
+    sendArgs->SetString(1, args->GetString(1));
+
+    it->second.Browser->GetMainFrame()->SendProcessMessage(PID_RENDERER,
+                                                           sendMessage);
+  }
+}
+
 bool SimpleHandler::OnProcessMessageReceived(
     CefRefPtr<CefBrowser> browser,
     CefRefPtr<CefFrame> frame,
@@ -235,20 +251,11 @@ bool SimpleHandler::OnProcessMessageReceived(
       auto const name = message->GetName();
 
   if (name == "afx-send-message") {
-        auto args = message->GetArgumentList();
+        CefPostTask(TID_UI,
+                base::Bind(&SimpleHandler::SendAfxMessage, this,
+                               browser, message->GetArgumentList()->Copy()));
 
-        auto it = m_Browsers.find(args->GetInt(1));
-        if (it != m_Browsers.end()) {
-
-          auto sendMessage = CefProcessMessage::Create("afx-message");
-          auto sendArgs = sendMessage->GetArgumentList();
-          sendArgs->SetSize(2);
-          sendArgs->SetInt(0, args->GetInt(0));
-          sendArgs->SetString(1, args->GetString(2));
-
-          it->second.Browser->GetMainFrame()->SendProcessMessage(PID_RENDERER,
-                                                         sendMessage);
-        }        
+        return true;
   }
 
   if (name == "afx-drawing-resized") {
@@ -258,7 +265,9 @@ bool SimpleHandler::OnProcessMessageReceived(
       it->second.Width = args->GetInt(0);
       it->second.Height = args->GetInt(1);
       it->second.Browser->GetHost()->WasResized();
+      return true;
     }
+
   }
 
   if (name == "afx-drawing-begin-frame") {
@@ -268,6 +277,7 @@ bool SimpleHandler::OnProcessMessageReceived(
       it->second.Width = args->GetInt(0);
       it->second.Height = args->GetInt(1);
       it->second.Browser->GetHost()->SendExternalBeginFrame();
+      return true;
     }
   }
 

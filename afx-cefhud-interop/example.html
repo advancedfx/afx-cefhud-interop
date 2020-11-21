@@ -1,6 +1,13 @@
 <!DOCTYPE html>
 <!--
 
+!!!!
+
+PLEASE DO NOT USE THIS FILE, it's a left-over,
+INSTEAD USE the index.html in one of the examples of the examples directory. thanks!
+
+!!!!
+
 ## Usage:
 
 Launch CS:GO from HLAE with -afxInteropLight.
@@ -167,8 +174,9 @@ AfxRect: {
 	bottom: Int
 };
 
-AfxDrawingHandle: {
-	release: Function(), // Always release.Strongly recommended if you don't need it anymore to save resources.
+AfxHandle: {
+	lo: UInt;
+	hi: UInt;
 };
 
 AfxDrawingData: extends ArrayBuffer {
