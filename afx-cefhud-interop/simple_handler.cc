@@ -71,6 +71,8 @@ bool SimpleHandler::DoClose(CefRefPtr<CefBrowser> browser) {
 void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
 
+  m_PaintedPromiseIds.erase(browser->GetIdentifier());
+
   auto it = m_Browsers.find(browser->GetIdentifier());
   if (it != m_Browsers.end()) {
     m_Browsers.erase(it);
@@ -80,6 +82,11 @@ void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
 
     // All browser windows have closed. Quit the application message loop.
     CefQuitMessageLoop();
+  } else {
+
+    // This was our main window, so ask the others to exit:
+    if (browser->GetHost()->GetWindowHandle())
+      CloseAllBrowsers(true);
   }
 }
 
@@ -107,7 +114,6 @@ void SimpleHandler::OnLoadError(CefRefPtr<CefBrowser> browser,
 void SimpleHandler::CreateDrawingInterop(CefRefPtr<CefBrowser> browser,
                                         CefRefPtr<CefListValue> args) {
   CefBrowserSettings browser_settings;
-  browser_settings.web_security = STATE_DISABLED;
   browser_settings.file_access_from_file_urls = STATE_ENABLED;
   browser_settings.windowless_frame_rate = 60;  // vsync doesn't matter due to
                                                 // external_begin_frame_enabled
@@ -116,74 +122,46 @@ void SimpleHandler::CreateDrawingInterop(CefRefPtr<CefBrowser> browser,
   window_info.SetAsWindowless(nullptr);
   window_info.shared_texture_enabled = true;
   window_info.external_begin_frame_enabled = true;
+  window_info.height = 480;
+  window_info.width = 640;
+  window_info.x = 0;
+  window_info.y = 0;  
 
   CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
   extra_info->SetString("interopType", "drawing");
   extra_info->SetString("argStr", args->GetString(3));
-
-  CefRefPtr<CefBrowser> resultBrowser = CefBrowserHost::CreateBrowserSync(
-      window_info, this, args->GetString(2),
-      browser_settings, extra_info, nullptr);
-
-  CefRefPtr<CefProcessMessage> message;
-
-  if (nullptr == resultBrowser) {
-    message = CefProcessMessage::Create("afx-interop-reject");
-    auto messageArgs = message->GetArgumentList();
-    messageArgs->SetSize(3);
-    messageArgs->SetInt(0, args->GetInt(0));
-    messageArgs->SetInt(1, args->GetInt(1));
-    messageArgs->SetString(2, "Creating engine interop browser failed.");
-  } else {
-    message = CefProcessMessage::Create("afx-interop-resolve");
-    auto messageArgs = message->GetArgumentList();
-    messageArgs->SetSize(3);
-    messageArgs->SetInt(0, args->GetInt(0));
-    messageArgs->SetInt(1, args->GetInt(1));
-    messageArgs->SetInt(2, resultBrowser->GetIdentifier());
-  }
-
-  browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, message);
+  extra_info->SetInt("promiseIdLo", args->GetInt(0));
+  extra_info->SetInt("promiseIdHi", args->GetInt(1));
+  extra_info->SetInt("parentId", browser->GetIdentifier());
+  CefBrowserHost::CreateBrowser(window_info, this, args->GetString(2),
+                                browser_settings, extra_info, nullptr);
 }
 
 void SimpleHandler::CreateEngineInterop(CefRefPtr<CefBrowser> browser,
                                          CefRefPtr<CefListValue> args) {
   CefBrowserSettings browser_settings;
   browser_settings.file_access_from_file_urls = STATE_ENABLED;
-  browser_settings.windowless_frame_rate = 60;  // vsync doesn't matter due to
+  browser_settings.windowless_frame_rate = 30;  // vsync doesn't matter due to
                                                 // external_begin_frame_enabled
 
   CefWindowInfo window_info;
   window_info.SetAsWindowless(nullptr);
   window_info.shared_texture_enabled = true;
   window_info.external_begin_frame_enabled = true;
+  window_info.height = 480;
+  window_info.width = 640;
+  window_info.x = 0;
+  window_info.y = 0;  
 
   CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
   extra_info->SetString("interopType", "engine");
   extra_info->SetString("argStr", args->GetString(3));
+  extra_info->SetInt("promiseIdLo", args->GetInt(0));
+  extra_info->SetInt("promiseIdHi", args->GetInt(1));
+  extra_info->SetInt("parentId", browser->GetIdentifier());
 
-  CefRefPtr<CefBrowser> resultBrowser = CefBrowserHost::CreateBrowserSync(window_info, this, args->GetString(2),
+  CefBrowserHost::CreateBrowser(window_info, this, args->GetString(2),
       browser_settings, extra_info, nullptr);
-
-  CefRefPtr<CefProcessMessage> message;
-
-  if (nullptr == resultBrowser) {
-    message = CefProcessMessage::Create("afx-interop-reject");
-    auto messageArgs = message->GetArgumentList();
-    messageArgs->SetSize(3);
-    messageArgs->SetInt(0, args->GetInt(0));
-    messageArgs->SetInt(1, args->GetInt(1));
-    messageArgs->SetString(2, "Creating engine interop browser failed.");
-  } else {
-    message = CefProcessMessage::Create("afx-interop-resolve");
-    auto messageArgs = message->GetArgumentList();
-    messageArgs->SetSize(3);
-    messageArgs->SetInt(0, args->GetInt(0));
-    messageArgs->SetInt(1, args->GetInt(1));
-    messageArgs->SetInt(2, resultBrowser->GetIdentifier());
-  }
-
-  browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, message);
 }
 
 void SimpleHandler::CloseAllBrowsers(bool force_close) {
@@ -194,12 +172,8 @@ void SimpleHandler::CloseAllBrowsers(bool force_close) {
     return;
   }
 
-  if (m_Browsers.empty())
-    return;
-
-  auto it = m_Browsers.begin();
-  for (; it != m_Browsers.end(); ++it)
-    it->second.Browser->GetHost()->CloseBrowser(force_close);
+  while (!m_Browsers.empty())
+    m_Browsers.begin()->second.Browser->GetHost()->CloseBrowser(force_close);
 }
 
 
@@ -217,13 +191,31 @@ void SimpleHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
     const RectList& dirtyRects,
     void* share_handle) {
 
-    auto message = CefProcessMessage::Create("afx-painted");
-    auto args = message->GetArgumentList();
-    args->SetSize(1);
-    args->SetInt(0, (int)(((unsigned __int64)share_handle)&0xffffffff));
-    args->SetInt(1, (int)(((unsigned __int64)share_handle >> 32)&0xffffffff));
+  MessageBoxA(NULL,"OnAcceleratedPaint\n","Paint",MB_OK|MB_ICONINFORMATION);
 
-    browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, message);
+  if (PET_VIEW == type) {
+
+    auto it = m_PaintedPromiseIds.find(browser->GetIdentifier());
+
+    if (it != m_PaintedPromiseIds.end()) {
+      if (!it->second.empty()) {
+        auto message = CefProcessMessage::Create("afx-painted");
+        auto args = message->GetArgumentList();
+        args->SetSize(4);
+
+        PromiseId_s& promiseId = it->second.front();
+        args->SetInt(0, promiseId.Lo);
+        args->SetInt(1, promiseId.Hi);
+        it->second.pop();
+
+        args->SetInt(2, (int)(((unsigned __int64)share_handle) & 0xffffffff));
+        args->SetInt(
+            3, (int)(((unsigned __int64)share_handle >> 32) & 0xffffffff));
+
+        browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, message);
+      }
+    }
+  }
 }
 
 void SimpleHandler::SendAfxMessage(CefRefPtr<CefBrowser> browser,
@@ -242,6 +234,28 @@ void SimpleHandler::SendAfxMessage(CefRefPtr<CefBrowser> browser,
   }
 }
 
+void SimpleHandler::SendExternalBeginFrame(CefRefPtr<CefBrowser> browser,
+                                           CefRefPtr<CefListValue> args) {
+  auto it = m_Browsers.find(browser->GetIdentifier());
+  if (it != m_Browsers.end()) {
+
+    m_PaintedPromiseIds[browser->GetIdentifier()].emplace(args->GetInt(0),
+                                                          args->GetInt(1));
+
+    it->second.Browser->GetHost()->SendExternalBeginFrame();
+  }
+}
+
+void SimpleHandler::DrawingResized(CefRefPtr<CefBrowser> browser,
+                                           CefRefPtr<CefListValue> args) {
+  auto it = m_Browsers.find(browser->GetIdentifier());
+  if (it != m_Browsers.end()) {
+    it->second.Width = args->GetInt(0);
+    it->second.Height = args->GetInt(1);
+    it->second.Browser->GetHost()->WasResized();
+  }
+}
+
 bool SimpleHandler::OnProcessMessageReceived(
     CefRefPtr<CefBrowser> browser,
     CefRefPtr<CefFrame> frame,
@@ -251,31 +265,34 @@ bool SimpleHandler::OnProcessMessageReceived(
       auto const name = message->GetName();
 
   if (name == "afx-send-message") {
-        CefPostTask(TID_UI,
-                base::Bind(&SimpleHandler::SendAfxMessage, this,
-                               browser, message->GetArgumentList()->Copy()));
+
+        // TODO: Does this really have to be on the UI thread, or can we short-circuit this?
+
+        //CefPostTask(TID_UI,
+        //        base::Bind(&SimpleHandler::SendAfxMessage, this,
+         ///                      browser, message->GetArgumentList()->Copy()));
+
+        SendAfxMessage(browser, message->GetArgumentList());
 
         return true;
   }
 
   if (name == "afx-drawing-resized") {
-    auto it = m_Browsers.find(browser->GetIdentifier());
-    if (it != m_Browsers.end()) {
-      auto args = message->GetArgumentList();
-      it->second.Width = args->GetInt(0);
-      it->second.Height = args->GetInt(1);
-      it->second.Browser->GetHost()->WasResized();
-      return true;
-    }
+    CefPostTask(TID_UI,
+                base::Bind(&SimpleHandler::DrawingResized, this,
+                           browser, message->GetArgumentList()->Copy()));
+
+    return true;
 
   }
 
-  if (name == "afx-drawing-begin-frame") {
-    auto it = m_Browsers.find(browser->GetIdentifier());
-    if (it != m_Browsers.end()) {
-      it->second.Browser->GetHost()->SendExternalBeginFrame();
-      return true;
-    }
+  if (name == "afx-render-cef-frame") {
+    CefPostTask(TID_UI,
+                base::Bind(&SimpleHandler::SendExternalBeginFrame, this,
+                           browser,
+                           message->GetArgumentList()->Copy()));
+
+    return true;
   }
 
   if (name == "afx-create-drawing") {
@@ -292,6 +309,22 @@ bool SimpleHandler::OnProcessMessageReceived(
                                    message->GetArgumentList()->Copy()));
 
     return true;
+  }
+
+  if (name == "afx-interop-resolve") {
+    auto args = message->GetArgumentList();
+    auto it = m_Browsers.find(args->GetInt(0));
+    if (it != m_Browsers.end()) {
+      auto sendMessage = CefProcessMessage::Create("afx-interop-resolve");
+      auto sendArgs = sendMessage->GetArgumentList();
+      sendArgs->SetSize(3);
+      sendArgs->SetInt(0, args->GetInt(1));
+      sendArgs->SetInt(1, args->GetInt(2));
+      sendArgs->SetInt(2, browser->GetIdentifier());
+
+      it->second.Browser->GetMainFrame()->SendProcessMessage(PID_RENDERER,
+                                                             sendMessage);
+    }
   }
 
   return false;

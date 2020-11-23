@@ -25,24 +25,13 @@ afx_interop send cefhud [...]
 <h1>Default example</h1>
 <script>
 
-////////////////////////////////////////////////////////////////////////////////
-
-function getErrorObject(){
-	try { throw Error('') } catch(err) { return err; }
-}
-
-function logErrorObject() {
-	console.log(getErrorObject().stack);
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
 function AfxInterop(interop, args) {
 	
 	var self = this;
 	
 	this.interop = interop;
 	this.args = args;
+	this.taskQueue = [];
 	
 	this.messageHandlers = {
 	};
@@ -106,6 +95,25 @@ AfxInterop.prototype.onError = function(senderId, message) {
 		throw ("Engine interop #"+senderId+" error: "+message);
 	else
 		throw ("Interop #"+senderId+" error: "+message);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+AfxInterop.prototype.queueTask = function(task) {
+	
+	var self = this;
+	
+	this.taskQueue.push(task);
+	
+	if(this.taskQueue.length === 1) {
+		queueMicrotask(function(){
+			for(var i = 0; i < self.taskQueue.length; ++i)
+			{
+				self.taskQueue[i].call(self);
+			}
+			self.taskQueue = [];
+		});
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////

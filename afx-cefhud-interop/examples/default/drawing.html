@@ -457,7 +457,8 @@ function AfxDrawingInterop(interop,args) {
 	
 	this.interop = interop;
 	this.args = args;
-	this.interval = null;
+	this.taskQueue = [];
+	this.taskQueueDeferred = 0;
 	
 	this.width = null;
 	this.height = null;
@@ -487,23 +488,18 @@ function AfxDrawingInterop(interop,args) {
 			this.engineInteropId = null;
 		},
 		"onRenderViewBegin": function(renderInfo){
-			if(this.interop.pumpBegin(renderInfo.frameCount, 0))
-			{
-				this.renderInfo = renderInfo;
+			this.renderInfo = renderInfo;
+		
+			this.frameCount = renderInfo.frameCount;
+			var texWidth = renderInfo.view.width - renderInfo.view.x;
+			var texHeight = renderInfo.view.height - renderInfo.view.y;
 			
-				this.frameCount = renderInfo.frameCount;
-				var texWidth = renderInfo.view.width - renderInfo.view.x;
-				var texHeight = renderInfo.view.height - renderInfo.view.y;
-				
-				if(this.width !== texWidth || this.height !== texHeight)
-				{
-					this.cefTextureHandle = null;
-					this.width = texWidth;
-					this.height = texHeight;
-					this.interop.setSize(texWidth, texHeight);
-				}
-				
-				this.interop.pumpEnd();
+			if(this.width !== texWidth || this.height !== texHeight)
+			{
+				this.cefTextureHandle = null;
+				this.width = texWidth;
+				this.height = texHeight;
+				this.interop.setSize(texWidth, texHeight);
 			}
 		},
 		"onGameEvent": function(e){
@@ -515,44 +511,50 @@ function AfxDrawingInterop(interop,args) {
 			//console.log(JSON.stringify(e));
 		},
 		"onHudEnd": function(frameCount,pass){
+			console.log("onHudEnd");
+			
 			if(this.interop.pumpBegin(frameCount, pass))
 			{
-				this.interop.beginFrame();
-				
 				if(null == this.shaders["afx_drawtexture_ps20"])
 					this.shaders["afx_drawtexture_ps20"] = this.interop.d3d9CreatePixelShader(this.shaderData["afx_drawtexture_ps20.acs"]);
 					
 				if(null == this.vertexDeclarations["pos3_uv2"])
 					this.vertexDeclarations["pos3_uv2"] = this.interop.d3d9CreateVertexDeclaration(this.vertexElements["pos3_uv2"]);
 				
-				var cefTextureHandle = this.interop.waitForCefFrame();
+				this.deferTasks();
 				
-				if(null == this.cefTextureHandle || this.cefTextureHandle != cefTextureHandle)
-				{
-					this.cefTextureHandle = cefTextureHandle;
-					if(this.cefTexture) {
-						cefTexture.release();
-						cefTexture = null;
+				this.interop.renderCefFrame(function(cefTextureHandle){
+					
+					if(null == self.cefTextureHandle || self.cefTextureHandle != cefTextureHandle)
+					{
+						self.cefTextureHandle = cefTextureHandle;
+						if(self.cefTexture) {
+							cefTexture.release();
+							cefTexture = null;
+						}
 					}
-				}
-				
-				if(null == this.cefTexture)
-					cefTexture = this.interop.d3d9CreateTexture(this.width, this.height, 1, D3DUSAGE.D3DUSAGE_RENDERTARGET, 21 /* D3DFMT_A8R8G8B8 */, D3DPOOL.D3DPOOL_DEFAULT, this.cefTextureHandle);
-				
-				this.drawRect2d(this.cefTexture, this.renderInfo.view.x, this.renderInfo.view.y, this.renderInfo.view.width, this.renderInfo.view.height, 0, 0, 1, 1);
-				
-				this.interop.waitForClientGpu();
-				
-				this.interop.pumpEnd();
+					
+					if(null == self.cefTexture)
+						cefTexture = self.interop.d3d9CreateTexture(self.width, self.height, 1, D3DUSAGE.D3DUSAGE_RENDERTARGET, 21 /* D3DFMT_A8R8G8B8 */, D3DPOOL.D3DPOOL_DEFAULT, self.cefTextureHandle);
+					
+					self.drawRect2d(self.cefTexture, self.renderInfo.view.x, self.renderInfo.view.y, self.renderInfo.view.width, self.renderInfo.view.height, 0, 0, 1, 1);
+					
+					self.interop.waitForClientGpu();
+					
+					self.interop.pumpEnd();
+					
+					self.undeferTasks();
+				}, function(message){
+					throw ("The impossible has happened: "+message);
+				});
 			}
 		}
 	};
 	
 	interop.onMessage = function(senderId, message){
-		self.onMessage(senderId, message);
-	};
-	interop.onError = function(senderId, message){
-		self.onError(senderId, message);
+		self.queueTask(function() {
+			self.onMessage(senderId, message);
+		});
 	};
 	interop.onDeviceReset = function(){
 		self.onDeviceReset();
@@ -568,7 +570,7 @@ function AfxDrawingInterop(interop,args) {
 				usage: D3DDECLUSAGE.D3DDECLUSAGE_POSITION, usageIndex: 0
 			},
 			{
-				stream: 1,
+				stream: 0,
 				offset: 3*4,
 				type: D3DDECLTYPE.D3DDECLTYPE_FLOAT2,
 				method: D3DDECLMETHOD.D3DDECLMETHOD_DEFAULT,
@@ -589,10 +591,6 @@ function AfxDrawingInterop(interop,args) {
 AfxDrawingInterop.prototype.onMessage = function(senderId, message) {
 	const args = JSON.parse(message);
 	this.messageHandlers[args.id].apply(this, args.args);
-}
-
-AfxDrawingInterop.prototype.onError = function(senderId, message) {
-	throw ("Interop #"+senderId+" error: "+message);
 }
 
 AfxDrawingInterop.prototype.onDeviceReset = function() {
@@ -617,6 +615,57 @@ AfxDrawingInterop.prototype.onDeviceReset = function() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+
+AfxDrawingInterop.prototype.queueTask = function(task) {
+	
+	if(Array.isArray(task))
+	{
+		for(var i = 0; i < task.length; ++i)
+			this.queueTask(tasks[i]);
+		return;
+	}
+	
+	if(0 == this.taskQueueDeferred)
+	{
+		task();
+		return;
+	}
+	
+	this.taskQueue.push(task);
+}
+
+AfxDrawingInterop.prototype.stackTask = function(task) {
+	
+	if(Array.isArray(task))
+	{
+		for(var i = 0; i < task.length; ++i)
+			this.stackTask(tasks[i]);
+		return;
+	}
+	
+	if(0 == this.taskQueueDeferred)
+	{
+		task();
+		return;
+	}
+	
+	this.taskQueue.unshift(task);
+}
+
+AfxDrawingInterop.prototype.deferTasks = function() {
+	console.log("deferTasks");
+	++this.taskQueueDeferred;
+}
+
+AfxDrawingInterop.prototype.undeferTasks = function() {
+	console.log("undeferTasks");
+	--this.taskQueueDeferred;
+	
+	while(this.taskQueueDeferred === 0 && 0 < this.taskQueue.length)
+	{
+		this.taskQueue.shift()();
+	}
+}
 
 AfxDrawingInterop.prototype.createFirstAcsShaderEntryData = function(base64_string) {
 
@@ -753,11 +802,11 @@ AfxDrawingInterop.prototype.drawRect2d = function(texture,x,y,width,height,x0,y0
 		dv.setFloat32(18*4, x1, true);
 		dv.setFloat32(19*4, y1, true);
 		
-		var vertexBuffer = this.interop.d3d9CreateVertexBuffer(4, D3DUSAGE.D3DUSAGE_WRITEONLY, 0, D3DPOOL.D3DPOOL_DEFAULT, null);
+		var vertexBuffer = this.interop.d3d9CreateVertexBuffer(dd.buffer.byteLength, D3DUSAGE.D3DUSAGE_WRITEONLY, 0, D3DPOOL.D3DPOOL_DEFAULT, null);
 		
 		vertexBuffer.update(dd, 0, dd.buffer.byteLength);
 		
-		this.interop.d3d9SetStreamSource(0, vertexBuffer, 0, 20);
+		this.interop.d3d9SetStreamSource(0, vertexBuffer, 0, dd.buffer.byteLength);
 		
 		this.interop.d3d9DrawPrimitive(D3DPRIMITIVETYPE.D3DPT_TRIANGLESTRIP, 0, 2);
 		
@@ -775,12 +824,13 @@ AfxDrawingInterop.prototype.buildD3d9VertexElements = function(definitions) {
 	var i = 0;
 	for(; i < definitions.length; ++i)
 	{
-		dv.setUint16(i*8 +  0, definitions.stream,true);
-		dv.setUint16(i*8 +  2, definitions.offset,true);
-		dv.setUint8(i*8 +  4, definitions.type);
-		dv.setUint8(i*8 +  5, definitions.method);
-		dv.setUint8(i*8 +  6, definitions.usage);
-		dv.setUint8(i*8 +  7, definitions.usageIndex);
+		var definition = definitions[i];
+		dv.setUint16(i*8 +  0, definition.stream,true);
+		dv.setUint16(i*8 +  2, definition.offset,true);
+		dv.setUint8(i*8 +  4, definition.type);
+		dv.setUint8(i*8 +  5, definition.method);
+		dv.setUint8(i*8 +  6, definition.usage);
+		dv.setUint8(i*8 +  7, definition.usageIndex);
 	}
 	
 	// append D3DDECL_END:
@@ -795,38 +845,38 @@ AfxDrawingInterop.prototype.buildD3d9VertexElements = function(definitions) {
 }
 
 AfxDrawingInterop.prototype.connect = function(senderId) {
-	if(!this.interop.connect())
-	{
-		var self = this;
-		
-		this.interval = setInterval(function(){
-			self.connect(senderId);
-		}, 100);
-		
-		return;
-	}
 	
-	this.interop.sendMessage(senderId, JSON.stringify({
-		"id": "drawingConnected",
-		"args": [this.interop.id]
-	}));
+	if(this.interop.connect()) {
+		this.interop.sendMessage(senderId, JSON.stringify({
+			"id": "drawingConnected",
+			"args": [this.interop.id]
+		}));
+	}
+	else {
+		this.interop.sendMessage(senderId, JSON.stringify({
+			"id": "drawingConnecting",
+			"args": [this.interop.id]
+		}));
+	}
 }
 
 AfxDrawingInterop.prototype.disconnect = function(senderId) {
 	
-	if(this.interval !== null) {
-		clearInterval(this.interval);
-		this.interval = null;
+	try {
+		this.onDeviceReset();
 	}
-	
-	this.onDeviceReset();
-	
-	this.interop.close();
-	
-	this.interop.sendMessage(senderId, JSON.stringify({
-		"id": "drawingDisconnected",
-		"args": [this.interop.id]
-	}));
+	catch(error)
+	{
+		console.log(error);
+	}
+	finally {
+		this.interop.close();
+		
+		this.interop.sendMessage(senderId, JSON.stringify({
+			"id": "drawingDisconnected",
+			"args": [this.interop.id]
+		}));
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////

@@ -42,26 +42,30 @@ function AfxEngineInterop(interop, args) {
 	this.firstConnection = true;
 	this.drawingConnected = false;
 	this.interval = null;
+	this.taskQueue = [];
 	
 	this.messageHandlers = {
 		"drawingConnected": function(senderId) {
+			console.log("drawingConnected: "+senderId);
 			this.drawingConnected = true;
 			this.connect();
 		},
 		"drawingDisconnected": function(senderId) {
+			console.log("drawingDisconnected: "+senderId);
 			this.drawingConnected = false;
-			this.disconnect();
+		},
+		"drawingConnecting": function(senderId) {
+			this.connect();
 		},
 	};
 	
 	interop.onMessage = function(senderId, message){
-		self.onMessage(senderId, message);
-	};
-	interop.onError = function(senderId, message){
-		self.onError(senderId, message);
+		self.queueTask(function() {
+			self.onMessage(senderId, message);
+		});
 	};
 	interop.onGameEvent = function(e){
-		self.disconnect();
+		self.onGameEvent(e);
 	};
 	interop.onCommands = function(commands){
 		self.onCommands(commands);
@@ -192,10 +196,6 @@ AfxEngineInterop.prototype.onMessage = function(senderId, message) {
 	this.messageHandlers[args.id].apply(this, args.args);
 }
 
-AfxEngineInterop.prototype.onError = function(senderId, message) {
-	throw ("Interop #"+senderId+" error: "+message);
-}
-
 AfxEngineInterop.prototype.onGameEvent = function(e){
 	this.interop.sendMessage(this.args.drawingInteropId, JSON.stringify({
 		"id": "onGameEvent",
@@ -262,13 +262,11 @@ AfxEngineInterop.prototype.onRenderViewBegin = function(renderInfo) {
 	passes["afterHud"] = true;
 	//passes["afterRenderView"] = true;	
 	
-	this.pass++;
-	
 	return passes;
 }
 
 AfxEngineInterop.prototype.onHudEnd = function(){
-
+	
 	this.interop.sendMessage(this.args.drawingInteropId, JSON.stringify({
 		"id": "onHudEnd",
 		"args": [this.renderInfo.frameCount, this.pass++]
@@ -277,23 +275,32 @@ AfxEngineInterop.prototype.onHudEnd = function(){
 
 ////////////////////////////////////////////////////////////////////////////////
 
-AfxEngineInterop.prototype.connect = function() {
-	this.interop.sendMessage(this.args.drawingInteropId, JSON.stringify({
-		"id": "connect",
-		"args": [this.interop.id]
-	}));
+AfxEngineInterop.prototype.queueTask = function(task) {
 	
-	this.connecting();
+	var self = this;
+	
+	this.taskQueue.push(task);
+	
+	if(this.taskQueue.length === 1) {
+		queueMicrotask(function(){
+			for(var i = 0; i < self.taskQueue.length; ++i)
+			{
+				self.taskQueue[i].call(self);
+			}
+			self.taskQueue = [];
+		});
+	}
 }
 
-AfxEngineInterop.prototype.connecting = function() {
+AfxEngineInterop.prototype.connect = function() {
+	console.log("connect");
+	
 	if(!this.interop.connect() || !this.drawingConnected)
 	{
-		var self = this;
-		
-		this.interval = setInterval(function(){
-			self.connecting();
-		}, 100);
+		this.interop.sendMessage(this.args.drawingInteropId, JSON.stringify({
+			"id": "connect",
+			"args": [this.interop.id]
+		}));
 		
 		return;
 	}
@@ -301,10 +308,14 @@ AfxEngineInterop.prototype.connecting = function() {
 	this.pump();
 }
 
+
 AfxEngineInterop.prototype.pump = function() {
+	
+	console.log('Pumping ...');
 	
 	if(!this.interop.pump())
 	{
+		console.log("Pumping failed.");
 		this.disconnect();
 		
 		return;
@@ -318,6 +329,7 @@ AfxEngineInterop.prototype.pump = function() {
 }
 
 AfxEngineInterop.prototype.disconnect = function() {
+	console.log("disconnect");
 	
 	if(this.interval !== null) {
 		clearInterval(this.interval);
@@ -335,7 +347,27 @@ AfxEngineInterop.prototype.disconnect = function() {
 	
 	this.interop.close();
 	
+	this.disconnecting();
+	
 	this.connect();
+}
+
+AfxEngineInterop.prototype.disconnecting = function() {
+	
+	if(this.drawingConnected)
+	{
+		var self = this;
+		
+		this.interval = setInterval(function(){
+			self.disconnecting();
+		}, 100);
+		return;
+	}
+	
+	if(this.interval !== null) {
+		clearInterval(this.interval);
+		this.interval = null;
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////

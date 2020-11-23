@@ -8,7 +8,7 @@
 #include "include/cef_client.h"
 
 #include <map>
-#include <shared_mutex>
+#include <queue>
 
 class SimpleHandler : public CefClient,
                       public CefRenderHandler,
@@ -50,13 +50,13 @@ class SimpleHandler : public CefClient,
   virtual void OnTitleChange(CefRefPtr<CefBrowser> browser,
                              const CefString& title) OVERRIDE;
 
-   virtual void OnPaint(CefRefPtr<CefBrowser> /*browser*/,
+   virtual void OnPaint(CefRefPtr<CefBrowser> browser,
                        PaintElementType type,
                        const RectList& dirtyRects,
                        const void* buffer,
                        int width,
                        int height) OVERRIDE {
-    // this application doesn't support software rasterizing
+    OutputDebugStringA("OnPaint\n");
   }
 
      // CefRenderHandler methods:
@@ -89,6 +89,17 @@ class SimpleHandler : public CefClient,
 
   bool is_closing_;
 
+  struct PromiseId_s {
+    int Lo;
+    int Hi;
+
+    PromiseId_s(int lo, int hi) : Lo(lo), Hi(hi) {
+
+    }
+  };
+
+  std::map<int,std::queue<PromiseId_s>> m_PaintedPromiseIds;
+
   struct BrowserMapElem {
     CefRefPtr<CefBrowser> Browser;
     int Width = 640;
@@ -98,6 +109,8 @@ class SimpleHandler : public CefClient,
   };
 
   std::map<int, BrowserMapElem> m_Browsers;
+
+  std::map<int, int> m_BrowserIdToClientId;
 
    // Platform-specific implementation.
   void PlatformTitleChange(CefRefPtr<CefBrowser> browser,
@@ -119,7 +132,14 @@ class SimpleHandler : public CefClient,
   void SendAfxMessage(CefRefPtr<CefBrowser> browser,
                       CefRefPtr<CefListValue> args);
 
-  // Include the default reference counting implementation.
+  void SendExternalBeginFrame(CefRefPtr<CefBrowser> browser,
+                              CefRefPtr<CefListValue> args);
+
+  
+void DrawingResized(CefRefPtr<CefBrowser> browser,
+                                     CefRefPtr<CefListValue> args);
+
+// Include the default reference counting implementation.
   IMPLEMENT_REFCOUNTING(SimpleHandler);
 };
 

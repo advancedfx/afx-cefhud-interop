@@ -121,9 +121,13 @@ void SimpleApp::OnContextInitialized() {
 #if defined(OS_WIN)
     // On Windows we need to specify certain flags that will be passed to
     // CreateWindowEx().
-    window_info.SetAsPopup(NULL, "cefsimple");    
-    window_info.shared_texture_enabled = false;
-    window_info.external_begin_frame_enabled = false;
+    window_info.SetAsWindowless(nullptr);
+    window_info.shared_texture_enabled = true;
+    window_info.external_begin_frame_enabled = true;
+    window_info.height = 480;
+    window_info.width = 640;
+    window_info.x = 0;
+    window_info.y = 0;
 #endif
 
     CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
