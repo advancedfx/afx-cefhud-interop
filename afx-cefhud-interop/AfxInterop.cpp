@@ -2,8 +2,10 @@
 
 #include <include/base/cef_bind.h>
 #include <include/wrapper/cef_closure_task.h>
+#include <include/wrapper/cef_helpers.h>
 
 #include <d3d11.h>
+#include <d3dcompiler.h>
 #include <tchar.h>
 
 #include <atomic>
@@ -20,10 +22,33 @@
 namespace advancedfx {
 namespace interop {
 
+
+#define AFX_GOTO_ERROR    \
+  {                       \
+    errorLine = __LINE__; \
+    goto error;           \
+  }
+
+#ifdef _DEBUG
+#define AFX_PRINT_ERROR(name,errorLine)                               \
+  TCHAR szError[2000];                                                \
+  _sntprintf(szError, 2000, _T("ERROR in %s in line %i\n"), _T(name), \
+             errorLine);                                              \
+  MessageBox(NULL, szError, _T("AFX ERROR"), MB_OK|MB_ICONERROR);
+#else
+#define AFX_PRINT_ERROR(name,errorLine)
+#endif
+
+#define AFX_IMPL_ERROR(name) \
+  error:                     \
+  AFX_PRINT_ERROR(name,errorLine) \
+  return false;
+
 const char * g_szAlreadyReleased = "Already released.";
 const char* g_szOutOfFlow = "Out of flow.";
 const char* g_szConnectionError = "Connection error.";
 const char* g_szInvalidArguments = "Invalid arguments.";
+const char* g_szMemoryAllocationFailed = "Memory allocation failed.";
 
 enum class GameEventFieldType : int {
   Local = 0,
@@ -140,7 +165,8 @@ enum class AfxUserDataType : int {
   AfxD3d9Texture,
   AfxD3d9PixelShader,
   AfxD3d9VertexShader,
-  AfxD3d9Viewport
+  AfxD3d9Viewport,
+  AfxPromise
 };
 
 struct Matrix4x4_s {
@@ -323,14 +349,17 @@ class CNamedPipeServer {
 
   State m_State = State_Error;
 
-  const DWORD m_ReadBufferSize = 512;
-  const DWORD m_WriteBufferSize = 512;
+  const DWORD m_ReadBufferSize = 4096;
+  const DWORD m_WriteBufferSize = 4096;
 
-  const DWORD m_ReadTimeoutMs = 15000;
-  const DWORD m_WriteTimeoutMs = 15000;
+  DWORD m_ReadTimeoutMs;
+  DWORD m_WriteTimeoutMs;
 
  public:
-  CNamedPipeServer(const char* pipeName) {
+  CNamedPipeServer(const char* pipeName,
+                   DWORD readTimeOutMs = 5000,
+                   DWORD writeTimeOutMs = 5000)
+      : m_ReadTimeoutMs(readTimeOutMs), m_WriteTimeoutMs(writeTimeOutMs) {
     m_Overlapped.hEvent = CreateEventA(NULL, true, true, NULL);
     //m_OverlappedWrite.hEvent = CreateEventA(NULL, true, true, NULL);
 
@@ -393,31 +422,36 @@ class CNamedPipeServer {
 
       DWORD bytesRead = 0;
 
-      if (ReadFile(m_PipeHandle, (LPVOID) & (((char*)bytes)[offset]), length,
-                   NULL, &m_Overlapped) ||
-          ERROR_IO_PENDING == GetLastError()) {
-        bool completed = false;
-
-        while (!completed) {
-          DWORD result =
-              WaitForSingleObject(m_Overlapped.hEvent, m_ReadTimeoutMs);
-          switch (result) {
-            case WAIT_OBJECT_0:
-              completed = true;
-              break;
-            case WAIT_TIMEOUT:
-              return false;
-            default:
-              return false;
-          }
+      if (!ReadFile(m_PipeHandle, (LPVOID) & (((char*)bytes)[offset]), length,
+                    NULL, &m_Overlapped)) {
+        DWORD lastError = GetLastError();
+        switch (lastError) {
+          case ERROR_IO_PENDING: {
+            bool completed = false;
+            while (!completed) {
+              DWORD result =
+                  WaitForSingleObject(m_Overlapped.hEvent, m_ReadTimeoutMs);
+              switch (result) {
+                case WAIT_OBJECT_0:
+                  completed = true;
+                  break;
+                case WAIT_TIMEOUT:
+                  return false;
+                default:
+                  return false;
+              }
+            }
+          } break;
+          case ERROR_INVALID_USER_BUFFER:
+          case ERROR_NOT_ENOUGH_MEMORY:
+            continue;
+          default:
+            return false;
         }
+      }
 
-      if (!GetOverlappedResult(m_PipeHandle, &m_Overlapped, &bytesRead,
-                                 FALSE))
-          return false;
-      } else
+      if (!GetOverlappedResult(m_PipeHandle, &m_Overlapped, &bytesRead, FALSE))
         return false;
-
 
       offset += bytesRead;
       length -= bytesRead;
@@ -526,31 +560,37 @@ class CNamedPipeServer {
       DWORD bytesWritten = 0;
       DWORD bytesToWrite = length;
 
-      if (WriteFile(m_PipeHandle, (LPVOID) & (((char*)bytes)[offset]),
-                    bytesToWrite, &bytesWritten, &m_Overlapped) ||
-          ERROR_IO_PENDING == GetLastError()) {
-        bool completed = false;
-
-        while (!completed) {
-          DWORD result =
-              WaitForSingleObject(m_Overlapped.hEvent, m_WriteTimeoutMs);
-          switch (result) {
-            case WAIT_OBJECT_0:
-              completed = true;
-              break;
-            case WAIT_TIMEOUT:
-              return false;
-            default:
-              return false;
-          }
+      if (!WriteFile(m_PipeHandle, (LPVOID) & (((char*)bytes)[offset]),
+                     bytesToWrite, NULL, &m_Overlapped)) {
+        DWORD lastError = GetLastError();
+        switch (lastError) {
+          case ERROR_IO_PENDING: {
+            bool completed = false;
+            while (!completed) {
+              DWORD result =
+                  WaitForSingleObject(m_Overlapped.hEvent, m_ReadTimeoutMs);
+              switch (result) {
+                case WAIT_OBJECT_0:
+                  completed = true;
+                  break;
+                case WAIT_TIMEOUT:
+                  return false;
+                default:
+                  return false;
+              }
+            }
+          } break;
+          case ERROR_INVALID_USER_BUFFER:
+          case ERROR_NOT_ENOUGH_MEMORY:
+            continue;
+          default:
+            return false;
         }
-
-        if (!GetOverlappedResult(m_PipeHandle, &m_Overlapped, &bytesWritten,
-                                 FALSE))
-          return false;
       }
-      else
-          return false;
+
+      if (!GetOverlappedResult(m_PipeHandle, &m_Overlapped, &bytesWritten,
+                               FALSE))
+        return false;
 
       offset += bytesWritten;
       length -= bytesWritten;
@@ -728,20 +768,12 @@ class CAfxAccessor : public CefV8Accessor {
 
 class CAfxCallback : public CefBaseRefCounted {
  public:
-  CAfxCallback(CefRefPtr<CefV8Context> context)
-      : m_CallbackContext(context) {
+  CAfxCallback() {
   }
 
-  CAfxCallback(CefRefPtr<CefV8Value> func, CefRefPtr<CefV8Context> context)
-      : m_CallbackFunc(func), m_CallbackContext(context) {}
+  CAfxCallback(CefRefPtr<CefV8Value> func)
+      : m_CallbackFunc(func) {}
 
-
-  CefRefPtr<CefV8Context> GetContext() {
-      return m_CallbackContext;
-  }
-
-  void SetContext(CefRefPtr<CefV8Context> value) { m_CallbackContext = value;
-  }
 
   CefRefPtr<CefV8Value> GetFunc() {
       return m_CallbackFunc;
@@ -754,13 +786,12 @@ class CAfxCallback : public CefBaseRefCounted {
   bool IsValid() { return m_CallbackFunc != nullptr; }
 
   CefRefPtr<CefV8Value> ExecuteCallback(const CefV8ValueList& arguments) {
-    return m_CallbackFunc->ExecuteFunctionWithContext(m_CallbackContext, NULL,
+    return m_CallbackFunc->ExecuteFunctionWithContext(CefV8Context::GetCurrentContext(), NULL,
                                                       arguments);
   }
 
  private:
   CefRefPtr<CefV8Value> m_CallbackFunc;
-  CefRefPtr<CefV8Context> m_CallbackContext;
 
   IMPLEMENT_REFCOUNTING(CAfxCallback);
 };
@@ -797,10 +828,9 @@ class CAfxObject : public CefBaseRefCounted {
                        V8_PROPERTY_ATTRIBUTE_NONE);
   }
 
-    CefRefPtr<CAfxCallback> AddCallback(const char* name,
-                                      CefRefPtr<CefV8Context> context) {
+    CefRefPtr<CAfxCallback> AddCallback(const char* name) {
     {
-      CefRefPtr<CAfxCallback> callback = new CAfxCallback(context);
+      CefRefPtr<CAfxCallback> callback = new CAfxCallback();
 
       m_Accessor->AddSet(
           name,
@@ -1194,11 +1224,11 @@ class CAfxInterop {
 
   CAfxInterop(const char* pipeName) : m_PipeName(pipeName) {}
 
-  virtual bool Connection(void) {
+  virtual bool Connection(DWORD readTimeOutMs = 15000, DWORD writeTimeOutMs = 15000) {
     if (nullptr == m_PipeServer) {
       std::string pipeName(m_PipeName);
 
-      m_PipeServer = new CNamedPipeServer(pipeName.c_str());
+      m_PipeServer = new CNamedPipeServer(pipeName.c_str(), readTimeOutMs, writeTimeOutMs);
       m_Connecting = true;
     }
 
@@ -1290,10 +1320,9 @@ CefRefPtr<T> GetAfxUserData(CefRefPtr<CefV8Value> value) {
  class CAfxPromise : public CefBaseRefCounted {
   IMPLEMENT_REFCOUNTING(CAfxPromise);
  public:
-  CAfxPromise(CefRefPtr<CefV8Context> context,
-              CefRefPtr<CefV8Value> fnResolve,
+  CAfxPromise(CefRefPtr<CefV8Value> fnResolve,
               CefRefPtr<CefV8Value> fnReject)
-      : m_Context(context), m_FnResolve(fnResolve), m_FnReject(fnReject) {}
+      : m_FnResolve(fnResolve), m_FnReject(fnReject) {}
 
   unsigned int GetLo() {
     return (unsigned int)((unsigned __int64)this & 0xffffffff);
@@ -1303,20 +1332,19 @@ CefRefPtr<T> GetAfxUserData(CefRefPtr<CefV8Value> value) {
     return (unsigned int)(((unsigned __int64)this >> 32) & 0xffffffff);
   }
 
-  CefRefPtr<CefV8Context> m_Context;
   CefRefPtr<CefV8Value> m_FnResolve;
   CefRefPtr<CefV8Value> m_FnReject;
 
   void DoResolve(const CefV8ValueList& arguments) {
     // TODO: Handle exceptions and promises being returned.
     if (nullptr != m_FnResolve && m_FnResolve->IsFunction())
-      m_FnResolve->ExecuteFunctionWithContext(m_Context, NULL, arguments);
+      m_FnResolve->ExecuteFunctionWithContext(CefV8Context::GetCurrentContext(), NULL, arguments);
   }
 
   void DoReject(const CefV8ValueList& arguments) {
     // TODO: Handle exceptions and promises being returned.
     if (nullptr != m_FnReject && m_FnReject->IsFunction())
-      m_FnReject->ExecuteFunctionWithContext(m_Context, NULL, arguments);
+      m_FnReject->ExecuteFunctionWithContext(CefV8Context::GetCurrentContext(), NULL, arguments);
   }
 };
 
@@ -1331,18 +1359,40 @@ class CAfxPromises : public CefBaseRefCounted {
     }
   }
 
-  CefRawPtr<CAfxPromise> Create(CefRefPtr<CefV8Context> context,
-              CefRefPtr<CefV8Value> fnResolve,
-              CefRefPtr<CefV8Value> fnReject) {
+  CefRefPtr<CefV8Value> Create(CefRefPtr<CefV8Value> fnResolve,
+              CefRefPtr<CefV8Value> fnReject, CefRefPtr<CefFrame> frame, CefRefPtr<CAfxPromise> * out = nullptr) {
+    CefRefPtr<CAfxPromise> val =
+        new CAfxPromise(fnResolve, fnReject);
+    val->AddRef();
+    m_Promises.insert(val);
 
-      CefRawPtr<CAfxPromise> promise =
-        new CAfxPromise(context, fnResolve, fnReject);
+    CefRefPtr<CAfxObject> afxObject = new CAfxObject();
+    afxObject->AddFunction(
+        "cancel", [val,frame](
+                      const CefString& name, CefRefPtr<CefV8Value> object,
+                      const CefV8ValueList& arguments,
+                      CefRefPtr<CefV8Value>& retval, CefString& exception) {
 
-    promise->AddRef();
 
-    m_Promises.insert(promise);
+          auto message = CefProcessMessage::Create("afx-cancel");
+          auto args = message->GetArgumentList();
+          args->SetSize(2);
+          args->SetInt(0, (int)val->GetLo());
+          args->SetInt(1, (int)val->GetHi());
 
-    return promise;
+          frame->SendProcessMessage(PID_BROWSER, message);
+          return true;          
+
+          return true;
+        });
+
+
+    if (out)
+      *out = val;
+
+    afxObject->SetUserData(
+        new CAfxUserData(AfxUserDataType::AfxPromise, val.get()));
+    return afxObject->GetObj();
   }
 
   void Resolve(unsigned int lo, unsigned int hi, const CefV8ValueList & arguments) {
@@ -1396,6 +1446,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
 
     //
 
+    self->m_Context = context;
     self->m_Promises = new CAfxPromises();
 
     afxObject->AddGetter(
@@ -1407,7 +1458,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
         });
 
     afxObject->AddFunction(
-        "init", [context, obj = afxObject->GetObj(), argStr](const CefString& name,
+        "init", [obj = afxObject->GetObj(), argStr](const CefString& name,
                                              CefRefPtr<CefV8Value> object,
                                              const CefV8ValueList& arguments,
                                              CefRefPtr<CefV8Value>& retval,
@@ -1420,7 +1471,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
               args.push_back(obj);
               args.push_back(CefV8Value::CreateString(argStr));
 
-              argInitFn->ExecuteFunctionWithContext(context, NULL, args);
+              argInitFn->ExecuteFunctionWithContext(CefV8Context::GetCurrentContext(), NULL, args);
 
               return true;
             }
@@ -1455,9 +1506,9 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
           return true;
         });
 
-    self->m_OnMessage = afxObject->AddCallback("onMessage", context);
+    self->m_OnMessage = afxObject->AddCallback("onMessage");
 
-    self->m_OnError = afxObject->AddCallback("onError", context);
+    self->m_OnError = afxObject->AddCallback("onError");
 
     afxObject->AddGetter(
         "pipeName",
@@ -1482,16 +1533,16 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
           return true;
         });
 
-    self->m_OnDeviceLost = afxObject->AddCallback("onDeviceLost", context);
+    self->m_OnDeviceLost = afxObject->AddCallback("onDeviceLost");
 
-    self->m_OnDeviceReset = afxObject->AddCallback("onDeviceReset", context);
+    self->m_OnDeviceReset = afxObject->AddCallback("onDeviceReset");
 
     afxObject->AddFunction("connect", [self](const CefString& name,
                                              CefRefPtr<CefV8Value> object,
                                              const CefV8ValueList& arguments,
                                              CefRefPtr<CefV8Value>& retval,
                                              CefString& exceptionoverride) {
-          if (!self->Connection()) {
+          if (!self->Connection(12000,12000)) {
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -1504,6 +1555,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
         [self](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
+          AFX_PRINT_ERROR("CDrawingInteropImpl.close", __LINE__)
           self->Close();
           return true;
         });
@@ -1516,12 +1568,13 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
       if (2 <= arguments.size() &&
           arguments[0]->IsInt() && arguments[1]->IsUInt()) {
         if (!self->Connected()) {
-          exceptionoverride = "Not connected.";
+          exceptionoverride = g_szConnectionError;
           return true;
         }
 
         if (!self->DoPumpBegin(arguments[0]->GetIntValue(),
                                       arguments[1]->GetUIntValue())) {
+          AFX_PRINT_ERROR("CDrawingInteropImpl.pumpBegin", __LINE__)
           self->Close();
           exceptionoverride = g_szConnectionError;
           return true;
@@ -1553,7 +1606,9 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
 
           return true;
 
-        error:
+      error:
+      self->Close();
+      AFX_PRINT_ERROR("CDrawingInteropImpl.pumpEnd", __LINE__)
           exceptionoverride = g_szConnectionError;
           return true;
         });
@@ -1617,7 +1672,9 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
 
               return true;
 
-            error:
+          error:
+              self->Close();
+              AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9CreateVertexDeclaration", __LINE__)
               exceptionoverride = g_szConnectionError;
               return true;
             }
@@ -1680,6 +1737,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
 
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9CreateIndexBuffer",
+                            __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -1742,6 +1801,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
 
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9CreateVertexBuffer", __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -1813,6 +1873,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
 
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9CreateTexture", __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -1853,6 +1914,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
 
             error:
               self->Close();
+              AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9CreateVertexShader", __LINE__)
+
               exceptionoverride = g_szConnectionError;
               return true;
             }
@@ -1893,6 +1956,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
               return true;
             error:
               self->Close();
+              AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9CreatePixelShader", __LINE__)
+
               exceptionoverride = g_szConnectionError;
               return true;
             }
@@ -1932,6 +1997,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             return true;
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9UpdateTexture", __LINE__)
+
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -1959,6 +2026,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             return true;
           error_1:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetViewport", __LINE__)
+
             exceptionoverride = g_szConnectionError;
             return true;
           } else if (1 == arguments.size() &&
@@ -1995,6 +2064,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
 
             error_2:
               self->Close();
+              AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetViewport", __LINE__)
+
               exceptionoverride = g_szConnectionError;
               return true;
             }
@@ -2030,6 +2101,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             return true;
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetRenderState", __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -2068,6 +2140,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             return true;
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetSamplerState", __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -2107,6 +2180,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             return true;
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetTexture", __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -2142,6 +2216,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             return true;
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetTextureStageState", __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -2195,6 +2270,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
                 return true;
               error_1:
                 self->Close();
+                AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetTransform",
+                                __LINE__)
                 exceptionoverride = g_szConnectionError;
                 return true;
               }
@@ -2213,6 +2290,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
               return true;
             error_2:
               self->Close();
+              AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetTransform", __LINE__)
               exceptionoverride = g_szConnectionError;
               return true;
             }
@@ -2246,6 +2324,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             return true;
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetIndices", __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -2291,6 +2370,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             return true;
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetStreamSource", __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -2323,6 +2403,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             return true;
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetStreamSourceFreq", __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -2356,6 +2437,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
 
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetVertexDeclaration", __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -2388,6 +2470,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             return true;
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetVertexShader", __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -2438,6 +2521,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
               return true;
             error:
               self->Close();
+              AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetVertexShaderConstantB", __LINE__)
               exceptionoverride = g_szConnectionError;
               return true;
             }
@@ -2488,6 +2572,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
               return true;
             error:
               self->Close();
+              AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetVertexShaderConstantF",
+                              __LINE__)
               exceptionoverride = g_szConnectionError;
               return true;
             }
@@ -2538,6 +2624,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
               return true;
             error:
               self->Close();
+              AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetVertexShaderConstantI",
+                              __LINE__)
               exceptionoverride = g_szConnectionError;
               return true;
             }
@@ -2570,6 +2658,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             return true;
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetPixelShader",
+                            __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -2620,6 +2710,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
               return true;
             error:
               self->Close();
+              AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetPixelShaderConstantB", __LINE__)
               exceptionoverride = g_szConnectionError;
               return true;
             }
@@ -2670,6 +2761,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
               return true;
             error:
               self->Close();
+              AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetPixelShaderConstantF",
+                              __LINE__)
               exceptionoverride = g_szConnectionError;
               return true;
             }
@@ -2721,6 +2814,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
               return true;
             error:
               self->Close();
+              AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9SetPixelShaderConstantI",
+                              __LINE__)
               exceptionoverride = g_szConnectionError;
               return true;
             }
@@ -2757,6 +2852,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             return true;
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9DrawPrimitive",
+                            __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -2803,6 +2900,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             return true;
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.d3d9DrawIndexedPrimitive", __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -2823,6 +2921,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             if (!self->m_PipeServer->WriteUInt32(
                     (UINT32)DrawingReply::WaitForGpu))
               goto error;
+            if (!self->m_PipeServer->Flush())
+              goto error;
 
             bool waited;
             if (!self->m_PipeServer->ReadBoolean(waited)
@@ -2833,6 +2933,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             return true;
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.waitForClientGpu", __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -2857,6 +2958,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             return true;
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.beginCleanState", __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -2882,6 +2984,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
 
           error:
             self->Close();
+            AFX_PRINT_ERROR("CDrawingInteropImpl.endCleanState", __LINE__)
             exceptionoverride = g_szConnectionError;
             return true;
           }
@@ -2900,7 +3003,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
               return true;
             }
 
-            exceptionoverride = "Memory allocation failed.";
+            exceptionoverride = g_szMemoryAllocationFailed;
             return true;
           }
 
@@ -2908,7 +3011,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
           return true;
         });
     afxObject->AddFunction("renderCefFrame",
-        [self,frame,context](const CefString& name, CefRefPtr<CefV8Value> object,
+        [self,frame](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
 
@@ -2917,8 +3020,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             auto argFnReject = arguments[1];
 
             if (argFnResolve->IsFunction() && argFnReject->IsFunction()) {
-              CefRefPtr<CAfxPromise> promise =
-                  self->m_Promises->Create(context, argFnResolve, argFnReject);
+              CefRefPtr<CAfxPromise> promise;
+              retval = self->m_Promises->Create(argFnResolve, argFnReject, frame, &promise);
 
               auto message = CefProcessMessage::Create("afx-render-cef-frame");
               auto args = message->GetArgumentList();
@@ -2934,8 +3037,96 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
           exceptionoverride = g_szInvalidArguments;
           return true;
         });
+    afxObject->AddFunction(
+        "d3dCompile2",
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
+           const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+           CefString& exceptionoverride) {
+          if (10 == arguments.size() && (arguments[1]->IsNull() || arguments[1]->IsString()) &&
+              arguments[3]->IsNull() && (arguments[4]->IsNull() || arguments[4]->IsString()) &&
+              arguments[5]->IsString() && arguments[6]->IsUInt() &&
+              arguments[7]->IsUInt() && arguments[8]->IsUInt()) {
 
+            auto srcData = GetAfxUserData<AfxUserDataType::AfxData, CAfxData>(arguments[0]);
+            auto defines = GetAfxUserData<AfxUserDataType::AfxData, CAfxData>(
+                arguments[2]);
+            auto target = arguments[5]->GetStringValue();
+            auto flags1 = arguments[6]->GetUIntValue();
+            auto flags2 = arguments[7]->GetUIntValue();
+            auto secondaryDataFlags = arguments[8]->GetUIntValue();
+            auto secondaryData =
+                GetAfxUserData<AfxUserDataType::AfxData, CAfxData>(
+                    arguments[9]);
 
+            ID3DBlob* pCode = nullptr;
+            ID3DBlob* pErrorMsgs = nullptr;
+
+            HRESULT result = D3DCompile2(
+                srcData ? srcData->GetData() : NULL,
+                srcData ? srcData->GetSize() : 0,
+                // srcName:
+                arguments[1]->IsNull()
+                    ? NULL
+                    : arguments[1]->GetStringValue().ToString().c_str(),
+                defines ? (D3D_SHADER_MACRO*)defines->GetData() : NULL, NULL,
+                // entryPoint:
+                arguments[4]->IsNull()
+                    ? NULL
+                    : arguments[4]->GetStringValue().ToString().c_str(),
+                target.ToString().c_str(),
+                flags1, flags2, secondaryDataFlags,
+                secondaryData ? secondaryData->GetData() : NULL,
+                secondaryData ? secondaryData->GetSize() : 0, &pCode,
+                &pErrorMsgs);
+
+            retval = CefV8Value::CreateObject(nullptr, nullptr);
+
+            retval->SetValue("hResult", CefV8Value::CreateUInt(result),
+                              V8_PROPERTY_ATTRIBUTE_NONE);
+
+            if (NULL == pCode)
+              retval->SetValue("code", CefV8Value::CreateNull(),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+            else {
+
+              size_t size = pCode->GetBufferSize();
+              void* pData = malloc(size);
+              if (nullptr == pData) {
+                exceptionoverride = g_szMemoryAllocationFailed;
+                return true;
+              }
+              memcpy(pData, pCode->GetBufferPointer(), size);
+
+              retval->SetValue("code", CAfxData::Create((int)size,pData),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+
+              pCode->Release();
+            }
+
+            if (NULL == pErrorMsgs)
+              retval->SetValue("errorMsgs", CefV8Value::CreateNull(),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+            else {
+              size_t size = pErrorMsgs->GetBufferSize();
+              void* pData = malloc(size);
+              if (nullptr == pData) {
+                exceptionoverride = g_szMemoryAllocationFailed;
+                return true;
+              }
+              memcpy(pData, pErrorMsgs->GetBufferPointer(), size);
+
+              retval->SetValue("errorMsgs", CAfxData::Create((int)size, pData),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+
+              pErrorMsgs->Release();
+            }
+
+            return true;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return true;
+        });
     //
 
     if (out)
@@ -2944,18 +3135,13 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
     return afxObject->GetObj();
   }
 
-  virtual void CloseInterop() override { Close(); }
+  virtual void CloseInterop() override {
+    Close();
+    m_Context = nullptr;
+  }
 
  private:
-
-
-  void ProcessAfxWaitFrameReject(unsigned int lo,
-                               unsigned int hi,
-                               const CefString& message) {
-    CefV8ValueList args;
-    args.push_back(CefV8Value::CreateString(message));
-    m_Promises->Reject(lo, hi, args);
-  }
+     CefRefPtr<CefV8Context> m_Context;
 
  public:
 
@@ -2965,11 +3151,13 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
           CefRefPtr<CefFrame> frame,
           CefProcessId source_process,
           CefRefPtr<CefProcessMessage> message) override {
-        auto const name = message->GetName();
+    CEF_REQUIRE_RENDERER_THREAD();
+
+
+    auto const name = message->GetName();
 
         if (name == "afx-message") {
-          auto context = frame->GetV8Context();
-          context->Enter();
+          m_Context->Enter();
           
           auto const args = message->GetArgumentList();
           CefV8ValueList execArgs;
@@ -2979,11 +3167,10 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
           if (m_OnMessage->IsValid())
             m_OnMessage->ExecuteCallback(execArgs);
 
-          context->Exit();
+          m_Context->Exit();
           return true;
         } else if (name == "afx-error") {
-          auto context = frame->GetV8Context();
-          context->Enter();
+          m_Context->Enter();
 
           auto const args = message->GetArgumentList();
           CefV8ValueList execArgs;
@@ -2993,11 +3180,10 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
           if (m_OnError->IsValid())
             m_OnError->ExecuteCallback(execArgs);
 
-          context->Exit();
+          m_Context->Exit();
           return true;
         } else if (name == "afx-painted") {
-          auto context = frame->GetV8Context();
-          context->Enter();
+          m_Context->Enter();
 
           auto const args = message->GetArgumentList();
           CefV8ValueList execArgs;
@@ -3008,7 +3194,17 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
           m_Promises->Resolve(args->GetInt(0), 
                               args->GetInt(1), execArgs);
 
-          context->Exit();
+          m_Context->Exit();
+          return true;
+        } else if (name == "afx-reject") {
+          m_Context->Enter();
+
+          auto const args = message->GetArgumentList();
+          CefV8ValueList execArgs;
+          execArgs.push_back(CefV8Value::CreateString(args->GetString(2)));
+          m_Promises->Reject(args->GetInt(0), args->GetInt(1), execArgs);
+
+          m_Context->Exit();
           return true;
         }
 
@@ -3049,6 +3245,13 @@ class CAfxHandle : public CAfxInteropImpl {
           "hi", [val](const CefString& name, const CefRefPtr<CefV8Value> object,
                       CefRefPtr<CefV8Value>& retval, CefString& exception) {
             retval = CefV8Value::CreateUInt(val->GetHi());
+            return true;
+          });
+      afxObject->AddGetter(
+          "invalid", [val](const CefString& name, const CefRefPtr<CefV8Value> object,
+                      CefRefPtr<CefV8Value>& retval, CefString& exception) {
+            retval = CefV8Value::CreateBool(val->GetHandle() ==
+                                            INVALID_HANDLE_VALUE);
             return true;
           });
 
@@ -3166,7 +3369,8 @@ class CAfxHandle : public CAfxInteropImpl {
 
               val->m_DoReleased = true;
               return true;
-            error:
+          error:
+              AFX_PRINT_ERROR("CAfxD3d9VertexDeclaration.release", __LINE__)
               drawingInteropImpl->Close();
               exception = g_szConnectionError;
               return true;
@@ -3226,6 +3430,7 @@ class CAfxHandle : public CAfxInteropImpl {
         val->m_DoReleased = true;
         return true;
       error_1:
+        AFX_PRINT_ERROR("CAfxD3d9IndexBuffer.release", __LINE__)
         drawingInteropImpl->Close();
         exception = g_szConnectionError;
         return true;
@@ -3275,7 +3480,8 @@ class CAfxHandle : public CAfxInteropImpl {
 
             return true;
 
-          error_2:
+        error_2:
+            AFX_PRINT_ERROR("CAfxD3d9IndexBuffer.update", __LINE__)
             drawingInteropImpl->Close();
             exception = g_szConnectionError;
             return true;
@@ -3337,6 +3543,7 @@ class CAfxHandle : public CAfxInteropImpl {
             val->m_DoReleased = true;
             return true;
           error_1:
+            AFX_PRINT_ERROR("CAfxD3d9VertexBuffer.release", __LINE__)
             drawingInteropImpl->Close();
             exception = g_szConnectionError;
             return true;
@@ -3387,6 +3594,7 @@ class CAfxHandle : public CAfxInteropImpl {
                 return true;
 
               error_2:
+                AFX_PRINT_ERROR("CAfxD3d9VertexBuffer.update", __LINE__)
                 drawingInteropImpl->Close();
                 exception = g_szConnectionError;
                 return true;
@@ -3448,7 +3656,9 @@ class CAfxHandle : public CAfxInteropImpl {
 
             val->m_DoReleased = true;
             return true;
-          error_1:
+        error_1:
+        AFX_PRINT_ERROR("CAfxD3d9Texture.release", __LINE__)
+
             drawingInteropImpl->Close();
             exception = g_szConnectionError;
             return true;
@@ -3537,7 +3747,9 @@ class CAfxHandle : public CAfxInteropImpl {
 
           return true;
 
-        error_2:
+      error_2:
+              AFX_PRINT_ERROR("CAfxD3d9Texture.update", __LINE__)
+
               drawingInteropImpl->Close();
           exception = g_szConnectionError;
           return true;
@@ -3596,7 +3808,8 @@ class CAfxHandle : public CAfxInteropImpl {
 
             val->m_DoReleased = true;
             return true;
-          error_1:
+        error_1:
+        AFX_PRINT_ERROR("CAfxD3d9PixelShader.release", __LINE__)
             drawingInteropImpl->Close();
             exception = g_szConnectionError;
             return true;
@@ -3655,7 +3868,8 @@ class CAfxHandle : public CAfxInteropImpl {
 
             val->m_DoReleased = true;
             return true;
-          error_1:
+        error_1:
+        AFX_PRINT_ERROR("CAfxD3d9VertexShader.release", __LINE__)
             drawingInteropImpl->Close();
             exception = g_szConnectionError;
             return true;
@@ -3848,10 +4062,12 @@ public:
                                      const CefString& argStr,
                                      CefRefPtr<CInterop>* out = nullptr) {
    CefRefPtr<CEngineInteropImpl> self = new CEngineInteropImpl();
-
+      
    CefRefPtr<CAfxObject> afxObject = new CAfxObject();
 
    //
+   self->m_Context = context;
+   self->m_Promises = new CAfxPromises();
 
    afxObject->AddGetter("id",
        [browser](const CefString& name, const CefRefPtr<CefV8Value> object,
@@ -3862,7 +4078,7 @@ public:
        });
 
    afxObject->AddFunction("init",
-       [context, obj = afxObject->GetObj(), argStr](
+       [obj = afxObject->GetObj(), argStr](
                  const CefString& name, CefRefPtr<CefV8Value> object,
                  const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                  CefString& exceptionoverride) {
@@ -3874,7 +4090,7 @@ public:
                    args.push_back(obj);
                    args.push_back(CefV8Value::CreateString(argStr));
 
-                   argInitFn->ExecuteFunctionWithContext(context, NULL, args);
+                   argInitFn->ExecuteFunctionWithContext(CefV8Context::GetCurrentContext(), NULL, args);
 
                    return true;
                  }
@@ -3908,9 +4124,9 @@ public:
                return true;
              });
 
-   self->m_OnMessage = afxObject->AddCallback("onMessage", context);
+   self->m_OnMessage = afxObject->AddCallback("onMessage");
 
-   self->m_OnError = afxObject->AddCallback("onError", context);
+   self->m_OnError = afxObject->AddCallback("onError");
 
   afxObject->AddGetter("pipeName",
        [self](const CefString& name, const CefRefPtr<CefV8Value> object,
@@ -3939,7 +4155,7 @@ public:
        [self](const CefString& name, CefRefPtr<CefV8Value> object,
               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
               CefString& exceptionoverride) {
-         if (!self->Connection()) {
+         if (!self->Connection(15000,15000)) {
            exceptionoverride = g_szConnectionError;
            return true;
          }
@@ -3953,7 +4169,12 @@ public:
        [self](const CefString& name, CefRefPtr<CefV8Value> object,
               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
               CefString& exceptionoverride) {
-           retval = CefV8Value::CreateBool(self->Connected() && self->DoPump());
+           if (!self->Connected()) {
+             exceptionoverride = g_szConnectionError;
+             return true;
+           }
+
+           retval = CefV8Value::CreateBool(self->DoPump());
            return true;
        });
 
@@ -3963,13 +4184,14 @@ public:
        [self](const CefString& name, CefRefPtr<CefV8Value> object,
               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
               CefString& exceptionoverride) {
+          AFX_PRINT_ERROR("CEngineInteropImpl.release", __LINE__)
          self->Close();
          return true;
        });
 
-   self->m_OnNewConnection = afxObject->AddCallback("onNewConnection", context);
+   self->m_OnNewConnection = afxObject->AddCallback("onNewConnection");
 
-   self->m_OnCommands = afxObject->AddCallback("onCommands", context);
+   self->m_OnCommands = afxObject->AddCallback("onCommands");
 
    afxObject->AddFunction("scheduleCommand",
        [self](const CefString& name, CefRefPtr<CefV8Value> object,
@@ -3987,20 +4209,20 @@ public:
          return true;
        });
 
-   self->m_OnRenderViewBegin = afxObject->AddCallback("onRenderViewBegin", context);
+   self->m_OnRenderViewBegin = afxObject->AddCallback("onRenderViewBegin");
 
-   self->m_OnViewOverride = afxObject->AddCallback("onViewOverride", context);
+   self->m_OnViewOverride = afxObject->AddCallback("onViewOverride");
 
-   self->m_OnRenderPass = afxObject->AddCallback("onRenderPass", context);
+   self->m_OnRenderPass = afxObject->AddCallback("onRenderPass");
 
-   self->m_OnHudBegin = afxObject->AddCallback("onHudBegin", context);
+   self->m_OnHudBegin = afxObject->AddCallback("onHudBegin");
 
-   self->m_OnHudEnd = afxObject->AddCallback("onHudEnd", context);
+   self->m_OnHudEnd = afxObject->AddCallback("onHudEnd");
 
-   self->m_OnRenderViewEnd = afxObject->AddCallback("onRenderViewEnd", context);
+   self->m_OnRenderViewEnd = afxObject->AddCallback("onRenderViewEnd");
 
    afxObject->AddFunction("addCalcHandle",
-             [self, context](
+             [self](
                  const CefString& name, CefRefPtr<CefV8Value> object,
                  const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                  CefString& exceptionoverride) {
@@ -4008,7 +4230,7 @@ public:
            retval = CCalcResult::Create(
                           &self->m_HandleCalcCallbacks,
                           arguments[0]->GetStringValue().ToString().c_str(),
-                          new CAfxCallback(arguments[1], context));
+                     new CAfxCallback(arguments[1]));
 
                  return true;
                }
@@ -4017,7 +4239,7 @@ public:
                return true;
              });
    afxObject->AddFunction("addCalcVecAng",
-             [self, context](
+             [self](
                  const CefString& name, CefRefPtr<CefV8Value> object,
                  const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                  CefString& exceptionoverride) {
@@ -4027,7 +4249,7 @@ public:
                     CCalcResult::Create(
                           &self->m_VecAngCalcCallbacks,
                           arguments[0]->GetStringValue().ToString().c_str(),
-                     new CAfxCallback(arguments[1], context));
+                     new CAfxCallback(arguments[1]));
 
                  return true;
                }
@@ -4036,7 +4258,7 @@ public:
                return true;
              });
    afxObject->AddFunction("addCalcCam",
-             [self, context](
+             [self](
                  const CefString& name, CefRefPtr<CefV8Value> object,
                  const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                  CefString& exceptionoverride) {
@@ -4046,7 +4268,7 @@ public:
                      CCalcResult::Create(
                           &self->m_CamCalcCallbacks,
                           arguments[0]->GetStringValue().ToString().c_str(),
-                          new CAfxCallback(arguments[1], context));
+                     new CAfxCallback(arguments[1]));
 
                  return true;
                }
@@ -4055,7 +4277,7 @@ public:
                return true;
              });
    afxObject->AddFunction("addCalcFov",
-             [self, context](
+             [self](
                  const CefString& name, CefRefPtr<CefV8Value> object,
                  const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                  CefString& exceptionoverride) {
@@ -4065,7 +4287,7 @@ public:
                      CCalcResult::Create(
                           &self->m_FovCalcCallbacks,
                           arguments[0]->GetStringValue().ToString().c_str(),
-                          new CAfxCallback(arguments[1], context));
+                     new CAfxCallback(arguments[1]));
 
                  return true;
                }
@@ -4074,7 +4296,7 @@ public:
        });
    afxObject->AddFunction(
        "addCalcBool",
-       [self, context](const CefString& name, CefRefPtr<CefV8Value> object,
+       [self](const CefString& name, CefRefPtr<CefV8Value> object,
                        const CefV8ValueList& arguments,
                        CefRefPtr<CefV8Value>& retval,
                        CefString& exceptionoverride) {
@@ -4085,7 +4307,7 @@ public:
            retval = CCalcResult::Create(
                          &self->m_BoolCalcCallbacks,
                          arguments[0]->GetStringValue().ToString().c_str(),
-                         new CAfxCallback(arguments[1], context));
+               new CAfxCallback(arguments[1]));
 
            return true;
          }
@@ -4094,7 +4316,7 @@ public:
        });
    afxObject->AddFunction(
        "addCalcInt",
-       [self, context](const CefString& name, CefRefPtr<CefV8Value> object,
+       [self](const CefString& name, CefRefPtr<CefV8Value> object,
                        const CefV8ValueList& arguments,
                        CefRefPtr<CefV8Value>& retval,
                        CefString& exceptionoverride) {
@@ -4105,7 +4327,7 @@ public:
            retval = CCalcResult::Create(
                          &self->m_IntCalcCallbacks,
                          arguments[0]->GetStringValue().ToString().c_str(),
-                         new CAfxCallback(arguments[1], context));
+               new CAfxCallback(arguments[1]));
 
            return true;
          }
@@ -4200,7 +4422,7 @@ public:
          return true;
        });
 
-   self->m_OnGameEvent = afxObject->AddCallback("onGameEvent", context);
+   self->m_OnGameEvent = afxObject->AddCallback("onGameEvent");
 
    afxObject->AddFunction("gameEventSetTransmitClientTime",
        [self](const CefString& name, CefRefPtr<CefV8Value> object,
@@ -4257,7 +4479,36 @@ public:
          exceptionoverride = g_szInvalidArguments;
          return true;
        });
+   afxObject->AddFunction(
+       "renderCefFrame",
+       [self, frame](const CefString& name, CefRefPtr<CefV8Value> object,
+                     const CefV8ValueList& arguments,
+                     CefRefPtr<CefV8Value>& retval,
+                     CefString& exceptionoverride) {
+         if (2 == arguments.size()) {
+           auto argFnResolve = arguments[0];
+           auto argFnReject = arguments[1];
 
+           if (argFnResolve->IsFunction() && argFnReject->IsFunction()) {
+             CefRefPtr<CAfxPromise> promise;
+             retval = self->m_Promises->Create(argFnResolve, argFnReject, frame,
+                                               &promise);
+
+             auto message = CefProcessMessage::Create("afx-render-cef-frame");
+             auto args = message->GetArgumentList();
+             args->SetSize(2);
+             args->SetInt(0, (int)promise->GetLo());
+             args->SetInt(1, (int)promise->GetHi());
+
+             frame->SendProcessMessage(PID_BROWSER, message);
+             return true;
+           }
+         }
+
+         exceptionoverride = g_szInvalidArguments;
+         return true;
+       });
+ 
    //
 
    if (out)
@@ -4266,7 +4517,13 @@ public:
    return afxObject->GetObj();
 }
 
-    virtual void CloseInterop() override { Close(); }
+  virtual void CloseInterop() override {
+    Close();
+    m_Context = nullptr;
+  }
+
+  private:
+      CefRefPtr<CefV8Context> m_Context;
 
  public:
 
@@ -4280,8 +4537,7 @@ virtual bool OnProcessMessageReceived(
     auto const name = message->GetName();
 
   if (name == "afx-message") {
-      auto context = frame->GetV8Context();
-      context->Enter();
+      m_Context->Enter();
 
       auto const args = message->GetArgumentList();
     CefV8ValueList execArgs;
@@ -4292,12 +4548,11 @@ virtual bool OnProcessMessageReceived(
     if (m_OnMessage->IsValid())
       m_OnMessage->ExecuteCallback(execArgs);
 
-    context->Exit();
+    m_Context->Exit();
     return true;
 
   } else if (name == "afx-error") {
-    auto context = frame->GetV8Context();
-    context->Enter();
+    m_Context->Enter();
 
     auto const args = message->GetArgumentList();
 
@@ -4308,7 +4563,17 @@ virtual bool OnProcessMessageReceived(
     if (m_OnError->IsValid())
       m_OnError->ExecuteCallback(execArgs);
 
-    context->Exit();
+    m_Context->Exit();
+    return true;
+  } else if (name == "afx-reject") {
+    m_Context->Enter();
+
+    auto const args = message->GetArgumentList();
+    CefV8ValueList execArgs;
+    execArgs.push_back(CefV8Value::CreateString(args->GetString(2)));
+    m_Promises->Reject(args->GetInt(0), args->GetInt(1), execArgs);
+
+    m_Context->Exit();
     return true;
   }
 
@@ -4321,7 +4586,47 @@ virtual bool OnProcessMessageReceived(
 
 
   bool DoPump(void) {
+    int errorLine = 0;
+
     bool done = false;
+
+    if (m_NewConnection) {
+      m_NewConnection = false;
+
+      // Check if our version is supported by client:
+
+      if (!m_PipeServer->WriteInt32(Version))
+        AFX_GOTO_ERROR
+
+      if (!m_PipeServer->Flush())
+        AFX_GOTO_ERROR
+
+      bool versionSupported;
+      if (!m_PipeServer->ReadBoolean(versionSupported))
+        AFX_GOTO_ERROR
+
+      if (!versionSupported)
+        AFX_GOTO_ERROR
+
+        // Supply server info required by client:
+
+#if _WIN64
+      if (!m_PipeServer->WriteBoolean(true))
+        AFX_GOTO_ERROR
+#else
+      if (!m_PipeServer->WriteBoolean(false))
+        AFX_GOTO_ERROR
+#endif
+
+      if (!WriteGameEventSettings(false))
+        AFX_GOTO_ERROR
+
+      if (!m_PipeServer->Flush())
+        AFX_GOTO_ERROR
+
+      if (m_OnNewConnection->IsValid())
+        m_OnNewConnection->ExecuteCallback(CefV8ValueList());
+    }
 
     bool outBeforeTranslucentShadow;
     bool outAfterTranslucentShadow;
@@ -4334,7 +4639,7 @@ virtual bool OnProcessMessageReceived(
     while (!done) {
       UINT32 engineMessage;
       if (!m_PipeServer->ReadUInt32(engineMessage))
-        return false;
+        AFX_GOTO_ERROR
 
       switch ((EngineMessage)engineMessage) {
         case EngineMessage::BeforeFrameStart: {
@@ -4345,7 +4650,7 @@ virtual bool OnProcessMessageReceived(
             UINT32 commandIndex = 0;
             UINT32 commandCount;
             if (!m_PipeServer->ReadCompressedUInt32(commandCount))
-              return false;
+              AFX_GOTO_ERROR
 
             CefRefPtr<CefV8Value> objCommands =
                 CefV8Value::CreateArray((int)commandCount);
@@ -4356,7 +4661,7 @@ virtual bool OnProcessMessageReceived(
               UINT32 argIndex = 0;
               UINT32 argCount;
               if (!m_PipeServer->ReadCompressedUInt32(argCount))
-                return false;
+                AFX_GOTO_ERROR
 
               CefRefPtr<CefV8Value> objArgs =
                   CefV8Value::CreateArray((int)argCount);
@@ -4367,7 +4672,7 @@ virtual bool OnProcessMessageReceived(
                 std::string str;
 
                 if (!m_PipeServer->ReadStringUTF8(str))
-                  return false;
+                  AFX_GOTO_ERROR
 
                 objArgs->SetValue((int)argIndex, CefV8Value::CreateString(str));
 
@@ -4384,143 +4689,143 @@ virtual bool OnProcessMessageReceived(
           }
 
           if (!m_PipeServer->WriteCompressedUInt32((UINT32)m_Commands.size()))
-            return false;
+            AFX_GOTO_ERROR
 
           while (!m_Commands.empty()) {
             if (!m_PipeServer->WriteStringUTF8(m_Commands.front().c_str()))
-              return false;
+              AFX_GOTO_ERROR
             m_Commands.pop();
           }
 
           if (!m_PipeServer->Flush())
-            return false;
+            AFX_GOTO_ERROR
         } break;
 
         case EngineMessage::BeforeFrameRenderStart: {
           if (!WriteGameEventSettings(true))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->Flush())
-            return false;
+            AFX_GOTO_ERROR
         } break;
 
         case EngineMessage::AfterFrameRenderStart: {
           if (!m_HandleCalcCallbacks.BatchUpdateRequest(m_PipeServer))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_VecAngCalcCallbacks.BatchUpdateRequest(m_PipeServer))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_CamCalcCallbacks.BatchUpdateRequest(m_PipeServer))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_FovCalcCallbacks.BatchUpdateRequest(m_PipeServer))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_BoolCalcCallbacks.BatchUpdateRequest(m_PipeServer))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_IntCalcCallbacks.BatchUpdateRequest(m_PipeServer))
-            return false;
+            AFX_GOTO_ERROR
 
           if (!m_PipeServer->Flush())
-            return false;
+            AFX_GOTO_ERROR
 
           if (!m_HandleCalcCallbacks.BatchUpdateResult(m_PipeServer))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_VecAngCalcCallbacks.BatchUpdateResult(m_PipeServer))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_CamCalcCallbacks.BatchUpdateResult(m_PipeServer))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_FovCalcCallbacks.BatchUpdateResult(m_PipeServer))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_BoolCalcCallbacks.BatchUpdateResult(m_PipeServer))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_IntCalcCallbacks.BatchUpdateResult(m_PipeServer))
-            return false;
+            AFX_GOTO_ERROR
         } break;
 
         case EngineMessage::OnRenderView: {
           struct RenderInfo_s renderInfo;
 
           if (!m_PipeServer->ReadInt32(renderInfo.FrameCount))
-            return false;
+            AFX_GOTO_ERROR
 
           if (!m_PipeServer->ReadSingle(renderInfo.AbsoluteFrameTime))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.CurTime))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.FrameTime))
-            return false;
+            AFX_GOTO_ERROR
 
           if (!m_PipeServer->ReadInt32(renderInfo.View.X))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadInt32(renderInfo.View.Y))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadInt32(renderInfo.View.Width))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadInt32(renderInfo.View.Height))
-            return false;
+            AFX_GOTO_ERROR
 
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M00))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M01))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M02))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M03))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M10))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M11))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M12))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M13))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M20))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M21))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M22))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M23))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M30))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M31))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M32))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ViewMatrix.M33))
-            return false;
+            AFX_GOTO_ERROR
 
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M00))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M01))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M02))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M03))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M10))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M11))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M12))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M13))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M20))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M21))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M22))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M23))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M30))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M31))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M32))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(renderInfo.View.ProjectionMatrix.M33))
-            return false;
+            AFX_GOTO_ERROR
 
           outBeforeTranslucentShadow = false;
           outAfterTranslucentShadow = false;
@@ -4576,28 +4881,23 @@ virtual bool OnProcessMessageReceived(
           }
 
           if (!m_PipeServer->WriteBoolean(outBeforeTranslucentShadow))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->WriteBoolean(outAfterTranslucentShadow))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->WriteBoolean(outBeforeTranslucent))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->WriteBoolean(outAfterTranslucent))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->WriteBoolean(outBeforeHud))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->WriteBoolean(outAfterHud))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->WriteBoolean(outAfterRenderView))
-            return false;
+            AFX_GOTO_ERROR
 
-          if (!(outBeforeTranslucentShadow || outAfterTranslucentShadow ||
+          done = !(outBeforeTranslucentShadow || outAfterTranslucentShadow ||
                 outBeforeTranslucent || outAfterTranslucent || outBeforeHud ||
-                outAfterHud || outAfterRenderView))
-            done = true;
-
-          if (!done) {
-            // Handle render pass here if needed ...
-          }
+                outAfterHud || outAfterRenderView);
         } break;
 
         case EngineMessage::OnRenderViewEnd:
@@ -4618,42 +4918,41 @@ virtual bool OnProcessMessageReceived(
 
         case EngineMessage::BeforeTranslucentShadow:
           if (!DoRenderPass(RenderPassType_BeforeTranslucentShadow))
-            return false;
+            AFX_GOTO_ERROR
           break;
         case EngineMessage::AfterTranslucentShadow:
           if (!DoRenderPass(RenderPassType_AfterTranslucentShadow))
-            return false;
+            AFX_GOTO_ERROR
           break;
         case EngineMessage::BeforeTranslucent:
           if (!DoRenderPass(RenderPassType_BeforeTranslucent))
-            return false;
+            AFX_GOTO_ERROR
           break;
         case EngineMessage::AfterTranslucent:
           if (!DoRenderPass(RenderPassType_AfterTranslucent))
-            return false;
+            AFX_GOTO_ERROR
           break;
 
         case EngineMessage::OnViewOverride: {
           float Tx, Ty, Tz, Rx, Ry, Rz, Fov;
 
           if (!m_PipeServer->ReadSingle(Tx))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(Ty))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(Tz))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(Rx))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(Ry))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(Rz))
-            return false;
+            AFX_GOTO_ERROR
           if (!m_PipeServer->ReadSingle(Fov))
-            return false;
+            AFX_GOTO_ERROR
 
           if (m_OnViewOverride->IsValid()) {
-
-        CefRefPtr<CefV8Value> obj =
+            CefRefPtr<CefV8Value> obj =
                 CefV8Value::CreateObject(nullptr, nullptr);
 
             obj->SetValue("tX", CefV8Value::CreateDouble(Tx),
@@ -4723,80 +5022,50 @@ virtual bool OnProcessMessageReceived(
 
             if (overriden) {
               if (!m_PipeServer->WriteBoolean(true))
-                return false;
+                AFX_GOTO_ERROR
 
               if (!m_PipeServer->WriteSingle(Tx))
-                return false;
+                AFX_GOTO_ERROR
               if (!m_PipeServer->WriteSingle(Ty))
-                return false;
+                AFX_GOTO_ERROR
               if (!m_PipeServer->WriteSingle(Tz))
-                return false;
+                AFX_GOTO_ERROR
               if (!m_PipeServer->WriteSingle(Rx))
-                return false;
+                AFX_GOTO_ERROR
               if (!m_PipeServer->WriteSingle(Ry))
-                return false;
+                AFX_GOTO_ERROR
               if (!m_PipeServer->WriteSingle(Rz))
-                return false;
+                AFX_GOTO_ERROR
               if (!m_PipeServer->WriteSingle(Fov))
-                return false;
+                AFX_GOTO_ERROR
             } else {
               if (!m_PipeServer->WriteBoolean(false))
-                return false;
+                AFX_GOTO_ERROR
             }
           } else {
             if (!m_PipeServer->WriteBoolean(false))
-              return false;
+              AFX_GOTO_ERROR
           }
 
           if (!m_PipeServer->Flush())
-            return false;  // client is waiting
+            AFX_GOTO_ERROR  // client is waiting
         } break;
 
         case EngineMessage::GameEvent:
           if (!ReadGameEvent())
-            return false;
+            AFX_GOTO_ERROR
           break;
       }
     }
 
     return true;
+
+    AFX_IMPL_ERROR("CDrawingInteropImpl::DoPump")
   }
 
 
   virtual bool OnNewConnection() override {
-    // Check if our version is supported by client:
-
-    if (!m_PipeServer->WriteInt32(Version))
-      return false;
-
-      if (!m_PipeServer->Flush())
-      return false;
-
-      bool versionSupported;
-    if (!m_PipeServer->ReadBoolean(versionSupported))
-      return false;
-
-    if (!versionSupported)
-      return false;
-
-      // Supply server info required by client:
-
-#if _WIN64
-    if (!m_PipeServer->WriteBoolean(true))
-      return false;
-#else
-    if (!m_PipeServer->WriteBoolean(false))
-      return false;
-#endif
-
-    if (!WriteGameEventSettings(false))
-        return false;
-
-    if (!m_PipeServer->Flush())
-      return false;
-
-    if (m_OnNewConnection->IsValid())
-      m_OnNewConnection->ExecuteCallback(CefV8ValueList());
+    m_NewConnection = true;
     return true;
   }
 
@@ -4884,6 +5153,10 @@ virtual bool OnProcessMessageReceived(
 
     return obj;
   }
+
+  CefRefPtr<CAfxPromises> m_Promises;
+
+  bool m_NewConnection = true;
 
   std::queue<std::string> m_Commands;
 
@@ -5573,6 +5846,7 @@ class CInteropImpl : public CInterop {
 
     //
 
+    self->m_Context = context;
     self->m_Promises =
         new CAfxPromises();
 
@@ -5586,7 +5860,7 @@ class CInteropImpl : public CInterop {
         });
 
     afxObject->AddFunction("init",
-        [context, obj = afxObject->GetObj(), argStr](
+        [obj = afxObject->GetObj(), argStr](
                   const CefString& name, CefRefPtr<CefV8Value> object,
                   const CefV8ValueList& arguments,
                   CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
@@ -5598,7 +5872,7 @@ class CInteropImpl : public CInterop {
                     args.push_back(obj);
                     args.push_back(CefV8Value::CreateString(argStr));
 
-                    argInitFn->ExecuteFunctionWithContext(context, NULL, args);
+                    argInitFn->ExecuteFunctionWithContext(CefV8Context::GetCurrentContext(), NULL, args);
 
                     return true;
                   }
@@ -5611,7 +5885,7 @@ class CInteropImpl : public CInterop {
 
     afxObject->AddFunction(
         "createDrawingInterop",
-              [self,frame,context](
+              [self,frame](
                   const CefString& name, CefRefPtr<CefV8Value> object,
                   const CefV8ValueList& arguments,
                   CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
@@ -5624,8 +5898,9 @@ class CInteropImpl : public CInterop {
                   if (argUrl->IsString() && argStr->IsString() &&
                       argFnResolve->IsFunction() && argFnReject->IsFunction()) {
 
-                    CefRefPtr<CAfxPromise> promise =
-                        self->m_Promises->Create(context, argFnResolve, argFnReject);
+                    CefRefPtr<CAfxPromise> promise;
+                    retval = self->m_Promises->Create(argFnResolve, argFnReject,
+                                                      frame, &promise);
 
                     auto message =
                         CefProcessMessage::Create("afx-create-drawing");
@@ -5647,7 +5922,7 @@ class CInteropImpl : public CInterop {
 
     afxObject->AddFunction(
         "createEngineInterop",
-              [self,frame, context](
+              [self,frame](
                   const CefString& name, CefRefPtr<CefV8Value> object,
                   const CefV8ValueList& arguments,
                   CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
@@ -5659,8 +5934,9 @@ class CInteropImpl : public CInterop {
 
                   if (argUrl->IsString() && argStr->IsString() &&
                       argFnResolve->IsFunction() && argFnReject->IsFunction()) {
-                    CefRefPtr<CAfxPromise> promise = self->m_Promises->Create(
-                        context, argFnResolve, argFnReject);
+                    CefRefPtr<CAfxPromise> promise;
+                    retval = self->m_Promises->Create(argFnResolve, argFnReject,
+                                                      frame, &promise);
 
                     auto message =
                         CefProcessMessage::Create("afx-create-engine");
@@ -5705,10 +5981,39 @@ class CInteropImpl : public CInterop {
                 exceptionoverride = g_szInvalidArguments;
                 return true;
               });
+    afxObject->AddFunction(
+        "renderCefFrame",
+        [self, frame](const CefString& name, CefRefPtr<CefV8Value> object,
+                      const CefV8ValueList& arguments,
+                      CefRefPtr<CefV8Value>& retval,
+                      CefString& exceptionoverride) {
+          if (2 == arguments.size()) {
+            auto argFnResolve = arguments[0];
+            auto argFnReject = arguments[1];
 
-    self->m_OnMessage = afxObject->AddCallback("onMessage", context);
+            if (argFnResolve->IsFunction() && argFnReject->IsFunction()) {
+              CefRefPtr<CAfxPromise> promise;
+              retval = self->m_Promises->Create(argFnResolve, argFnReject,
+                                                frame, &promise);
 
-    self->m_OnError = afxObject->AddCallback("onError", context);
+              auto message = CefProcessMessage::Create("afx-render-cef-frame");
+              auto args = message->GetArgumentList();
+              args->SetSize(2);
+              args->SetInt(0, (int)promise->GetLo());
+              args->SetInt(1, (int)promise->GetHi());
+
+              frame->SendProcessMessage(PID_BROWSER, message);
+              return true;
+            }
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return true;
+        });
+  
+    self->m_OnMessage = afxObject->AddCallback("onMessage");
+
+    self->m_OnError = afxObject->AddCallback("onError");
 
     //
 
@@ -5719,8 +6024,13 @@ class CInteropImpl : public CInterop {
   }
 
   CInteropImpl() {
-
   }
+
+  virtual void CloseInterop() override { m_Context = nullptr; }
+
+  private:
+      CefRefPtr<CefV8Context> m_Context;
+      public:
 
   virtual bool OnProcessMessageReceived(
       CefRefPtr<CefBrowser> browser,
@@ -5731,8 +6041,7 @@ class CInteropImpl : public CInterop {
     auto const name = message->GetName();
 
     if (name == "afx-message") {
-      auto context = frame->GetV8Context();
-      context->Enter();
+      m_Context->Enter();
 
       auto const args = message->GetArgumentList();
       CefV8ValueList execArgs;
@@ -5743,12 +6052,11 @@ class CInteropImpl : public CInterop {
       if (m_OnMessage->IsValid())
         m_OnMessage->ExecuteCallback(execArgs);
 
-      context->Exit();
+      m_Context->Exit();
       return true;
 
     } else if (name == "afx-error") {
-      auto context = frame->GetV8Context();
-      context->Enter();      
+      m_Context->Enter();      
         
       auto const args = message->GetArgumentList();
       CefV8ValueList execArgs;
@@ -5758,11 +6066,10 @@ class CInteropImpl : public CInterop {
       if (m_OnError->IsValid())
         m_OnError->ExecuteCallback(execArgs);
    
-      context->Exit();
+      m_Context->Exit();
       return true;
     } else if (name == "afx-interop-resolve") {
-      auto context = frame->GetV8Context();
-      context->Enter();
+      m_Context->Enter();
 
       auto const args = message->GetArgumentList();
       
@@ -5770,26 +6077,22 @@ class CInteropImpl : public CInterop {
       execArgs.push_back(CefV8Value::CreateInt(args->GetInt(2)));
       m_Promises->Resolve(args->GetInt(0), args->GetInt(1), execArgs);
 
-      context->Exit();
+      m_Context->Exit();
       return true;
-    } else if (name == "afx-interop-reject") {
-      auto context = frame->GetV8Context();
-      context->Enter();
+    } else if (name == "afx-reject") {
+      m_Context->Enter();
 
       auto const args = message->GetArgumentList();
       CefV8ValueList execArgs;
       execArgs.push_back(CefV8Value::CreateString(args->GetString(2)));
       m_Promises->Reject(args->GetInt(0), args->GetInt(1), execArgs);
 
-      context->Exit();
+      m_Context->Exit();
       return true;
     }
 
     return false;
   }
-
-  virtual void CloseInterop() override {}
-
 
  private:
   CefRefPtr<CAfxPromises> m_Promises;

@@ -7,20 +7,23 @@
 
 #include "include/cef_client.h"
 
+#include <tchar.h>
+
 #include <map>
-#include <queue>
+#include <list>
+
+#include <mutex>
+#include <condition_variable>
+#include <thread>
 
 class SimpleHandler : public CefClient,
-                      public CefRenderHandler,
                       public CefDisplayHandler,
+                      public CefRenderHandler,
                       public CefLifeSpanHandler,
                       public CefLoadHandler {
  public:
   explicit SimpleHandler();
   ~SimpleHandler();
-
-  // Provide access to the single global instance of this object.
-  static SimpleHandler* GetInstance();
 
   // CefClient methods:
 
@@ -56,7 +59,6 @@ class SimpleHandler : public CefClient,
                        const void* buffer,
                        int width,
                        int height) OVERRIDE {
-    OutputDebugStringA("OnPaint\n");
   }
 
      // CefRenderHandler methods:
@@ -89,17 +91,6 @@ class SimpleHandler : public CefClient,
 
   bool is_closing_;
 
-  struct PromiseId_s {
-    int Lo;
-    int Hi;
-
-    PromiseId_s(int lo, int hi) : Lo(lo), Hi(hi) {
-
-    }
-  };
-
-  std::map<int,std::queue<PromiseId_s>> m_PaintedPromiseIds;
-
   struct BrowserMapElem {
     CefRefPtr<CefBrowser> Browser;
     int Width = 640;
@@ -108,9 +99,24 @@ class SimpleHandler : public CefClient,
     BrowserMapElem(CefRefPtr<CefBrowser> browser) : Browser(browser) {}
   };
 
+  std::mutex m_BrowsesMutex;
   std::map<int, BrowserMapElem> m_Browsers;
 
   std::map<int, int> m_BrowserIdToClientId;
+
+  struct PaintRequest_s {
+    int Lo;
+    int Hi;
+    PaintRequest_s(int lo, int hi) : Lo(lo), Hi(hi) {}
+    PaintRequest_s(const PaintRequest_s & copyFrom)
+        : Lo(copyFrom.Lo), Hi(copyFrom.Hi) {}
+  };
+
+  std::mutex m_PaintRequestsMuetx;
+  std::map<int,std::list<PaintRequest_s>> m_PaintRequests;
+
+
+  void SendAfxPainted(int id, int lo, int hi, int shareLo, int shareHi);
 
    // Platform-specific implementation.
   void PlatformTitleChange(CefRefPtr<CefBrowser> browser,
@@ -121,23 +127,6 @@ class SimpleHandler : public CefClient,
 
   void CreateEngineInterop(CefRefPtr<CefBrowser> browser,
                            CefRefPtr<CefListValue> args);
-
-  void InteropClosed(unsigned int);
-
-  void CreateInterop(CefRefPtr<CefBrowser> browser);
-  void CloseInterop();
-
-  void InteropResize();
-
-  void SendAfxMessage(CefRefPtr<CefBrowser> browser,
-                      CefRefPtr<CefListValue> args);
-
-  void SendExternalBeginFrame(CefRefPtr<CefBrowser> browser,
-                              CefRefPtr<CefListValue> args);
-
-  
-void DrawingResized(CefRefPtr<CefBrowser> browser,
-                                     CefRefPtr<CefListValue> args);
 
 // Include the default reference counting implementation.
   IMPLEMENT_REFCOUNTING(SimpleHandler);

@@ -23,7 +23,7 @@
 // automatically if using the required compiler version. Pass -DUSE_SANDBOX=OFF
 // to the CMake command-line to disable use of the sandbox.
 // Uncomment this line to manually enable sandbox support.
-// #define CEF_USE_SANDBOX 1
+//#define CEF_USE_SANDBOX 1
 
 #if defined(CEF_USE_SANDBOX)
 // The cef_sandbox.lib static library may not link successfully with all VS
@@ -230,8 +230,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
 #if defined(CEF_USE_SANDBOX)
   // Manage the life span of the sandbox information object. This is necessary
   // for sandbox support on Windows. See cef_sandbox_win.h for complete details.
-  //CefScopedSandboxInfo scoped_sandbox;
-  //sandbox_info = scoped_sandbox.sandbox_info();
+  CefScopedSandboxInfo scoped_sandbox;
+  sandbox_info = scoped_sandbox.sandbox_info();
 #endif
 
   // Provide CEF with command-line arguments.
@@ -258,7 +258,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
   settings.no_sandbox = true;
 #endif
 
-  settings.no_sandbox = true;
   settings.multi_threaded_message_loop = false;
   settings.windowless_rendering_enabled = true;
   

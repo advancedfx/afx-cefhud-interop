@@ -5,7 +5,7 @@
 
 Launch CS:GO from HLAE with -afxInteropLight.
 
-For testing execute (will log to debug.log in current directoy):
+Execute (will log warings / errors to debug.log in current directoy):
 afx-cefhud-interop.exe "--url=file:///C:/source/afx-cefhud-interop/afx-cefhud-interop/examples/default/index.html" --enable-logging --v=1
 
 For live execute:
@@ -31,7 +31,6 @@ function AfxInterop(interop, args) {
 	
 	this.interop = interop;
 	this.args = args;
-	this.taskQueue = [];
 	
 	this.messageHandlers = {
 	};
@@ -99,24 +98,7 @@ AfxInterop.prototype.onError = function(senderId, message) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-AfxInterop.prototype.queueTask = function(task) {
-	
-	var self = this;
-	
-	this.taskQueue.push(task);
-	
-	if(this.taskQueue.length === 1) {
-		queueMicrotask(function(){
-			for(var i = 0; i < self.taskQueue.length; ++i)
-			{
-				self.taskQueue[i].call(self);
-			}
-			self.taskQueue = [];
-		});
-	}
-}
-
-////////////////////////////////////////////////////////////////////////////////
+//window.open("http://google.com");
 
 window.afxInterop.init(function(interop, message){
 	console.log(message);

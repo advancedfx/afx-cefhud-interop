@@ -236,12 +236,12 @@ if(OS_WINDOWS)
   add_executable(${CEF_TARGET} WIN32 ${CEFSIMPLE_SRCS})
   add_dependencies(${CEF_TARGET} libcef_dll_wrapper)
   SET_EXECUTABLE_TARGET_PROPERTIES(${CEF_TARGET})
-  target_link_libraries(${CEF_TARGET} libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS})
+  target_link_libraries(${CEF_TARGET} libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} "D3DCompiler.lib")
 
   if(USE_SANDBOX)
     # Logical target used to link the cef_sandbox library.
     ADD_LOGICAL_TARGET("cef_sandbox_lib" "${CEF_SANDBOX_LIB_DEBUG}" "${CEF_SANDBOX_LIB_RELEASE}")
-    target_link_libraries(${CEF_TARGET} cef_sandbox_lib ${CEF_SANDBOX_STANDARD_LIBS})
+    target_link_libraries(${CEF_TARGET} cef_sandbox_lib ${CEF_SANDBOX_STANDARD_LIBS} "D3DCompiler.lib")
   endif()
 
   # Add the custom manifest files to the executable.

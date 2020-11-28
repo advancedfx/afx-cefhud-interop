@@ -447,6 +447,18 @@ function base64ToArrayBuffer(base64_string) {
 	return arrayBuffer;
 }
 
+function decodeUTF16LE(arrayBuffer) {
+	var dv = new DataView(arrayBuffer);
+	var cp = [];
+	for( var i = 0; i < arrayBuffer.byteLength; i+=2) {
+		cp.push(
+			dv.getUint8(i) |
+			( dv.getUint8(i+1) << 8 )
+		);
+	}
+	return String.fromCharCode.apply( String, cp );
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 function AfxDrawingInterop(interop,args) {
@@ -459,6 +471,7 @@ function AfxDrawingInterop(interop,args) {
 	this.args = args;
 	this.taskQueue = [];
 	this.taskQueueDeferred = 0;
+	this.painters = 0;
 	
 	this.width = null;
 	this.height = null;
@@ -471,10 +484,48 @@ function AfxDrawingInterop(interop,args) {
 	this.engineInteropId = null;
 	
 	this.shaderData = {
-		"afx_drawtexture_ps20.acs": this.createFirstAcsShaderEntryData("AAAAAAEAAAAAAAAAEAAAAAAC///+/yMAQ1RBQhwAAABfAAAAAAL//wEAAAAcAAAAAIEAAFgAAAAwAAAAAwAAAAEAAgBIAAAAAAAAAGdfc0RlcHRoVGV4dHVyZVNhbXBsZXIAqwQADAABAAEAAQAAAAAAAABwc18yXzAATWljcm9zb2Z0IChSKSBITFNMIFNoYWRlciBDb21waWxlciAxMC4xAKsfAAACAAAAgAAAA7AfAAACAAAAkAAID6BCAAADAAAPgAAA5LAACOSgAQAAAgAID4AAAOSA//8AAA=="),
+		"afx_drawtexture_vs20": this.compileShader(this.stringToAfxData(`
+			sampler g_sTextureSampler : register( s0 );
+
+			struct VS_INPUT
+			{
+				float3 xyz : POSITION;
+				float2 t0 : TEXCOORD0;
+			};
+			
+			struct VS_OUTPUT
+			{
+				float4 xyzw : POSITION;
+				float2 t0 : TEXCOORD0;
+			};
+
+			VS_OUTPUT main( const VS_INPUT i )
+			{
+				VS_OUTPUT o;
+				
+				o.xyzw = float4(i.xyz, 1);
+				o.t0 = i.t0;
+				
+				return o;
+			}
+		`), null, null, null, "main", "vs_2_0", 0, 0, 0, null),
+		"afx_drawtexture_ps20": this.compileShader(this.stringToAfxData(`
+			sampler g_sTextureSampler : register( s0 );
+
+			struct PS_INPUT
+			{
+				float2 t0 : TEXCOORD0;
+			};
+
+			float4 main( const PS_INPUT i ) : COLOR
+			{
+				return tex2D(g_sTextureSampler, i.t0);
+			}
+		`), null, null, null, "main", "ps_2_0", 0, 0, 0, null),
 	};
 	
 	this.shaders = {
+		"afx_drawtexture_vs20": null,
 		"afx_drawtexture_ps20": null,
 	};
 	
@@ -511,35 +562,44 @@ function AfxDrawingInterop(interop,args) {
 			//console.log(JSON.stringify(e));
 		},
 		"onHudEnd": function(frameCount,pass){
-			console.log("onHudEnd");
-			
 			if(this.interop.pumpBegin(frameCount, pass))
 			{
+				if(null == this.shaders["afx_drawtexture_vs20"])
+					this.shaders["afx_drawtexture_vs20"] = this.interop.d3d9CreateVertexShader(this.shaderData["afx_drawtexture_vs20"]);
+
 				if(null == this.shaders["afx_drawtexture_ps20"])
-					this.shaders["afx_drawtexture_ps20"] = this.interop.d3d9CreatePixelShader(this.shaderData["afx_drawtexture_ps20.acs"]);
+					this.shaders["afx_drawtexture_ps20"] = this.interop.d3d9CreatePixelShader(this.shaderData["afx_drawtexture_ps20"]);
 					
 				if(null == this.vertexDeclarations["pos3_uv2"])
 					this.vertexDeclarations["pos3_uv2"] = this.interop.d3d9CreateVertexDeclaration(this.vertexElements["pos3_uv2"]);
 				
 				this.deferTasks();
 				
-				this.interop.renderCefFrame(function(cefTextureHandle){
+				console.log("renderCefFrame ...");
+				this.renderCefFrame(function(cefTextureHandle){
+					console.log("renderCefFrame ... DONE.");
 					
-					if(null == self.cefTextureHandle || self.cefTextureHandle != cefTextureHandle)
+					if(!cefTextureHandle.invalid)
 					{
-						self.cefTextureHandle = cefTextureHandle;
-						if(self.cefTexture) {
-							cefTexture.release();
-							cefTexture = null;
+						console.log("cefTextureHandle: "+cefTextureHandle.lo+" "+cefTextureHandle.hi);
+						
+						if(null == self.cefTextureHandle || self.cefTextureHandle.lo != cefTextureHandle.lo || self.cefTextureHandle.hi != cefTextureHandle.hi)
+						{
+							self.cefTextureHandle = cefTextureHandle;
+							if(self.cefTexture) {
+								cefTexture.release();
+								cefTexture = null;
+							}
 						}
+						
+						if(null == self.cefTexture)
+							cefTexture = self.interop.d3d9CreateTexture(self.width, self.height, 1, D3DUSAGE.D3DUSAGE_RENDERTARGET, 21 /* D3DFMT_A8R8G8B8 */, D3DPOOL.D3DPOOL_DEFAULT, self.cefTextureHandle);
+						
+						self.drawRect2d(self.cefTexture, self.renderInfo.view.x, self.renderInfo.view.y, self.renderInfo.view.width, self.renderInfo.view.height, 0, 0, 1, 1);
+						
+						self.interop.waitForClientGpu();
 					}
-					
-					if(null == self.cefTexture)
-						cefTexture = self.interop.d3d9CreateTexture(self.width, self.height, 1, D3DUSAGE.D3DUSAGE_RENDERTARGET, 21 /* D3DFMT_A8R8G8B8 */, D3DPOOL.D3DPOOL_DEFAULT, self.cefTextureHandle);
-					
-					self.drawRect2d(self.cefTexture, self.renderInfo.view.x, self.renderInfo.view.y, self.renderInfo.view.width, self.renderInfo.view.height, 0, 0, 1, 1);
-					
-					self.interop.waitForClientGpu();
+					else console.log("cefTextureHandle.invalid");
 					
 					self.interop.pumpEnd();
 					
@@ -604,6 +664,10 @@ AfxDrawingInterop.prototype.onDeviceReset = function() {
 		this.cefTexture.release();
 		this.cefTexture = null;
 	}
+	if(this.shaders["afx_drawtexture_vs20"]) {
+		this.shaders["afx_drawtexture_vs20"].release();
+		this.shaders["afx_drawtexture_vs20"] = null;
+	}
 	if(this.shaders["afx_drawtexture_ps20"]) {
 		this.shaders["afx_drawtexture_ps20"].release();
 		this.shaders["afx_drawtexture_ps20"] = null;
@@ -653,12 +717,10 @@ AfxDrawingInterop.prototype.stackTask = function(task) {
 }
 
 AfxDrawingInterop.prototype.deferTasks = function() {
-	console.log("deferTasks");
 	++this.taskQueueDeferred;
 }
 
 AfxDrawingInterop.prototype.undeferTasks = function() {
-	console.log("undeferTasks");
 	--this.taskQueueDeferred;
 	
 	while(this.taskQueueDeferred === 0 && 0 < this.taskQueue.length)
@@ -667,39 +729,56 @@ AfxDrawingInterop.prototype.undeferTasks = function() {
 	}
 }
 
-AfxDrawingInterop.prototype.createFirstAcsShaderEntryData = function(base64_string) {
-
-	var buffer = base64ToArrayBuffer(base64_string);
-	var bufferView = new DataView(buffer);
+/**
+ * @remarks NOT NULL TERMINATED!
+ */
+AfxDrawingInterop.prototype.stringToAfxData = function(value) {
+	var dd = this.interop.createDrawingData(value.length);
+	var dv = new DataView(dd.buffer);
 	
-	var version = bufferView.getInt32(0, true);
-	if(0 == version)
+	for(var i = 0; i < value.length; ++i)
 	{
-		var entries = bufferView.getInt32(4, true);
-		if(1 <= entries)
-		{
-			var key = bufferView.getInt32(8, true);
-			var offset = bufferView.getInt32(12, true);
-			var length = 0;
-			if(1 == entries)
-				length = buffer.byteLength - offset;
-			else
-			{
-				var nextOffset = bufferView.getInt32(12+4+4, true);
-				length = nextOffset - offset;
-			}
-			
-			var dd = this.interop.createDrawingData(length);
-			var dv = new DataView(dd.buffer);
-			
-			for(var i = 0; i < length; ++i)
-			{
-				dv.setUint8(i, bufferView.getUint8(offset+i));
-			}
-			
-			return dd;
-		}
+		dv.setUint8(i, value.charCodeAt(i));
 	}
+	
+	return dd;
+}
+
+/**
+ * @param includes MUST BE null.
+ * @remarks https://docs.microsoft.com/en-us/windows/win32/api/d3dcompiler/nf-d3dcompiler-d3dcompile2
+ */
+AfxDrawingInterop.prototype.compileShader = function(srcData,sourceName,defines,includes,entryPoint,target,flags1,flags2,secondaryDataFlags,secondaryData) {
+	
+	var result = this.interop.d3dCompile2(
+		srcData,
+		sourceName,
+		defines,
+		includes,
+		entryPoint,
+		target,
+		flags1,
+		flags2,
+		secondaryDataFlags,
+		secondaryData
+	);
+	
+	if(0 !== result.hResult)
+	{	
+		var errorStr = "[UNKNOWN]";
+		if(null !== result.errorMsgs)
+		{
+			var decoder = new TextDecoder('utf-8', {fatal: true});
+			var cefIsBuggy = new ArrayBuffer(result.errorMsgs.buffer.byteLength);
+			var dvIn = new DataView(result.errorMsgs.buffer);
+			var dvOut = new DataView(cefIsBuggy);
+			for(var i = 0; i < cefIsBuggy.byteLength; ++i) dvOut.setUint8(i, dvIn.getUint8(i));
+			errorStr = decoder.decode(cefIsBuggy);
+		}
+		throw errorStr;
+	}
+	
+	return result.code;
 }
 
 AfxDrawingInterop.prototype.drawRect2d = function(texture,x,y,width,height,x0,y0,x1,y1) {
@@ -721,7 +800,7 @@ AfxDrawingInterop.prototype.drawRect2d = function(texture,x,y,width,height,x0,y0
 	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_COLORWRITEENABLE, D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_ALPHA | D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_BLUE | D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_GREEN | D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_RED);
 	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_SEPARATEALPHABLENDENABLE, BOOL.FALSE);
 	
-	this.interop.d3d9SetVertexShader(null);
+	this.interop.d3d9SetVertexShader(this.shaders["afx_drawtexture_vs20"]);
 	this.interop.d3d9SetPixelShader(this.shaders["afx_drawtexture_ps20"]);
 	
 	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_CULLMODE, D3DCULL.D3DCULL_NONE);
@@ -877,6 +956,68 @@ AfxDrawingInterop.prototype.disconnect = function(senderId) {
 			"args": [this.interop.id]
 		}));
 	}
+}
+
+/**
+ * Work around CEF bugs (it drops paint requests).
+ */
+AfxDrawingInterop.prototype.renderCefFrame = function(resolve,reject){
+	var self = this;
+	var painted = false;
+	var timeout = null;
+	var requests = [];
+	var t_cefTextureHandle;
+	var t_error = "This should not happen.";
+	
+	function finish()
+	{
+		if(undefined !== t_cefTextureHandle)
+			resolve(t_cefTextureHandle);
+		else
+			reject(t_error);
+	}
+	
+	function paint(){
+		++self.painters;
+		console.log("Paint request #"+self.painters);
+		requests.unshift(self.interop.renderCefFrame(function(cefTextureHandle){
+			if(null != timeout) { clearTimeout(timeout); timeout = null; }
+			console.log("Paint resolve (RESOLVE) #"+self.painters);
+			--self.painters;
+			if(!painted)
+			{
+				painted = true;
+				t_cefTextureHandle = cefTextureHandle;
+				for(var i = 0; i < requests.length; ++i)
+				{
+					requests[i].cancel();
+				}
+			}
+			if(0 == self.painters) finish();
+		}, function(error){
+			if(null != timeout) { clearTimeout(timeout); timeout = null; }
+			painted = true;
+			console.log("Paint resolve (REJECT) #"+self.painters);
+			--self.painters;
+			if(!painted)
+			{
+				painted = true;
+				t_error = error;
+				for(var i = 0; i < requests.length; ++i)
+				{
+					requests[i].cancel();
+				}
+			}
+			if(0 == self.painters) finish();
+		}));
+		
+		if(!painted && self.painters < 2)
+		{
+			timeout = setTimeout(paint, 100);
+		}
+	}
+	
+	paint();
 }
 
 ////////////////////////////////////////////////////////////////////////////////

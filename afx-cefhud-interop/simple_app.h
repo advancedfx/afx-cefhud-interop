@@ -110,18 +110,18 @@ class SimpleApp : public CefApp,
       CefRefPtr<CefProcessMessage> message) OVERRIDE;
 
   // CefApp methods:
-   virtual void OnBeforeCommandLineProcessing(
+  virtual void OnBeforeCommandLineProcessing(
       const CefString& process_type,
       CefRefPtr<CefCommandLine> command_line) OVERRIDE {
     // disable creation of a GPUCache/ folder on disk
     command_line->AppendSwitch("disable-gpu-shader-disk-cache");
 
-    // command_line->AppendSwitch("disable-accelerated-video-decode");
+    command_line->AppendSwitch("disable-accelerated-video-decode");
 
     // un-comment to show the built-in Chromium fps meter
-    // command_line->AppendSwitch("show-fps-counter");
+    command_line->AppendSwitch("show-fps-counter");
 
-    // command_line->AppendSwitch("disable-gpu-vsync");
+    command_line->AppendSwitch("disable-gpu-vsync");
 
     // Most systems would not need to use this switch - but on older hardware,
     // Chromium may still choose to disable D3D11 for gpu workarounds.
@@ -136,6 +136,22 @@ class SimpleApp : public CefApp,
     // requiring the muted attribute or user interaction
     command_line->AppendSwitchWithValue("autoplay-policy",
                                         "no-user-gesture-required");
+
+    //
+
+    //command_line->AppendSwitch("gpu-sandbox-failures-fatal");
+    //command_line->AppendSwitch("disable-gpu-early-init");
+    //command_line->AppendSwitch("disable-gpu-watchdog");
+    //command_line->AppendSwitch("d3d11");
+    //command_line->AppendSwitch("no-sandbox");
+    //command_line->AppendSwitch("off-screen-rendering-enabled");
+    //command_line->AppendSwitchWithValue("off-screen-frame-rate", "60");
+    //command_line->AppendSwitch("enable-gpu");
+    //command_line->AppendSwitch("enable-begin-frame-scheduling");
+    //command_line->AppendSwitch("disable-hang-monitor");
+    //command_line->AppendSwitch("disable-threaded-compositing");
+    //command_line->AppendSwitch("cc-layer-tree-test-no-timeout");
+    //command_line->AppendSwitch("skip-gpu-data-loading");
   }
 
  private:
