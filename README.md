@@ -1,3 +1,39 @@
+# Short instructions
+
+This project is still under development, so it's not fully ready yet, esepcially the afx_interop version 7.
+
+The master branch is probably not fully functionial atm (sorry about that), the official HLAE is compatbile with the v3 branch (afx_interop version 6) released a while ago:  
+https://github.com/advancedfx/afx-cefhud-interop/tree/v3
+
+There's already pre-built binaries for the v3 / afx_interop version 6 version here:
+https://drive.google.com/drive/folders/1CQFGMYhmz4x9DxunmwhWMp37ow6YOBON  
+First install / extract the Release-Base.7z and over that replace with the contents from Release.7z - the AfxHookSource.7z is not needed, since the officcial HLAE fully supports the v6 by now.
+
+If you want to build v3 / afx_interop_v6 yourself please:
+
+- Obtain Visual Studio 2019 (e.g. Community edition) and make sure at least the "Desktop Development with C++ component" is installed.
+- Clone the v3 branch with git:
+```
+cd /c/some/directory
+git clone --recursive https://github.com/advancedfx/afx-cefhud-interop.git
+cd afx-cefhud-interop
+git checkout v3
+```
+
+Now open the Start -> Visual Studios 2019 -> Developer Command Prompt for VS 2019
+
+```
+c:
+cd c:\some\directory\afx-cefhud-interop
+mkdir build
+cd build
+cmake -G "Visual Studio 16" -A x64 ..
+```
+
+Then, open the newly created c:\some\directory\afx-cefhud-interop\build\cef.sln in Visual Studio 2019 and select **Release** and **x64** in the confugration, right click afx-cefhud-interop in Solution tree and select Build.
+
+----
+
 The [Chromium Embedded Framework](https://bitbucket.org/chromiumembedded/cef/) (CEF) is a simple framework for embedding Chromium-based browsers in other applications. This repository hosts a sample project called "cef-project" that can be used as the starting point for third-party applications built using CEF.
 
 # Quick Links
@@ -16,9 +52,9 @@ First install some necessary tools and download the cef-project source code.
 
 3\. Install platform-specific build tools.
 
-* Linux: Currently supported distributions include Debian Wheezy, Ubuntu Precise, and related. Ubuntu 14.04 64-bit is recommended. Newer versions will likely also work but may not have been tested. Required packages include: build-essential, libgtk2.0-dev, libgtkglext1-dev.
-* macOS: Xcode 6 or newer building on macOS 10.9 (Mavericks) or newer is required. Xcode 10 and macOS 10.14 (Mojave) are recommended. The Xcode command-line tools must also be installed. Only 64-bit builds are supported on macOS.
-* Windows: Visual Studio 2013 or newer building on Windows 7 or newer is required. Visual Studio 2019 and Windows 10 64-bit are recommended.
+* Linux: Currently supported distributions include Debian Wheezy, Ubuntu Precise, and related. Ubuntu 18.04 64-bit is recommended. Newer versions will likely also work but may not have been tested. Required packages include: build-essential, libgtk2.0-dev, libgtkglext1-dev.
+* MacOS: Xcode 8 or newer building on MacOS 10.11 (El Capitan) or newer for x86_64. Xcode 12.2 or newer building on MacOS 10.15.4 (Catalina) or newer for ARM64. The Xcode command-line tools must also be installed. Only 64-bit builds are supported on macOS.
+* Windows: Visual Studio 2015 Update 2 or newer building on Windows 7 or newer. Visual Studio 2019 and Windows 10 64-bit are recommended.
 
 4\. Download the cef-project source code from the [Downloads page](https://bitbucket.org/chromiumembedded/cef-project/downloads) or by using [Git](https://git-scm.com/) command-line tools:
 
@@ -28,7 +64,7 @@ git clone https://bitbucket.org/chromiumembedded/cef-project.git
 
 # Build
 
-Now run CMake which will download the CEF binary distribution from the [Spotify automated builder](http://opensource.spotify.com/cefbuilds/index.html) and generate build files for your platform. Then build using platform build tools. For example, using the most recent tool versions on each platform:
+Now run CMake which will download the CEF binary distribution from the [Spotify automated builder](https://cef-builds.spotifycdn.com/index.html) and generate build files for your platform. Then build using platform build tools. For example, using the most recent tool versions on each platform:
 
 ```
 cd /path/to/cef-project
@@ -42,8 +78,12 @@ cd build
 cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release ..
 make -j4
 
-# To perform a macOS build using a 64-bit CEF binary distribution:
-cmake -G "Xcode" ..
+# To perform a MacOS build using a 64-bit CEF binary distribution:
+cmake -G "Xcode" -DPROJECT_ARCH="x86_64" ..
+# Then, open build\cef.xcodeproj in Xcode and select Product > Build.
+
+# To perform a MacOS build using an ARM64 CEF binary distribution:
+cmake -G "Xcode" -DPROJECT_ARCH="arm64" ..
 # Then, open build\cef.xcodeproj in Xcode and select Product > Build.
 
 # To perform a Windows build using a 32-bit CEF binary distribution:
@@ -58,8 +98,8 @@ cmake -G "Visual Studio 16" -A x64 ..
 CMake supports different generators on each platform. Run `cmake --help` to list all supported generators. Generators that have been tested with CEF include:
 
 * Linux: Ninja, Unix Makefiles
-* macOS: Ninja, Xcode 6+
-* Windows: Ninja, Visual Studio 2013+
+* MacOS: Ninja, Xcode 8+ (x86_64) or Xcode 12.2+ (ARM64)
+* Windows: Ninja, Visual Studio 2015+
 
 Ninja is a cross-platform open-source tool for running fast builds using pre-installed platform toolchains (GNU, clang, Xcode or MSVC). See comments in the "third_party/cef/cef_binary_*/CMakeLists.txt" file for Ninja usage instructions.
 
@@ -81,7 +121,7 @@ Here are some activities you might want to try next to gain a better understandi
 
 1\. Update the CEF version used to build your local copy of cef-project:
 
-* Visit the [Spotify automated builder](http://opensource.spotify.com/cefbuilds/index.html) page to see what CEF versions are available.
+* Visit the [Spotify automated builder](https://cef-builds.spotifycdn.com/index.html) page to see what CEF versions are available.
 * Change the "CEF_VERSION" value near the top of the [top-level CMakeLists.txt file](https://bitbucket.org/chromiumembedded/cef-project/src/master/CMakeLists.txt?fileviewer=file-view-default).
 * Re-run the cmake and build commands. Add `-DWITH_EXAMPLES=Off` to the cmake command-line to disable targets from the [examples directory](examples) because they may not build successfully with the new CEF version.
 
