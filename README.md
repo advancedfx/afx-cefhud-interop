@@ -35,8 +35,6 @@ Then, open the newly created c:\some\directory\afx-cefhud-interop\build\cef.sln 
 For instructions how to use the binary see the comments at the top of the example.html here:  
 https://github.com/advancedfx/afx-cefhud-interop/blob/main/afx-cefhud-interop/example.html
 
-You can ignore the instruction
-
 ----
 
 The [Chromium Embedded Framework](https://bitbucket.org/chromiumembedded/cef/) (CEF) is a simple framework for embedding Chromium-based browsers in other applications. This repository hosts a sample project called "cef-project" that can be used as the starting point for third-party applications built using CEF.
