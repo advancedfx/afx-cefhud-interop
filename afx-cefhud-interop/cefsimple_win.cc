@@ -41,6 +41,26 @@ ID3D11Device* pDevice = NULL;
 //ID3D11DeviceContext* pContext = NULL;
 ID3D11Query* pQuery = NULL;
 
+HANDLE AfxInteropGetSharedHandle(void* d3d11ResourcePtr) {
+  HANDLE result = NULL;
+
+  if (d3d11ResourcePtr) {
+    ID3D11Resource* resource = (ID3D11Resource*)d3d11ResourcePtr;
+
+    IDXGIResource* dxgiResource;
+
+    if (SUCCEEDED(resource->QueryInterface(__uuidof(IDXGIResource),
+                                           (void**)&dxgiResource))) {
+      if (FAILED(dxgiResource->GetSharedHandle(&result))) {
+        result = NULL;
+      }
+      dxgiResource->Release();
+    }
+  }
+
+  return result;
+}
+
 typedef HRESULT(STDMETHODCALLTYPE* CreateTexture2D_t)(
     ID3D11Device* This,
     /* [annotation] */
@@ -67,12 +87,35 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
       default:
         break;
       case DXGI_FORMAT_B8G8R8A8_UNORM: 
-        if (pDesc->MiscFlags & D3D11_RESOURCE_MISC_SHARED)
-        {
-          D3D11_TEXTURE2D_DESC*pDescNc = const_cast<D3D11_TEXTURE2D_DESC*>(pDesc);
-          pDescNc->BindFlags |= D3D11_BIND_RENDER_TARGET;
-          //MessageBoxA(0, "HI", "HI", MB_OK);
+          {
+        char value[33];
+
+        if (pDesc->MiscFlags & D3D11_RESOURCE_MISC_SHARED) {
+          D3D11_TEXTURE2D_DESC Desc = *pDesc;
+
+          // Desc.Width = Width;
+          // Desc.Height = Height;
+          Desc.MipLevels = 1;
+          Desc.ArraySize = 1;
+          Desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+          Desc.SampleDesc.Count = 1;
+          Desc.SampleDesc.Quality = 0;
+          Desc.Usage = D3D11_USAGE_DEFAULT;
+          Desc.BindFlags =
+              D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+          Desc.CPUAccessFlags = 0;
+          Desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+
+          HRESULT result =
+              True_CreateTexture2D(This, &Desc, pInitialData, ppTexture2D);
+
+          HANDLE handle = AfxInteropGetSharedHandle(*ppTexture2D);
+
+          OutputDebugStringA(ultoa(HandleToULong(handle), &value[0], 16));
+
+          return result;
         }
+      }
         break;
     }
   }

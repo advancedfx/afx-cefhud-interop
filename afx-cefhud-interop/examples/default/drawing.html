@@ -363,7 +363,7 @@ const D3DUSAGE = {
 	D3DUSAGE_DYNAMIC       : 0x00000200,
 	/* D3D9Ex only -- */
 
-	D3DUSAGE_NONSECURE          : 00800000,
+	D3DUSAGE_NONSECURE          : 0x00800000,
 
 	/* -- D3D9Ex only */
 
@@ -371,32 +371,32 @@ const D3DUSAGE = {
 	// D3DOK_NOAUTOGEN if the device doesn't support autogeneration for that format.
 	// D3DOK_NOAUTOGEN is a success code, not a failure code... the SUCCEEDED and FAILED macros
 	// will return true and false respectively for this code.
-	D3DUSAGE_AUTOGENMIPMAP      : 00000400,
-	D3DUSAGE_DMAP               : 00004000,
+	D3DUSAGE_AUTOGENMIPMAP      : 0x00000400,
+	D3DUSAGE_DMAP               : 0x00004000,
 
 	// The following usages are valid only for querying CheckDeviceFormat
-	D3DUSAGE_QUERY_LEGACYBUMPMAP            : 00008000,
-	D3DUSAGE_QUERY_SRGBREAD                 : 00010000,
-	D3DUSAGE_QUERY_FILTER                   : 00020000,
-	D3DUSAGE_QUERY_SRGBWRITE                : 00040000,
-	D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING : 00080000,
-	D3DUSAGE_QUERY_VERTEXTEXTURE            : 00100000,
-	D3DUSAGE_QUERY_WRAPANDMIP	            : 00200000,
+	D3DUSAGE_QUERY_LEGACYBUMPMAP            : 0x00008000,
+	D3DUSAGE_QUERY_SRGBREAD                 : 0x00010000,
+	D3DUSAGE_QUERY_FILTER                   : 0x00020000,
+	D3DUSAGE_QUERY_SRGBWRITE                : 0x00040000,
+	D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING : 0x00080000,
+	D3DUSAGE_QUERY_VERTEXTEXTURE            : 0x00100000,
+	D3DUSAGE_QUERY_WRAPANDMIP	            : 0x00200000,
 
 	/* Usages for Vertex/Index buffers */
-	D3DUSAGE_WRITEONLY          : 00000008,
-	D3DUSAGE_SOFTWAREPROCESSING : 00000010,
-	D3DUSAGE_DONOTCLIP          : 00000020,
-	D3DUSAGE_POINTS             : 00000040,
-	D3DUSAGE_RTPATCHES          : 00000080,
-	D3DUSAGE_NPATCHES           : 00000100,
+	D3DUSAGE_WRITEONLY          : 0x00000008,
+	D3DUSAGE_SOFTWAREPROCESSING : 0x00000010,
+	D3DUSAGE_DONOTCLIP          : 0x00000020,
+	D3DUSAGE_POINTS             : 0x00000040,
+	D3DUSAGE_RTPATCHES          : 0x00000080,
+	D3DUSAGE_NPATCHES           : 0x00000100,
 
 	/* D3D9Ex only -- */
 
-	D3DUSAGE_TEXTAPI                         : 10000000,
-	D3DUSAGE_RESTRICTED_CONTENT              : 00000800,
-	D3DUSAGE_RESTRICT_SHARED_RESOURCE        : 00002000,
-	D3DUSAGE_RESTRICT_SHARED_RESOURCE_DRIVER : 00001000, 
+	D3DUSAGE_TEXTAPI                         : 0x10000000,
+	D3DUSAGE_RESTRICTED_CONTENT              : 0x00000800,
+	D3DUSAGE_RESTRICT_SHARED_RESOURCE        : 0x00002000,
+	D3DUSAGE_RESTRICT_SHARED_RESOURCE_DRIVER : 0x00001000, 
 
 	/* -- D3D9Ex only */
 };
@@ -544,6 +544,9 @@ function AfxDrawingInterop(interop,args) {
 			this.frameCount = renderInfo.frameCount;
 			var texWidth = renderInfo.view.width - renderInfo.view.x;
 			var texHeight = renderInfo.view.height - renderInfo.view.y;
+			
+			texWidth = 640;
+			texHeight = 480;
 			
 			if(this.width !== texWidth || this.height !== texHeight)
 			{
@@ -962,62 +965,57 @@ AfxDrawingInterop.prototype.disconnect = function(senderId) {
  * Work around CEF bugs (it drops paint requests).
  */
 AfxDrawingInterop.prototype.renderCefFrame = function(resolve,reject){
+
+	//resolve(this.interop.createInvalidHandle());
+	//return;
+
 	var self = this;
-	var painted = false;
-	var timeout = null;
+	var interval = null;
 	var requests = [];
-	var t_cefTextureHandle;
-	var t_error = "This should not happen.";
+	var t_cefTextureHandle = null;
+	var t_error;
+	var count = 0;
 	
-	function finish()
+	function pop()
 	{
-		if(undefined !== t_cefTextureHandle)
-			resolve(t_cefTextureHandle);
-		else
-			reject(t_error);
-	}
-	
-	function paint(){
-		++self.painters;
-		console.log("Paint request #"+self.painters);
-		requests.unshift(self.interop.renderCefFrame(function(cefTextureHandle){
-			if(null != timeout) { clearTimeout(timeout); timeout = null; }
-			console.log("Paint resolve (RESOLVE) #"+self.painters);
-			--self.painters;
-			if(!painted)
-			{
-				painted = true;
-				t_cefTextureHandle = cefTextureHandle;
-				for(var i = 0; i < requests.length; ++i)
-				{
-					requests[i].cancel();
-				}
-			}
-			if(0 == self.painters) finish();
-		}, function(error){
-			if(null != timeout) { clearTimeout(timeout); timeout = null; }
-			painted = true;
-			console.log("Paint resolve (REJECT) #"+self.painters);
-			--self.painters;
-			if(!painted)
-			{
-				painted = true;
-				t_error = error;
-				for(var i = 0; i < requests.length; ++i)
-				{
-					requests[i].cancel();
-				}
-			}
-			if(0 == self.painters) finish();
-		}));
-		
-		if(!painted && self.painters < 2)
+		if(interval !== null)
 		{
-			timeout = setTimeout(paint, 100);
+			clearInterval(interval);
+			interval = null;
+		}
+		--count;
+		console.log("<"+count);
+		requests.pop().cancel();
+		if(0 == requests.length)
+		{
+			if(null !== t_cefTextureHandle)
+				resolve(t_cefTextureHandle);
+			else
+				reject(t_error);
 		}
 	}
 	
-	paint();
+	function render()
+	{
+		if(3 <= count) return;
+		
+		++count;
+		console.log(">"+count);
+		
+		requests.push(self.interop.renderCefFrame(function(cefTextureHandle){
+			t_cefTextureHandle = cefTextureHandle;
+			pop();
+		}, function(error){
+			t_error = error;
+			pop();
+		}));
+	}
+	
+	interval = setInterval(function(){
+		render();
+	}, 100);
+	
+	render();
 }
 
 ////////////////////////////////////////////////////////////////////////////////

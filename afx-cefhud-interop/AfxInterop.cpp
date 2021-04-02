@@ -165,8 +165,8 @@ enum class AfxUserDataType : int {
   AfxD3d9Texture,
   AfxD3d9PixelShader,
   AfxD3d9VertexShader,
-  AfxD3d9Viewport,
-  AfxPromise
+  AfxD3d9Viewport
+  //AfxPromise
 };
 
 struct Matrix4x4_s {
@@ -251,34 +251,6 @@ struct IntCalcResult_s {
   int Result = 0;
 };
 
-
-class CThreadedQueue {
-  typedef std::function<void(void)> fp_t;
-
- public:
-  CThreadedQueue();
-  ~CThreadedQueue();
-
-  void Abort();
-
-  void Queue(const fp_t& op);
-  void Queue(fp_t&& op);
-
-  CThreadedQueue(const CThreadedQueue& rhs) = delete;
-  CThreadedQueue& operator=(const CThreadedQueue& rhs) = delete;
-  CThreadedQueue(CThreadedQueue&& rhs) = delete;
-  CThreadedQueue& operator=(CThreadedQueue&& rhs) = delete;
-
- private:
-  std::mutex m_Lock;
-  std::thread m_Thread;
-  std::queue<fp_t> m_Queue;
-  std::condition_variable m_Cv;
-  bool m_Quit = false;
-
-  void QueueThreadHandler(void);
-};
-
 CThreadedQueue::CThreadedQueue() {
   m_Thread = std::thread(&CThreadedQueue::QueueThreadHandler, this);
 }
@@ -337,6 +309,295 @@ void CThreadedQueue::QueueThreadHandler(void) {
 }
 
 
+
+void CPipeReader::ReadBytes(LPVOID bytes, DWORD offset, DWORD length) {
+  while (true) {
+    DWORD bytesRead = 0;
+
+    if (!(ReadFile(m_Handle, (LPVOID) & (((char*)bytes)[offset]), length,
+                   &bytesRead, NULL)))
+      throw CPipeException(GetLastError());
+
+    offset += bytesRead;
+    length -= bytesRead;
+  }
+}
+
+bool CPipeReader::ReadBoolean() {
+  return 0 != ReadByte();
+}
+
+BYTE CPipeReader::ReadByte() {
+  BYTE tmp;
+
+  ReadBytes(&tmp, 0, (DWORD)sizeof(tmp));
+
+  return tmp;
+}
+
+signed char CPipeReader::ReadSByte() {
+  signed char tmp;
+
+  ReadBytes(&tmp, 0, (DWORD)sizeof(tmp));
+
+  return tmp;
+}
+
+INT16 CPipeReader::ReadInt16() {
+  INT16 tmp;
+  ReadBytes(&tmp, 0, (DWORD)sizeof(tmp));
+  return tmp;
+}
+
+UINT32 CPipeReader::ReadUInt32() {
+  UINT32 tmp;
+  ReadBytes(&tmp, 0, (DWORD)sizeof(tmp));
+  return tmp;
+}
+
+UINT32 CPipeReader::ReadCompressedUInt32() {
+  BYTE tmp = ReadByte();
+  if (tmp < 255) {
+    return tmp;
+  }
+
+  return ReadUInt32();
+}
+
+INT32 CPipeReader::ReadInt32() {
+  INT32 tmp;
+  ReadBytes(&tmp, 0, (DWORD)sizeof(tmp));
+  return tmp;
+}
+
+INT32 CPipeReader::ReadCompressedInt32() {
+  signed char tmp = ReadSByte();
+  if (tmp < 127) {
+    return tmp;
+  }
+  return ReadInt32();
+}
+
+void CPipeReader::ReadStringUTF8(std::string& outValue) {
+  UINT32 length = ReadCompressedUInt32();
+  outValue.resize(length);
+  ReadBytes(&outValue[0], 0, length);
+}
+
+HANDLE CPipeReader::ReadHandle() {
+  DWORD value32;
+  ReadBytes(&value32, 0, (DWORD)sizeof(value32));
+  return ULongToHandle(value32);
+}
+
+UINT64 CPipeReader::ReadUInt64() {
+  UINT64 tmp;
+  ReadBytes(&tmp, 0, (DWORD)sizeof(tmp));
+  return tmp;
+}
+
+FLOAT CPipeReader::ReadSingle() {
+  FLOAT tmp;
+  ReadBytes(&tmp, 0, (DWORD)sizeof(tmp));
+  return tmp;
+}
+
+void CPipeWriter::WriteBytes(const LPVOID bytes, DWORD offset, DWORD length) {
+  while (true) {
+    if (0 == length)
+      break;
+
+    DWORD bytesWritten = 0;
+    DWORD bytesToWrite = length;
+
+    if (!(WriteFile(m_Handle, (LPVOID) & (((char*)bytes)[offset]), bytesToWrite,
+                    &bytesWritten, NULL))) throw CPipeException(GetLastError());
+
+    offset += bytesWritten;
+    length -= bytesWritten;
+  }
+}
+
+void CPipeWriter::Flush() {
+  if (!FlushFileBuffers(m_Handle))
+    throw CPipeException(GetLastError());
+}
+
+void CPipeWriter::WriteBoolean(bool value) {
+  BYTE tmp = value ? 1 : 0;
+  WriteBytes(&tmp, 0, sizeof(tmp));
+}
+
+void CPipeWriter::WriteByte(BYTE value) {
+  WriteBytes(&value, 0, sizeof(value));
+}
+
+void CPipeWriter::WriteSByte(signed char value) {
+  WriteBytes(&value, 0, sizeof(value));
+}
+
+void CPipeWriter::WriteUInt32(UINT32 value) {
+  WriteBytes(&value, 0, sizeof(value));
+}
+
+void CPipeWriter::WriteCompressedUInt32(UINT32 value) {
+  if (0 <= value && value <= 255 - 1) {
+    WriteByte((BYTE)value);
+  } else {
+    WriteByte(255);
+    WriteUInt32(value);
+  }
+}
+
+void CPipeWriter::WriteInt32(INT32 value) {
+  WriteBytes(&value, 0, sizeof(value));
+}
+
+void CPipeWriter::WriteCompressedInt32(INT32 value) {
+  if (-128 <= value && value <= 127 - 1) {
+    WriteSByte((signed char)value);
+  } else {
+    WriteSByte(127);
+    WriteInt32(value);
+  }
+}
+
+void CPipeWriter::WriteUInt64(UINT64 value) {
+  WriteBytes(&value, 0, sizeof(value));
+}
+
+void CPipeWriter::WriteHandle(HANDLE value) {
+  DWORD value32 = HandleToULong(value);
+  WriteBytes(&value32, 0, sizeof(value32));
+}
+
+void CPipeWriter::WriteSingle(FLOAT value) {
+  WriteBytes(&value, 0, sizeof(value));
+}
+
+void CPipeWriter::WriteStringUTF8(const std::string& value) {
+  UINT32 length = (UINT32)value.length();
+  WriteCompressedUInt32(length);
+  WriteBytes((LPVOID)value.c_str(), 0, length);
+}
+
+// CPipeClient /////////////////////////////////////////////////////////////////
+
+void CPipeClient::OpenPipe(const char* pipeName, int timeOut) {
+  ClosePipe();
+
+  for(int i = 0; i < 2; ++i)
+  {
+    m_Handle = CreateFileA(pipeName, GENERIC_WRITE | GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (m_Handle != INVALID_HANDLE_VALUE)
+      return;
+
+    DWORD lastError = GetLastError();
+
+    if (lastError != ERROR_PIPE_BUSY)
+    {
+      throw CWinApiException("CPipeClient::ClosePipe: CreateFileA failed.", lastError);
+    }
+    else if (FAILED(WaitNamedPipeA(pipeName, timeOut)))
+    {
+      throw CWinApiException("CPipeClient::ClosePipe: WaitNamedPipe failed", GetLastError());
+    }
+  }
+
+  throw "CPipeClient::OpenPipe failed.";
+}
+
+void CPipeClient::ClosePipe() {
+  if(INVALID_HANDLE_VALUE != m_Handle) {
+    if(!CloseHandle(m_Handle)) {
+      throw CWinApiException("WaitNamedPipe: timed out", GetLastError());
+    }
+    m_Handle = INVALID_HANDLE_VALUE;
+  }
+}
+
+
+// CPipeServer /////////////////////////////////////////////////////////////////
+
+void CPipeServer::WaitForConnection(const char* pipeName,
+                        unsigned int outBufSize,
+                        unsigned int inBufSize,
+                        int timeOut) {
+
+  // https://docs.microsoft.com/en-us/windows/win32/ipc/multithreaded-pipe-server
+
+  BOOL fConnected = FALSE;
+  DWORD dwThreadId = 0;
+  HANDLE hPipe = INVALID_HANDLE_VALUE, hThread = NULL;
+
+ hPipe = CreateNamedPipeA(pipeName, PIPE_ACCESS_DUPLEX,
+                           PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
+                               PIPE_REJECT_REMOTE_CLIENTS,
+                           PIPE_UNLIMITED_INSTANCES, outBufSize, inBufSize,
+                           timeOut, NULL);
+
+    if (hPipe == INVALID_HANDLE_VALUE) {
+      throw CWinApiException("CreateNamedPipe failed", GetLastError());
+    }
+
+    fConnected = ConnectNamedPipe(hPipe, NULL)
+                     ? TRUE
+                     : (GetLastError() == ERROR_PIPE_CONNECTED);
+
+    if (fConnected) {
+      if (CPipeServerConnectionThread* connectionThread = OnNewConnection(hPipe)) {
+        // Create a thread for this client.
+        hThread = CreateThread(NULL,            // no security attribute
+                               0,               // default stack size
+                               InstanceThread,  // thread proc
+                               (LPVOID)connectionThread,  // thread parameter
+                               0,                         // not suspended
+                               &dwThreadId);              // returns thread ID
+
+        if (hThread == NULL) {
+          DWORD lastError = GetLastError();
+          CloseHandle(hPipe);
+          delete connectionThread;
+          throw CWinApiException("CreateThread failed", lastError);
+        } else
+          CloseHandle(hThread);
+      } else {
+        CloseHandle(hPipe);
+        throw "OnNewConnection NULL";
+      }
+    } else
+      // The client could not connect, so close the pipe.
+      CloseHandle(hPipe);
+}
+
+ 
+DWORD WINAPI CPipeServer::InstanceThread(LPVOID lpvParam) {
+  try {
+    if (lpvParam == NULL) {
+      return -1;
+    }
+
+    HANDLE hPipe = ((CPipeServerConnectionThread*)lpvParam)->GetHandle();
+
+    ((CPipeServerConnectionThread*)lpvParam)->HandleConnection();
+
+    // Flush the pipe to allow the client to read the pipe's contents
+    // before disconnecting. Then disconnect the pipe, and close the
+    // handle to this pipe instance. 
+
+    FlushFileBuffers(hPipe);
+    DisconnectNamedPipe(hPipe);
+    CloseHandle(hPipe);
+  }
+  catch(...) {
+    delete ((CPipeServerConnectionThread*)lpvParam);
+    return -2;
+  }
+
+  delete((CPipeServerConnectionThread*)lpvParam);
+  return 1;
+}
+ 
 class CNamedPipeServer {
  public:
   enum State { State_Error, State_Waiting, State_Connected };
@@ -393,7 +654,7 @@ class CNamedPipeServer {
     if (INVALID_HANDLE_VALUE != m_PipeHandle)
       CloseHandle(m_PipeHandle);
     //if (INVALID_HANDLE_VALUE != m_OverlappedWrite.hEvent)
-    //CloseHandle(m_OverlappedWrite.hEvent);
+    //  CloseHandle(m_OverlappedWrite.hEvent);
     if (INVALID_HANDLE_VALUE != m_Overlapped.hEvent)
       CloseHandle(m_Overlapped.hEvent);
   }
@@ -422,8 +683,9 @@ class CNamedPipeServer {
 
       DWORD bytesRead = 0;
 
-      if (!ReadFile(m_PipeHandle, (LPVOID) & (((char*)bytes)[offset]), length,
-                    NULL, &m_Overlapped)) {
+      if (!(ReadFile(m_PipeHandle, (LPVOID) & (((char*)bytes)[offset]), length,
+                     &bytesRead, &m_Overlapped) &&
+            0 != bytesRead)) {
         DWORD lastError = GetLastError();
         switch (lastError) {
           case ERROR_IO_PENDING: {
@@ -442,16 +704,15 @@ class CNamedPipeServer {
               }
             }
           } break;
-          case ERROR_INVALID_USER_BUFFER:
-          case ERROR_NOT_ENOUGH_MEMORY:
-            continue;
           default:
             return false;
         }
+
+        if (!GetOverlappedResult(m_PipeHandle, &m_Overlapped, &bytesRead,
+                                 FALSE))
+          return false;
       }
 
-      if (!GetOverlappedResult(m_PipeHandle, &m_Overlapped, &bytesRead, FALSE))
-        return false;
 
       offset += bytesRead;
       length -= bytesRead;
@@ -560,15 +821,17 @@ class CNamedPipeServer {
       DWORD bytesWritten = 0;
       DWORD bytesToWrite = length;
 
-      if (!WriteFile(m_PipeHandle, (LPVOID) & (((char*)bytes)[offset]),
-                     bytesToWrite, NULL, &m_Overlapped)) {
+      if (!(WriteFile(m_PipeHandle, (LPVOID) & (((char*)bytes)[offset]),
+                      bytesToWrite, &bytesWritten, &m_Overlapped) &&
+            bytesToWrite == bytesToWrite)) {
         DWORD lastError = GetLastError();
         switch (lastError) {
           case ERROR_IO_PENDING: {
             bool completed = false;
             while (!completed) {
               DWORD result =
-                  WaitForSingleObject(m_Overlapped.hEvent, m_ReadTimeoutMs);
+                  WaitForSingleObject(m_Overlapped.hEvent,
+                                                 m_ReadTimeoutMs);
               switch (result) {
                 case WAIT_OBJECT_0:
                   completed = true;
@@ -580,17 +843,14 @@ class CNamedPipeServer {
               }
             }
           } break;
-          case ERROR_INVALID_USER_BUFFER:
-          case ERROR_NOT_ENOUGH_MEMORY:
-            continue;
           default:
             return false;
         }
-      }
 
-      if (!GetOverlappedResult(m_PipeHandle, &m_Overlapped, &bytesWritten,
-                               FALSE))
-        return false;
+        if (!GetOverlappedResult(m_PipeHandle, &m_Overlapped,
+                                 &bytesWritten, FALSE))
+          return false;
+      }
 
       offset += bytesWritten;
       length -= bytesWritten;
@@ -879,6 +1139,125 @@ class CAfxObject : public CefBaseRefCounted {
   CefRefPtr<CAfxAccessor> m_Accessor;
 
   IMPLEMENT_REFCOUNTING(CAfxObject);
+};
+
+class CAfxInteropImpl : public CefBaseRefCounted {
+  public:
+  UINT64 GetIndex() const { return (UINT64)this; }
+};
+
+class CAfxHandle : public CAfxInteropImpl {
+  IMPLEMENT_REFCOUNTING(CAfxHandle);
+
+  public:
+      static HANDLE ToHandle(unsigned int lo, unsigned int hi) {
+    return (void*)((unsigned __int64)lo | ((unsigned __int64)hi << 32));
+  }
+
+  static CefRefPtr<CefV8Value> Create(HANDLE handle, CefRefPtr<CAfxHandle>* out = nullptr) {
+    CefRefPtr<CAfxHandle> val = new CAfxHandle(handle);
+
+    CefRefPtr<CAfxObject> afxObject = new CAfxObject();
+    afxObject->AddGetter(
+        "lo", [val](const CefString& name, const CefRefPtr<CefV8Value> object,
+                    CefRefPtr<CefV8Value>& retval, CefString& exception) {
+              retval =  CefV8Value::CreateUInt(val->GetLo());
+              return true;
+        });
+    afxObject->AddGetter(
+        "hi", [val](const CefString& name, const CefRefPtr<CefV8Value> object,
+                    CefRefPtr<CefV8Value>& retval, CefString& exception) {
+          retval = CefV8Value::CreateUInt(val->GetHi());
+          return true;
+        });
+    afxObject->AddGetter(
+        "invalid", [val](const CefString& name, const CefRefPtr<CefV8Value> object,
+                    CefRefPtr<CefV8Value>& retval, CefString& exception) {
+          retval = CefV8Value::CreateBool(val->GetHandle() ==
+                                          INVALID_HANDLE_VALUE);
+          return true;
+        });
+
+    if (out)
+      *out = val;
+
+    afxObject->SetUserData(new CAfxUserData(
+        AfxUserDataType::AfxHandle, val.get()));
+    return afxObject->GetObj();
+  }
+
+  CAfxHandle() : CAfxInteropImpl() ,m_Handle(INVALID_HANDLE_VALUE) {     
+  }
+
+  CAfxHandle(HANDLE value) : CAfxInteropImpl(), m_Handle(value) {}
+
+  CAfxHandle(unsigned int lo, unsigned int hi) : CAfxInteropImpl(), m_Handle(ToHandle(lo,hi)) {}
+
+  HANDLE GetHandle() { return m_Handle;
+  }
+
+  void SetHandle(HANDLE value) {
+      m_Handle = value;
+  }
+
+  unsigned int GetLo() {        
+      return (unsigned int)((unsigned __int64)m_Handle & 0xffffffff);
+  }
+
+  unsigned int GetHi() {
+    return (unsigned int)(((unsigned __int64)m_Handle >> 32) & 0xffffffff);
+  }
+
+  private:
+      HANDLE m_Handle;
+};
+
+class CAfxData : public CAfxInteropImpl,
+                        public CefV8ArrayBufferReleaseCallback {
+  IMPLEMENT_REFCOUNTING(CAfxData);
+
+  public:
+  static CefRefPtr<CefV8Value> Create(unsigned int size,
+                                      void* data,
+                                      CefRefPtr<CAfxData> *out = nullptr) {
+    CefRefPtr<CAfxData> val = new CAfxData(size, data);
+    CefRefPtr<CefV8Value> buffer =
+        CefV8Value::CreateArrayBuffer(data, size, val);
+
+    CefRefPtr<CAfxObject> afxObject = new CAfxObject();
+    afxObject->AddGetter(
+        "buffer",
+        [buffer](const CefString& name, const CefRefPtr<CefV8Value> object,
+                  CefRefPtr<CefV8Value>& retval, CefString& exception) {
+          retval = buffer;
+          return true;
+        });
+
+    if (out)
+      *out = val;
+
+    afxObject->SetUserData(
+        new CAfxUserData(AfxUserDataType::AfxData, val.get()));
+    return afxObject->GetObj();
+  }
+
+  virtual void ReleaseBuffer(void* buffer) override { free(buffer); }
+
+  size_t GetSize() { return m_Size; }
+
+  void* GetData() { return m_Data; }
+
+
+  private:
+
+  CAfxData(unsigned int size, void* data)
+      : CAfxInteropImpl(),
+        m_Size(size),
+        m_Data(data) {
+  }
+
+  size_t m_Size;
+  void* m_Data;
 };
 
 class CCalcCallbacksGuts {
@@ -1316,7 +1695,7 @@ CefRefPtr<T> GetAfxUserData(CefRefPtr<CefV8Value> value) {
   if(type != afxUserData->GetUserDataType()) return nullptr;
   return (T*)afxUserData->GetUserData();
 }
-
+/*
  class CAfxPromise : public CefBaseRefCounted {
   IMPLEMENT_REFCOUNTING(CAfxPromise);
  public:
@@ -1430,8 +1809,8 @@ class CAfxPromises : public CefBaseRefCounted {
 
   std::set<CAfxPromise*> m_Promises;
 };
-
-class CDrawingInteropImpl : public CInterop, public CAfxInterop {
+*/
+class CDrawingInteropImpl : public CInterop, public CAfxInterop, public CPipeServer, public CPipeClient {
   IMPLEMENT_REFCOUNTING(CDrawingInteropImpl);
 
  public:
@@ -1439,15 +1818,26 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
                                       CefRefPtr<CefFrame> frame,
                                       CefRefPtr<CefV8Context> context,
                                       const CefString& argStr,
+                                      DWORD handlerId,
                                       CefRefPtr<CInterop>* out = nullptr) {
-    CefRefPtr<CDrawingInteropImpl> self = new CDrawingInteropImpl();
+    CefRefPtr<CDrawingInteropImpl> self = new CDrawingInteropImpl(browser->GetIdentifier());
+
+    std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_handler_");
+    strPipeName.append(std::to_string(handlerId));    
+
+    try {
+      self->OpenPipe(strPipeName.c_str(), 3000);
+    }
+    catch(...) {
+      if(out) *out = nullptr;
+      return CefV8Value::CreateNull();
+    }
 
     CefRefPtr<CAfxObject> afxObject = new CAfxObject();
 
     //
 
     self->m_Context = context;
-    self->m_Promises = new CAfxPromises();
 
     afxObject->AddGetter(
         "id",
@@ -1480,35 +1870,41 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
           return true;
         });
 
-    afxObject->AddFunction(
-        "sendMessage",
-        [frame](const CefString& name, CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval,
-                         CefString& exceptionoverride) {
-          if (arguments.size() == 2) {
-            auto argId = arguments[0];
-            auto argStr = arguments[1];
+    afxObject->AddFunction("sendMessage",
+      [self](
+          const CefString& name, CefRefPtr<CefV8Value> object,
+          const CefV8ValueList& arguments,
+          CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
+        if (arguments.size() == 2) {
+          auto argId = arguments[0];
+          auto argStr = arguments[1];
 
-            if (argId->IsInt() && argStr->IsString()) {
-              auto message = CefProcessMessage::Create("afx-send-message");
-              auto args = message->GetArgumentList();
-              args->SetSize(2);
-              args->SetInt(0, argId->GetIntValue());
-              args->SetString(1, argStr->GetStringValue());
+          if (argId->IsInt() && argStr->IsString()) {
 
-              frame->SendProcessMessage(PID_BROWSER, message);
+            try {
+              self->WriteInt32((int)HostMessage::Message);
+              self->WriteInt32(argId->GetIntValue());
+              self->WriteStringUTF8(argStr->GetStringValue());
+            }
+            catch(const std::exception & e)
+            {
+              exceptionoverride = e.what();
               return true;
             }
-          }
 
-          exceptionoverride = g_szInvalidArguments;
-          return true;
-        });
+            return true;
+          }
+        }
+
+        exceptionoverride = g_szInvalidArguments;
+        return true;
+      });
 
     self->m_OnMessage = afxObject->AddCallback("onMessage");
 
     self->m_OnError = afxObject->AddCallback("onError");
+
+    self->m_OnCefFrameRendered = afxObject->AddCallback("onCefFrameRendered");
 
     afxObject->AddGetter(
         "pipeName",
@@ -1731,6 +2127,15 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
                 goto error;
               if (!self->m_PipeServer->WriteHandle(drawingHandle->GetHandle()))
                 goto error;
+              if (NULL == drawingHandle->GetHandle()) {
+                // readback.
+                if (!self->m_PipeServer->Flush())
+                  goto error;
+                HANDLE tmpHandle;
+                if (!self->m_PipeServer->ReadHandle(tmpHandle))
+                  goto error;
+                drawingHandle->SetHandle(tmpHandle);
+              }
             }
 
             return true;
@@ -1795,6 +2200,15 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
                 goto error;
               if (!self->m_PipeServer->WriteHandle(drawingHandle->GetHandle()))
                 goto error;
+              if (NULL == drawingHandle->GetHandle()) {
+                // readback.
+                if (!self->m_PipeServer->Flush())
+                  goto error;
+                HANDLE tmpHandle;
+                if (!self->m_PipeServer->ReadHandle(tmpHandle))
+                  goto error;
+                drawingHandle->SetHandle(tmpHandle);
+              }
             }
 
             return true;
@@ -1867,6 +2281,15 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
                 goto error;
               if (!self->m_PipeServer->WriteHandle(drawingHandle->GetHandle()))
                 goto error;
+              if (NULL == drawingHandle->GetHandle()) {
+                // readback.
+                if (!self->m_PipeServer->Flush())
+                  goto error;
+                HANDLE tmpHandle;
+                if (!self->m_PipeServer->ReadHandle(tmpHandle))
+                  goto error;
+                drawingHandle->SetHandle(tmpHandle);
+              }
             }
 
             return true;
@@ -3020,16 +3443,16 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
             auto argFnReject = arguments[1];
 
             if (argFnResolve->IsFunction() && argFnReject->IsFunction()) {
-              CefRefPtr<CAfxPromise> promise;
-              retval = self->m_Promises->Create(argFnResolve, argFnReject, frame, &promise);
 
-              auto message = CefProcessMessage::Create("afx-render-cef-frame");
-              auto args = message->GetArgumentList();
-              args->SetSize(2);
-              args->SetInt(0, (int)promise->GetLo());
-              args->SetInt(1, (int)promise->GetHi());
+              try {
+                self->WriteInt32((int)HostMessage::RenderFrame);
+              }
+              catch(const std::exception & e)
+              {
+                exceptionoverride = e.what();
+                return true;
+              }
 
-              frame->SendProcessMessage(PID_BROWSER, message);
               return true;
             }
           }
@@ -3127,6 +3550,24 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
           exceptionoverride = g_szInvalidArguments;
           return true;
         });
+    afxObject->AddFunction(
+        "createNullHandle",
+        [self, frame](const CefString& name, CefRefPtr<CefV8Value> object,
+                      const CefV8ValueList& arguments,
+                      CefRefPtr<CefV8Value>& retval,
+                      CefString& exceptionoverride) {
+          retval = CAfxHandle::Create(NULL);
+          return true;
+        });
+    afxObject->AddFunction(
+        "createInvalidHandle",
+        [self, frame](const CefString& name, CefRefPtr<CefV8Value> object,
+                      const CefV8ValueList& arguments,
+                      CefRefPtr<CefV8Value>& retval,
+                      CefString& exceptionoverride) {
+          retval = CAfxHandle::Create(INVALID_HANDLE_VALUE);
+          return true;
+        });
     //
 
     if (out)
@@ -3137,11 +3578,27 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
 
   virtual void CloseInterop() override {
     Close();
+
+    try {
+      this->WriteInt32((int)advancedfx::interop::ClientMessage::Quit);
+    }
+    catch(...) {      
+    }     
+    try {
+      this->ClosePipe();
+    }
+    catch(...) {      
+    }
+
+    m_WaitConnectionQuit = true;
+    if(m_WaitConnectionThread.joinable()) m_WaitConnectionThread.join();
+
     m_Context = nullptr;
   }
 
  private:
-     CefRefPtr<CefV8Context> m_Context;
+    int m_BrowserId;
+    CefRefPtr<CefV8Context> m_Context;
 
  public:
 
@@ -3151,186 +3608,90 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop {
           CefRefPtr<CefFrame> frame,
           CefProcessId source_process,
           CefRefPtr<CefProcessMessage> message) override {
-    CEF_REQUIRE_RENDERER_THREAD();
-
-
-    auto const name = message->GetName();
-
-        if (name == "afx-message") {
-          m_Context->Enter();
-          
-          auto const args = message->GetArgumentList();
-          CefV8ValueList execArgs;
-          execArgs.push_back(CefV8Value::CreateInt(args->GetInt(0))); // senderId
-          execArgs.push_back(CefV8Value::CreateString(args->GetString(1))); // message
-
-          if (m_OnMessage->IsValid())
-            m_OnMessage->ExecuteCallback(execArgs);
-
-          m_Context->Exit();
-          return true;
-        } else if (name == "afx-error") {
-          m_Context->Enter();
-
-          auto const args = message->GetArgumentList();
-          CefV8ValueList execArgs;
-          execArgs.push_back(CefV8Value::CreateInt(args->GetInt(0))); // senderId
-          execArgs.push_back(CefV8Value::CreateString(args->GetString(1))); // message
-
-          if (m_OnError->IsValid())
-            m_OnError->ExecuteCallback(execArgs);
-
-          m_Context->Exit();
-          return true;
-        } else if (name == "afx-painted") {
-          m_Context->Enter();
-
-          auto const args = message->GetArgumentList();
-          CefV8ValueList execArgs;
-          execArgs.push_back(CAfxHandle::Create(
-              CAfxHandle::ToHandle(args->GetInt(2) // loHandle
-                  , args->GetInt(3) // hiHandle
-              )));
-          m_Promises->Resolve(args->GetInt(0), 
-                              args->GetInt(1), execArgs);
-
-          m_Context->Exit();
-          return true;
-        } else if (name == "afx-reject") {
-          m_Context->Enter();
-
-          auto const args = message->GetArgumentList();
-          CefV8ValueList execArgs;
-          execArgs.push_back(CefV8Value::CreateString(args->GetString(2)));
-          m_Promises->Reject(args->GetInt(0), args->GetInt(1), execArgs);
-
-          m_Context->Exit();
-          return true;
-        }
 
         return false;
       }
 
  protected:
-  CDrawingInteropImpl() : CAfxInterop("advancedfxInterop_drawing") {}
+  CDrawingInteropImpl(int browserId) : CAfxInterop("advancedfxInterop_drawing") ,m_BrowserId(browserId) {
+    m_WaitConnectionThread = std::thread(&CDrawingInteropImpl::WaitConnectionThreadHandler, this);
+  }
 
   virtual void OnClosing() override { m_InFlow = false; }
 
+  class CDrawingInteropImplConnectionThread;
+
+  virtual advancedfx::interop::CPipeServerConnectionThread* OnNewConnection(
+      HANDLE handle) override {
+    return new CDrawingInteropImplConnectionThread(handle, this);
+  }  
+
  private:
 
-  class CAfxInteropImpl : public CefBaseRefCounted {
+ void OnClientMessage_Message(int senderId, const std::string & message)
+ {
+  m_Context->Enter();
+
+  CefV8ValueList execArgs;
+  execArgs.push_back(CefV8Value::CreateInt(senderId));
+  execArgs.push_back(CefV8Value::CreateString(message));
+
+  if (m_OnMessage->IsValid())
+    m_OnMessage->ExecuteCallback(execArgs);
+
+  m_Context->Exit();
+ }
+
+ void OnClientMessage_CefFrameRendered(HANDLE sharedTextureHandle)
+ {
+ m_Context->Enter();
+
+  CefV8ValueList execArgs;
+  execArgs.push_back(CAfxHandle::Create(sharedTextureHandle));
+
+  if (m_OnCefFrameRendered->IsValid())
+    m_OnCefFrameRendered->ExecuteCallback(execArgs);
+
+  m_Context->Exit();
+ }
+
+ class CDrawingInteropImplConnectionThread
+      : public advancedfx::interop::CPipeServerConnectionThread {
    public:
-    UINT64 GetIndex() const { return (UINT64)this; }
-  };
 
-class CAfxHandle : public CAfxInteropImpl {
-    IMPLEMENT_REFCOUNTING(CAfxHandle);
+      CDrawingInteropImplConnectionThread(HANDLE handle, CDrawingInteropImpl * host)
+           : advancedfx::interop::CPipeServerConnectionThread(handle), m_Host(host) {}
 
-   public:
-       static HANDLE ToHandle(unsigned int lo, unsigned int hi) {
-      return (void*)((unsigned __int64)lo | ((unsigned __int64)hi << 32));
-    }
+    /**
+     * @throws exception
+     */
+    virtual void HandleConnection() override {
 
-    static CefRefPtr<CefV8Value> Create(HANDLE handle, CefRefPtr<CAfxHandle>* out = nullptr) {
-      CefRefPtr<CAfxHandle> val = new CAfxHandle(handle);
-
-      CefRefPtr<CAfxObject> afxObject = new CAfxObject();
-      afxObject->AddGetter(
-          "lo", [val](const CefString& name, const CefRefPtr<CefV8Value> object,
-                      CefRefPtr<CefV8Value>& retval, CefString& exception) {
-                retval =  CefV8Value::CreateUInt(val->GetLo());
-                return true;
-          });
-      afxObject->AddGetter(
-          "hi", [val](const CefString& name, const CefRefPtr<CefV8Value> object,
-                      CefRefPtr<CefV8Value>& retval, CefString& exception) {
-            retval = CefV8Value::CreateUInt(val->GetHi());
-            return true;
-          });
-      afxObject->AddGetter(
-          "invalid", [val](const CefString& name, const CefRefPtr<CefV8Value> object,
-                      CefRefPtr<CefV8Value>& retval, CefString& exception) {
-            retval = CefV8Value::CreateBool(val->GetHandle() ==
-                                            INVALID_HANDLE_VALUE);
-            return true;
-          });
-
-      if (out)
-        *out = val;
-
-      afxObject->SetUserData(new CAfxUserData(
-          AfxUserDataType::AfxHandle, val.get()));
-      return afxObject->GetObj();
-    }
-
-    CAfxHandle() : CAfxInteropImpl() ,m_Handle(INVALID_HANDLE_VALUE) {     
-    }
-
-    CAfxHandle(HANDLE value) : CAfxInteropImpl(), m_Handle(value) {}
-
-    CAfxHandle(unsigned int lo, unsigned int hi) : CAfxInteropImpl(), m_Handle(ToHandle(lo,hi)) {}
-
-    HANDLE GetHandle() { return m_Handle;
-    }
-
-    unsigned int GetLo() {        
-        return (unsigned int)((unsigned __int64)m_Handle & 0xffffffff);
-    }
-
-    unsigned int GetHi() {
-      return (unsigned int)(((unsigned __int64)m_Handle >> 32) & 0xffffffff);
+      while (true) {
+        ClientMessage message = (ClientMessage)ReadInt32();
+        switch (message) {
+        case ClientMessage::Quit:
+          return;
+        case ClientMessage::Message:
+        {
+          int senderId = ReadInt32();
+          std::string message;
+          ReadStringUTF8(message);
+          CefPostTask(TID_RENDERER, base::Bind(&CDrawingInteropImpl::OnClientMessage_Message, m_Host, senderId, message));
+        } break;
+        case ClientMessage::TextureHandle:
+        {
+          HANDLE shared_handle = (HANDLE)ReadUInt64();
+          CefPostTask(TID_RENDERER, base::Bind(&CDrawingInteropImpl::OnClientMessage_CefFrameRendered, m_Host, shared_handle));
+        } break;
+        default:
+          throw "CHostPipeServerConnectionThread::HandleConnection: Unknown message.";
+        }
+      }
     }
 
    private:
-       HANDLE m_Handle;
-  };
-
-  class CAfxData : public CAfxInteropImpl,
-                          public CefV8ArrayBufferReleaseCallback {
-    IMPLEMENT_REFCOUNTING(CAfxData);
-
-   public:
-    static CefRefPtr<CefV8Value> Create(unsigned int size,
-                                        void* data,
-                                        CefRefPtr<CAfxData> *out = nullptr) {
-      CefRefPtr<CAfxData> val = new CAfxData(size, data);
-      CefRefPtr<CefV8Value> buffer =
-          CefV8Value::CreateArrayBuffer(data, size, val);
-
-      CefRefPtr<CAfxObject> afxObject = new CAfxObject();
-      afxObject->AddGetter(
-          "buffer",
-          [buffer](const CefString& name, const CefRefPtr<CefV8Value> object,
-                   CefRefPtr<CefV8Value>& retval, CefString& exception) {
-            retval = buffer;
-            return true;
-          });
-
-      if (out)
-        *out = val;
-
-      afxObject->SetUserData(
-          new CAfxUserData(AfxUserDataType::AfxData, val.get()));
-      return afxObject->GetObj();
-    }
-
-    virtual void ReleaseBuffer(void* buffer) override { free(buffer); }
-
-    size_t GetSize() { return m_Size; }
-
-    void* GetData() { return m_Data; }
-
-
-   private:
-
-    CAfxData(unsigned int size, void* data)
-        : CAfxInteropImpl(),
-          m_Size(size),
-          m_Data(data) {
-    }
-
-    size_t m_Size;
-    void* m_Data;
+    CDrawingInteropImpl* m_Host;
   };
 
   class CAfxD3d9VertexDeclaration : public CAfxInteropImpl {
@@ -3898,12 +4259,31 @@ class CAfxHandle : public CAfxInteropImpl {
   int m_Width = 640;
   int m_Height = 480;
 
-  CefRefPtr<CAfxPromises> m_Promises;
-
   CefRefPtr<CAfxCallback> m_OnMessage;
   CefRefPtr<CAfxCallback> m_OnError;
   CefRefPtr<CAfxCallback> m_OnDeviceLost;
   CefRefPtr<CAfxCallback> m_OnDeviceReset;
+  CefRefPtr<CAfxCallback> m_OnCefFrameRendered;
+
+  bool m_WaitConnectionQuit = false;
+  std::thread m_WaitConnectionThread;
+
+  void WaitConnectionThreadHandler(void) {
+    std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_client_");
+    strPipeName.append(std::to_string(GetCurrentProcessId()));
+    strPipeName.append("_");
+    strPipeName.append(std::to_string(m_BrowserId));
+
+    while(!m_WaitConnectionQuit)
+    {
+      try {
+        this->WaitForConnection(strPipeName.c_str(),512,512,500);
+      }
+      catch(...) {
+
+      }
+    }
+  }
 
   bool DoPumpBegin(int frameCount, unsigned int pass) {
        m_InFlow = false;
@@ -4046,12 +4426,15 @@ CefRefPtr<CefV8Value> CreateDrawingInterop(CefRefPtr<CefBrowser> browser,
                                            CefRefPtr<CefFrame> frame,
                                            CefRefPtr<CefV8Context> context,
                                            const CefString& argStr,
+                                           DWORD handlerId,
                                            CefRefPtr<CInterop>* out) {
-  return CDrawingInteropImpl::Create(browser,frame,context,argStr, out);
+  return CDrawingInteropImpl::Create(browser,frame,context,argStr, handlerId, out);
 }
 
 class CEngineInteropImpl : public CInterop,
-                           public CAfxInterop {
+                           public CAfxInterop,
+                           public CPipeServer,
+                           public CPipeClient {
   IMPLEMENT_REFCOUNTING(CEngineInteropImpl);
 
 public:
@@ -4060,14 +4443,25 @@ public:
                                      CefRefPtr<CefFrame> frame,
                                      CefRefPtr<CefV8Context> context,
                                      const CefString& argStr,
+                                     DWORD handlerId,
                                      CefRefPtr<CInterop>* out = nullptr) {
-   CefRefPtr<CEngineInteropImpl> self = new CEngineInteropImpl();
+   CefRefPtr<CEngineInteropImpl> self = new CEngineInteropImpl(browser->GetIdentifier());
+
+    std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_handler_");
+    strPipeName.append(std::to_string(handlerId));    
+
+    try {
+      self->OpenPipe(strPipeName.c_str(), 3000);
+    }
+    catch(...) {
+      if(out) *out = nullptr;
+      return CefV8Value::CreateNull();
+    }
       
    CefRefPtr<CAfxObject> afxObject = new CAfxObject();
 
    //
    self->m_Context = context;
-   self->m_Promises = new CAfxPromises();
 
    afxObject->AddGetter("id",
        [browser](const CefString& name, const CefRefPtr<CefV8Value> object,
@@ -4099,34 +4493,41 @@ public:
                return false;
              });
 
-   afxObject->AddFunction("sendMessage",
-             [frame](
-                 const CefString& name, CefRefPtr<CefV8Value> object,
-                 const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-                 CefString& exceptionoverride) {
-               if (arguments.size() == 2) {
-                 auto argId = arguments[0];
-                 auto argStr = arguments[1];
+    afxObject->AddFunction("sendMessage",
+      [self](
+          const CefString& name, CefRefPtr<CefV8Value> object,
+          const CefV8ValueList& arguments,
+          CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
+        if (arguments.size() == 2) {
+          auto argId = arguments[0];
+          auto argStr = arguments[1];
 
-                 if (argId && argStr && argId->IsInt() && argStr->IsString()) {
-                   auto message = CefProcessMessage::Create("afx-send-message");
-                   auto args = message->GetArgumentList();
-                   args->SetSize(2);
-                   args->SetInt(0, argId->GetIntValue());
-                   args->SetString(1, argStr->GetStringValue());
+          if (argId->IsInt() && argStr->IsString()) {
 
-                   frame->SendProcessMessage(PID_BROWSER, message);
-                   return true;
-                 }
-               }
+            try {
+              self->WriteInt32((int)HostMessage::Message);
+              self->WriteInt32(argId->GetIntValue());
+              self->WriteStringUTF8(argStr->GetStringValue());
+            }
+            catch(const std::exception & e)
+            {
+              exceptionoverride = e.what();
+              return true;
+            }
 
-               exceptionoverride = g_szInvalidArguments;
-               return true;
-             });
+            return true;
+          }
+        }
+
+        exceptionoverride = g_szInvalidArguments;
+        return true;
+      });
 
    self->m_OnMessage = afxObject->AddCallback("onMessage");
 
    self->m_OnError = afxObject->AddCallback("onError");
+
+  self->m_OnCefFrameRendered = afxObject->AddCallback("onCefFrameRendered");
 
   afxObject->AddGetter("pipeName",
        [self](const CefString& name, const CefRefPtr<CefV8Value> object,
@@ -4479,35 +4880,33 @@ public:
          exceptionoverride = g_szInvalidArguments;
          return true;
        });
-   afxObject->AddFunction(
-       "renderCefFrame",
-       [self, frame](const CefString& name, CefRefPtr<CefV8Value> object,
-                     const CefV8ValueList& arguments,
-                     CefRefPtr<CefV8Value>& retval,
-                     CefString& exceptionoverride) {
-         if (2 == arguments.size()) {
-           auto argFnResolve = arguments[0];
-           auto argFnReject = arguments[1];
+    afxObject->AddFunction("renderCefFrame",
+        [self,frame](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
 
-           if (argFnResolve->IsFunction() && argFnReject->IsFunction()) {
-             CefRefPtr<CAfxPromise> promise;
-             retval = self->m_Promises->Create(argFnResolve, argFnReject, frame,
-                                               &promise);
+          if (2 == arguments.size()) {
+            auto argFnResolve = arguments[0];
+            auto argFnReject = arguments[1];
 
-             auto message = CefProcessMessage::Create("afx-render-cef-frame");
-             auto args = message->GetArgumentList();
-             args->SetSize(2);
-             args->SetInt(0, (int)promise->GetLo());
-             args->SetInt(1, (int)promise->GetHi());
+            if (argFnResolve->IsFunction() && argFnReject->IsFunction()) {
 
-             frame->SendProcessMessage(PID_BROWSER, message);
-             return true;
-           }
-         }
+              try {
+                self->WriteInt32((int)HostMessage::RenderFrame);
+              }
+              catch(const std::exception & e)
+              {
+                exceptionoverride = e.what();
+                return true;
+              }
 
-         exceptionoverride = g_szInvalidArguments;
-         return true;
-       });
+              return true;
+            }
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return true;
+        });
  
    //
 
@@ -4519,71 +4918,53 @@ public:
 
   virtual void CloseInterop() override {
     Close();
+
+   try {
+      this->WriteInt32((int)advancedfx::interop::ClientMessage::Quit);
+    }
+    catch(...) {      
+    }     
+    try {
+      this->ClosePipe();
+    }
+    catch(...) {      
+    }
+
+    m_WaitConnectionQuit = true;
+    if(m_WaitConnectionThread.joinable()) m_WaitConnectionThread.join();
+    
     m_Context = nullptr;
   }
 
   private:
+      int m_BrowserId;
       CefRefPtr<CefV8Context> m_Context;
+
 
  public:
 
-virtual bool OnProcessMessageReceived(
-    CefRefPtr<CefBrowser> browser,
-    CefRefPtr<CefFrame> frame,
-    CefProcessId source_process,
-    CefRefPtr<CefProcessMessage> message) override {
 
+  virtual bool OnProcessMessageReceived(
+          CefRefPtr<CefBrowser> browser,
+          CefRefPtr<CefFrame> frame,
+          CefProcessId source_process,
+          CefRefPtr<CefProcessMessage> message) override {
 
-    auto const name = message->GetName();
-
-  if (name == "afx-message") {
-      m_Context->Enter();
-
-      auto const args = message->GetArgumentList();
-    CefV8ValueList execArgs;
-    execArgs.push_back(CefV8Value::CreateInt(args->GetInt(0)));
-    execArgs.push_back(
-        CefV8Value::CreateString(args->GetString(1)));
-
-    if (m_OnMessage->IsValid())
-      m_OnMessage->ExecuteCallback(execArgs);
-
-    m_Context->Exit();
-    return true;
-
-  } else if (name == "afx-error") {
-    m_Context->Enter();
-
-    auto const args = message->GetArgumentList();
-
-    CefV8ValueList execArgs;
-    execArgs.push_back(CefV8Value::CreateInt(args->GetInt(0)));
-    execArgs.push_back(CefV8Value::CreateString(args->GetString(1)));
-
-    if (m_OnError->IsValid())
-      m_OnError->ExecuteCallback(execArgs);
-
-    m_Context->Exit();
-    return true;
-  } else if (name == "afx-reject") {
-    m_Context->Enter();
-
-    auto const args = message->GetArgumentList();
-    CefV8ValueList execArgs;
-    execArgs.push_back(CefV8Value::CreateString(args->GetString(2)));
-    m_Promises->Reject(args->GetInt(0), args->GetInt(1), execArgs);
-
-    m_Context->Exit();
-    return true;
-  }
-
-  return false;
-}
+        return false;
+      }
 
  protected:
 
-  CEngineInteropImpl() : CAfxInterop("advancedfxInterop") {}
+  CEngineInteropImpl(int browserId) : CAfxInterop("advancedfxInterop") ,m_BrowserId(browserId) {
+    m_WaitConnectionThread = std::thread(&CEngineInteropImpl::WaitConnectionThreadHandler, this);
+  }
 
+    class CEngineInteropImplConnectionThread;
+
+  virtual advancedfx::interop::CPipeServerConnectionThread* OnNewConnection(
+      HANDLE handle) override {
+    return new CEngineInteropImplConnectionThread(handle, this);
+  }  
 
   bool DoPump(void) {
     int errorLine = 0;
@@ -5060,7 +5441,7 @@ virtual bool OnProcessMessageReceived(
 
     return true;
 
-    AFX_IMPL_ERROR("CDrawingInteropImpl::DoPump")
+    AFX_IMPL_ERROR("CEngineInteropImpl::DoPump")
   }
 
 
@@ -5070,6 +5451,74 @@ virtual bool OnProcessMessageReceived(
   }
 
  private:
+
+ void OnClientMessage_Message(int senderId, const std::string & message)
+ {
+  m_Context->Enter();
+
+  CefV8ValueList execArgs;
+  execArgs.push_back(CefV8Value::CreateInt(senderId));
+  execArgs.push_back(CefV8Value::CreateString(message));
+
+  if (m_OnMessage->IsValid())
+    m_OnMessage->ExecuteCallback(execArgs);
+
+  m_Context->Exit();
+ }
+
+ void OnClientMessage_CefFrameRendered(HANDLE sharedTextureHandle)
+ {
+  m_Context->Enter();
+
+  CefV8ValueList execArgs;
+  execArgs.push_back(CAfxHandle::Create(sharedTextureHandle));
+
+  if (m_OnCefFrameRendered->IsValid())
+    m_OnCefFrameRendered->ExecuteCallback(execArgs);
+
+  m_Context->Exit();
+ }
+
+ class CEngineInteropImplConnectionThread
+      : public advancedfx::interop::CPipeServerConnectionThread {
+   public:
+
+      CEngineInteropImplConnectionThread(HANDLE handle, CEngineInteropImpl * host)
+           : advancedfx::interop::CPipeServerConnectionThread(handle), m_Host(host) {}
+
+    /**
+     * @throws exception
+     */
+    virtual void HandleConnection() override {
+
+      while (true) {
+        ClientMessage message = (ClientMessage)ReadInt32();
+        switch (message) {
+        case ClientMessage::Quit:
+          return;
+        case ClientMessage::Message:
+        {
+          int senderId = ReadInt32();
+          std::string message;
+          ReadStringUTF8(message);
+          CefPostTask(TID_RENDERER, base::Bind(&CEngineInteropImpl::OnClientMessage_Message, m_Host, senderId, message));
+        } break;
+        case ClientMessage::TextureHandle:
+        {
+          HANDLE shared_handle = (HANDLE)ReadUInt64();
+          CefPostTask(TID_RENDERER, base::Bind(&CEngineInteropImpl::OnClientMessage_CefFrameRendered, m_Host, shared_handle));
+        } break;
+        default:
+          throw "CHostPipeServerConnectionThread::HandleConnection: Unknown message.";
+        }
+      }
+    }
+
+   private:
+    CEngineInteropImpl* m_Host;
+  };
+
+
   static CefRefPtr<CefV8Value> CreateAfxMatrix4x4(
       const struct advancedfx::interop::Matrix4x4_s& value) {
     CefRefPtr<CefV8Value> obj = CefV8Value::CreateArray(16);
@@ -5154,8 +5603,6 @@ virtual bool OnProcessMessageReceived(
     return obj;
   }
 
-  CefRefPtr<CAfxPromises> m_Promises;
-
   bool m_NewConnection = true;
 
   std::queue<std::string> m_Commands;
@@ -5179,6 +5626,27 @@ virtual bool OnProcessMessageReceived(
   CefRefPtr<CAfxCallback> m_OnRenderViewEnd;
   CefRefPtr<CAfxCallback> m_OnGameEvent;
 
+  CefRefPtr<CAfxCallback> m_OnCefFrameRendered;
+
+  bool m_WaitConnectionQuit = false;
+  std::thread m_WaitConnectionThread;
+
+  void WaitConnectionThreadHandler(void) {
+    std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_client_");
+    strPipeName.append(std::to_string(GetCurrentProcessId()));
+    strPipeName.append("_");
+    strPipeName.append(std::to_string(m_BrowserId));
+
+    while(!m_WaitConnectionQuit)
+    {
+      try {
+        this->WaitForConnection(strPipeName.c_str(),512,512,500);
+      }
+      catch(...) {
+
+      }
+    }
+  }
 
   bool DoRenderPass(enum RenderPassType_e pass) {
     View_s view;
@@ -5826,12 +6294,13 @@ CefRefPtr<CefV8Value> CreateEngineInterop(CefRefPtr<CefBrowser> browser,
                                    CefRefPtr<CefFrame> frame,
                                    CefRefPtr<CefV8Context> context,
                                    const CefString& argStr,
+                                   DWORD handlerId,
                                    CefRefPtr<CInterop>* out) {
-  return CEngineInteropImpl::Create(browser,frame,context, argStr, out);
+  return CEngineInteropImpl::Create(browser,frame,context, argStr, handlerId, out);
 }
 
 
-class CInteropImpl : public CInterop {
+class CInteropImpl : public CInterop, public CPipeServer, public CPipeClient {
   IMPLEMENT_REFCOUNTING(CInteropImpl);
 
  public:
@@ -5839,16 +6308,26 @@ class CInteropImpl : public CInterop {
                                       CefRefPtr<CefFrame> frame,
                                       CefRefPtr<CefV8Context> context,
                                       const CefString& argStr,
+                                      DWORD handlerId,
                                       CefRefPtr<CInterop>* out = nullptr) {
-    CefRefPtr<CInteropImpl> self = new CInteropImpl();
+    CefRefPtr<CInteropImpl> self = new CInteropImpl(browser->GetIdentifier());
+
+    std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_handler_");
+    strPipeName.append(std::to_string(handlerId));    
+
+    try {
+      self->OpenPipe(strPipeName.c_str(), 3000);
+    }
+    catch(...) {
+      if(out) *out = nullptr;
+      return CefV8Value::CreateNull();
+    }    
 
     CefRefPtr<CAfxObject> afxObject = new CAfxObject();
 
     //
 
     self->m_Context = context;
-    self->m_Promises =
-        new CAfxPromises();
 
     afxObject->AddGetter(
         "id",
@@ -5884,125 +6363,116 @@ class CInteropImpl : public CInterop {
               });
 
     afxObject->AddFunction(
-        "createDrawingInterop",
-              [self,frame](
-                  const CefString& name, CefRefPtr<CefV8Value> object,
-                  const CefV8ValueList& arguments,
-                  CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
-                if (4 == arguments.size()) {
-                  auto argUrl = arguments[0];
-                  auto argStr = arguments[1];
-                  auto argFnResolve = arguments[2];
-                  auto argFnReject = arguments[3];
+      "createDrawingInterop",
+      [self](
+          const CefString& name, CefRefPtr<CefV8Value> object,
+          const CefV8ValueList& arguments,
+          CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
+        if (2 == arguments.size()) {
+          auto argUrl = arguments[0];
+          auto argStr = arguments[1];
 
-                  if (argUrl->IsString() && argStr->IsString() &&
-                      argFnResolve->IsFunction() && argFnReject->IsFunction()) {
+          if (argUrl->IsString() && argStr->IsString()) {
 
-                    CefRefPtr<CAfxPromise> promise;
-                    retval = self->m_Promises->Create(argFnResolve, argFnReject,
-                                                      frame, &promise);
+            try {
+              self->WriteInt32((int)HostMessage::CreateDrawing);
+              self->WriteStringUTF8(argUrl->GetStringValue());
+              self->WriteStringUTF8(argStr->GetStringValue());
+            }
+            catch(const std::exception & e)
+            {
+              exceptionoverride = e.what();
+              return true;
+            }
 
-                    auto message =
-                        CefProcessMessage::Create("afx-create-drawing");
-                    auto args = message->GetArgumentList();
-                    args->SetSize(4);
-                    args->SetInt(0, (int)promise->GetLo());
-                    args->SetInt(1, (int)promise->GetHi());
-                    args->SetString(2, argUrl->GetStringValue());
-                    args->SetString(3, argStr->GetStringValue());
+            return true;
+          }
+        }
 
-                    frame->SendProcessMessage(PID_BROWSER, message);
-                    return true;
-                  }
-                }
-
-                exceptionoverride = g_szInvalidArguments;
-                return true;
-              });
+        exceptionoverride = g_szInvalidArguments;
+        return true;
+      });
 
     afxObject->AddFunction(
-        "createEngineInterop",
-              [self,frame](
-                  const CefString& name, CefRefPtr<CefV8Value> object,
-                  const CefV8ValueList& arguments,
-                  CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
-                if (4 == arguments.size()) {
-                  auto argUrl = arguments[0];
-                  auto argStr = arguments[1];
-                  auto argFnResolve = arguments[2];
-                  auto argFnReject = arguments[3];
+      "createEngineInterop",
+      [self](
+          const CefString& name, CefRefPtr<CefV8Value> object,
+          const CefV8ValueList& arguments,
+          CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
+        if (2 == arguments.size()) {
+          auto argUrl = arguments[0];
+          auto argStr = arguments[1];
 
-                  if (argUrl->IsString() && argStr->IsString() &&
-                      argFnResolve->IsFunction() && argFnReject->IsFunction()) {
-                    CefRefPtr<CAfxPromise> promise;
-                    retval = self->m_Promises->Create(argFnResolve, argFnReject,
-                                                      frame, &promise);
+          if (argUrl->IsString() && argStr->IsString()) {
 
-                    auto message =
-                        CefProcessMessage::Create("afx-create-engine");
-                    auto args = message->GetArgumentList();
-                    args->SetSize(4);
-                    args->SetInt(0, (int)promise->GetLo());
-                    args->SetInt(1, (int)promise->GetHi());
-                    args->SetString(2, argUrl->GetStringValue());
-                    args->SetString(3, argStr->GetStringValue());
+            try {
+              self->WriteInt32((int)HostMessage::CreateEngine);
+              self->WriteStringUTF8(argUrl->GetStringValue());
+              self->WriteStringUTF8(argStr->GetStringValue());
+            }
+            catch(const std::exception & e)
+            {
+              exceptionoverride = e.what();
+              return true;
+            }
 
-                    frame->SendProcessMessage(PID_BROWSER, message);
-                    return true;
-                  }
-                }
+            return true;
+          }
+        }
 
-                exceptionoverride = g_szInvalidArguments;
-                return true;
-              });
+        exceptionoverride = g_szInvalidArguments;
+        return true;
+      });
 
     afxObject->AddFunction("sendMessage",
-              [frame](
-                  const CefString& name, CefRefPtr<CefV8Value> object,
-                  const CefV8ValueList& arguments,
-                  CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
-                if (arguments.size() == 2) {
-                  auto argId = arguments[0];
-                  auto argStr = arguments[1];
+      [self](
+          const CefString& name, CefRefPtr<CefV8Value> object,
+          const CefV8ValueList& arguments,
+          CefRefPtr<CefV8Value>& retval, CefString& exceptionoverride) {
+        if (arguments.size() == 2) {
+          auto argId = arguments[0];
+          auto argStr = arguments[1];
 
-                  if (argId->IsInt() && argStr->IsString()) {
-                    auto message =
-                        CefProcessMessage::Create("afx-send-message");
-                    auto args = message->GetArgumentList();
-                    args->SetSize(2);
-                    args->SetInt(0, argId->GetIntValue());
-                    args->SetString(1, argStr->GetStringValue());
+          if (argId->IsInt() && argStr->IsString()) {
 
-                    frame->SendProcessMessage(PID_BROWSER, message);
-                    return true;
-                  }
-                }
+            try {
+              self->WriteInt32((int)HostMessage::Message);
+              self->WriteInt32(argId->GetIntValue());
+              self->WriteStringUTF8(argStr->GetStringValue());
+            }
+            catch(const std::exception & e)
+            {
+              exceptionoverride = e.what();
+              return true;
+            }
 
-                exceptionoverride = g_szInvalidArguments;
-                return true;
-              });
-    afxObject->AddFunction(
-        "renderCefFrame",
-        [self, frame](const CefString& name, CefRefPtr<CefV8Value> object,
-                      const CefV8ValueList& arguments,
-                      CefRefPtr<CefV8Value>& retval,
-                      CefString& exceptionoverride) {
+            return true;
+          }
+        }
+
+        exceptionoverride = g_szInvalidArguments;
+        return true;
+      });
+    afxObject->AddFunction("renderCefFrame",
+        [self,frame](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+               CefString& exceptionoverride) {
+
           if (2 == arguments.size()) {
             auto argFnResolve = arguments[0];
             auto argFnReject = arguments[1];
 
             if (argFnResolve->IsFunction() && argFnReject->IsFunction()) {
-              CefRefPtr<CAfxPromise> promise;
-              retval = self->m_Promises->Create(argFnResolve, argFnReject,
-                                                frame, &promise);
 
-              auto message = CefProcessMessage::Create("afx-render-cef-frame");
-              auto args = message->GetArgumentList();
-              args->SetSize(2);
-              args->SetInt(0, (int)promise->GetLo());
-              args->SetInt(1, (int)promise->GetHi());
+              try {
+                self->WriteInt32((int)HostMessage::RenderFrame);
+              }
+              catch(const std::exception & e)
+              {
+                exceptionoverride = e.what();
+                return true;
+              }
 
-              frame->SendProcessMessage(PID_BROWSER, message);
               return true;
             }
           }
@@ -6015,6 +6485,8 @@ class CInteropImpl : public CInterop {
 
     self->m_OnError = afxObject->AddCallback("onError");
 
+    self->m_OnCefFrameRendered = afxObject->AddCallback("onCefFrameRendered");
+
     //
 
     if (out)
@@ -6026,11 +6498,43 @@ class CInteropImpl : public CInterop {
   CInteropImpl() {
   }
 
-  virtual void CloseInterop() override { m_Context = nullptr; }
+  virtual void CloseInterop() override {
+    
+
+    try {
+      this->WriteInt32((int)advancedfx::interop::ClientMessage::Quit);
+    }
+    catch(...) {      
+    }     
+    try {
+      this->ClosePipe();
+    }
+    catch(...) {      
+    }
+
+    m_WaitConnectionQuit = true;
+    if(m_WaitConnectionThread.joinable()) m_WaitConnectionThread.join();
+    
+    
+    m_Context = nullptr;  
+  }
 
   private:
+      int m_BrowserId;
       CefRefPtr<CefV8Context> m_Context;
-      public:
+  
+  public:
+
+   CInteropImpl(int browserId) : m_BrowserId(browserId) {
+    m_WaitConnectionThread = std::thread(&CInteropImpl::WaitConnectionThreadHandler, this);
+  }
+
+  class CInteropImplConnectionThread;
+
+  virtual advancedfx::interop::CPipeServerConnectionThread* OnNewConnection(
+      HANDLE handle) override {
+    return new CInteropImplConnectionThread(handle, this);
+  }    
 
   virtual bool OnProcessMessageReceived(
       CefRefPtr<CefBrowser> browser,
@@ -6038,77 +6542,108 @@ class CInteropImpl : public CInterop {
       CefProcessId source_process,
       CefRefPtr<CefProcessMessage> message) override {
 
-    auto const name = message->GetName();
-
-    if (name == "afx-message") {
-      m_Context->Enter();
-
-      auto const args = message->GetArgumentList();
-      CefV8ValueList execArgs;
-      execArgs.push_back(
-          CefV8Value::CreateInt(args->GetInt(0)));
-      execArgs.push_back(CefV8Value::CreateString(args->GetString(1)));
-
-      if (m_OnMessage->IsValid())
-        m_OnMessage->ExecuteCallback(execArgs);
-
-      m_Context->Exit();
-      return true;
-
-    } else if (name == "afx-error") {
-      m_Context->Enter();      
-        
-      auto const args = message->GetArgumentList();
-      CefV8ValueList execArgs;
-      execArgs.push_back(CefV8Value::CreateInt(args->GetInt(0)));
-      execArgs.push_back(CefV8Value::CreateString(args->GetString(1)));
-
-      if (m_OnError->IsValid())
-        m_OnError->ExecuteCallback(execArgs);
-   
-      m_Context->Exit();
-      return true;
-    } else if (name == "afx-interop-resolve") {
-      m_Context->Enter();
-
-      auto const args = message->GetArgumentList();
-      
-      CefV8ValueList execArgs;
-      execArgs.push_back(CefV8Value::CreateInt(args->GetInt(2)));
-      m_Promises->Resolve(args->GetInt(0), args->GetInt(1), execArgs);
-
-      m_Context->Exit();
-      return true;
-    } else if (name == "afx-reject") {
-      m_Context->Enter();
-
-      auto const args = message->GetArgumentList();
-      CefV8ValueList execArgs;
-      execArgs.push_back(CefV8Value::CreateString(args->GetString(2)));
-      m_Promises->Reject(args->GetInt(0), args->GetInt(1), execArgs);
-
-      m_Context->Exit();
-      return true;
-    }
-
     return false;
   }
 
  private:
-  CefRefPtr<CAfxPromises> m_Promises;
-
   CefRefPtr<CAfxCallback> m_OnMessage;
   CefRefPtr<CAfxCallback> m_OnError;
+ CefRefPtr<CAfxCallback> m_OnCefFrameRendered;
 
-  virtual ~CInteropImpl() { }
+  bool m_WaitConnectionQuit = false;
+  std::thread m_WaitConnectionThread;
+
+  void WaitConnectionThreadHandler(void) {
+    std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_client_");
+    strPipeName.append(std::to_string(GetCurrentProcessId()));
+    strPipeName.append("_");
+    strPipeName.append(std::to_string(m_BrowserId));
+
+    while(!m_WaitConnectionQuit)
+    {
+      try {
+        this->WaitForConnection(strPipeName.c_str(),512,512,500);
+      }
+      catch(...) {
+
+      }
+    }
+  }
+
+ void OnClientMessage_Message(int senderId, const std::string & message)
+ {
+  m_Context->Enter();
+
+  CefV8ValueList execArgs;
+  execArgs.push_back(CefV8Value::CreateInt(senderId));
+  execArgs.push_back(CefV8Value::CreateString(message));
+
+  if (m_OnMessage->IsValid())
+    m_OnMessage->ExecuteCallback(execArgs);
+
+  m_Context->Exit();
+ }
+
+ void OnClientMessage_CefFrameRendered(HANDLE sharedTextureHandle)
+ {
+ m_Context->Enter();
+
+  CefV8ValueList execArgs;
+  execArgs.push_back(CAfxHandle::Create(sharedTextureHandle));
+
+  if (m_OnCefFrameRendered->IsValid())
+    m_OnCefFrameRendered->ExecuteCallback(execArgs);
+
+  m_Context->Exit();
+ }
+
+ class CInteropImplConnectionThread
+      : public advancedfx::interop::CPipeServerConnectionThread {
+   public:
+
+      CInteropImplConnectionThread(HANDLE handle, CInteropImpl * host)
+           : advancedfx::interop::CPipeServerConnectionThread(handle), m_Host(host) {}
+
+    /**
+     * @throws exception
+     */
+    virtual void HandleConnection() override {
+
+      while (true) {
+        ClientMessage message = (ClientMessage)ReadInt32();
+        switch (message) {
+        case ClientMessage::Quit:
+          return;
+        case ClientMessage::Message:
+        {
+          int senderId = ReadInt32();
+          std::string message;
+          ReadStringUTF8(message);
+          CefPostTask(TID_RENDERER, base::Bind(&CInteropImpl::OnClientMessage_Message, m_Host, senderId, message));
+        } break;
+        case ClientMessage::TextureHandle:
+        {
+          HANDLE shared_handle = (HANDLE)ReadUInt64();
+          CefPostTask(TID_RENDERER, base::Bind(&CInteropImpl::OnClientMessage_CefFrameRendered, m_Host, shared_handle));
+        } break;
+        default:
+          throw "CHostPipeServerConnectionThread::HandleConnection: Unknown message.";
+        }
+      }
+    }
+
+   private:
+    CInteropImpl* m_Host;
+  };  
 };
 
 CefRefPtr<CefV8Value> CreateInterop(CefRefPtr<CefBrowser> browser,
     CefRefPtr<CefFrame> frame,
     CefRefPtr<CefV8Context> context,
     const CefString& argStr,
+    DWORD handlerId,
     CefRefPtr<CInterop>* out) {
-  return CInteropImpl::Create(browser, frame, context, argStr, out);
+  return CInteropImpl::Create(browser, frame, context, argStr, handlerId, out);
 }
 
 }  // namespace interop

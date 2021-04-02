@@ -324,7 +324,7 @@ AfxEngineInterop.prototype.pump = function() {
 	
 	this.timeout = setTimeout(function(){
 		self.pump();
-	}, 0);
+	}, 10);
 }
 
 AfxEngineInterop.prototype.disconnect = function() {

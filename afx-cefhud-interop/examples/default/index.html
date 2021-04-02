@@ -47,7 +47,7 @@ function AfxInterop(interop, args) {
 	
 	var fileFolderPath = window.location.toString();
 	fileFolderPath = fileFolderPath.replace("/index.html","");
-	
+
 	interop.createDrawingInterop(
 		fileFolderPath+"/drawing.html",
 		JSON.stringify({

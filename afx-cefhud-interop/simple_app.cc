@@ -100,7 +100,7 @@ void SimpleApp::OnContextInitialized() {
   // Specify CEF browser settings here.
   CefBrowserSettings browser_settings;
   browser_settings.file_access_from_file_urls = STATE_ENABLED;
-  browser_settings.windowless_frame_rate = 24;
+  browser_settings.windowless_frame_rate = 60;
 
   std::string url;
 
@@ -122,6 +122,7 @@ void SimpleApp::OnContextInitialized() {
     // On Windows we need to specify certain flags that will be passed to
     // CreateWindowEx().
     window_info.SetAsPopup(NULL, "cefsimple");
+    //window_info.SetAsWindowless(NULL);
     window_info.shared_texture_enabled = false;
     window_info.external_begin_frame_enabled = false;    
     window_info.height = 720;
