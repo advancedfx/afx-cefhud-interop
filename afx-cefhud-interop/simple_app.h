@@ -38,13 +38,13 @@ class SimpleApp : public CefApp,
 
   virtual void OnBrowserCreated(CefRefPtr<CefBrowser> browser,
           CefRefPtr<CefDictionaryValue> extra_info) OVERRIDE {
+
     m_ExtraInfo = extra_info->Copy(true);
   }
 
   virtual void OnContextCreated(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefFrame> frame,
                                 CefRefPtr<CefV8Context> context) OVERRIDE {
-
 
     if (frame->IsMain()) {
       if(m_ExtraInfo->HasKey("interopType") && m_ExtraInfo->HasKey("argStr") && m_ExtraInfo->HasKey("handlerId")) {
@@ -120,7 +120,6 @@ class SimpleApp : public CefApp,
                                         "no-user-gesture-required");
 
     //
-
     //command_line->AppendSwitch("gpu-sandbox-failures-fatal");
     //command_line->AppendSwitch("disable-gpu-early-init");
     //command_line->AppendSwitch("disable-gpu-watchdog");

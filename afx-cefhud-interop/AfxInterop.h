@@ -7,6 +7,7 @@
 #include <list>
 #include <string>
 #include <functional>
+#include <mutex>
 
 #include <malloc.h>
 
@@ -238,7 +239,10 @@ class CPipeReaderWriter : public CPipeReader, public CPipeWriter {
 class CPipeServerConnectionThread : public CPipeReaderWriter {
 
 public:
-  CPipeServerConnectionThread(HANDLE handle) {}
+  CPipeServerConnectionThread(HANDLE handle)
+  {
+      m_Handle = handle;
+  }
 
   virtual ~CPipeServerConnectionThread() {}
 
@@ -280,6 +284,14 @@ private:
 class CPipeClient : public CPipeReaderWriter {
 
 public:
+  virtual ~CPipeClient() {
+   try {
+      ClosePipe();   
+   }
+   catch(...) {
+   }
+  }
+
   /**
     * @throws exception
     */

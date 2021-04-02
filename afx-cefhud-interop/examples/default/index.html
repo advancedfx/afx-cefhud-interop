@@ -7,13 +7,14 @@ Launch CS:GO from HLAE with -afxInteropLight.
 
 Execute (will log warings / errors to debug.log in current directoy):
 afx-cefhud-interop.exe "--url=file:///C:/source/afx-cefhud-interop/afx-cefhud-interop/examples/default/index.html" --enable-logging --v=1
+Use CTRL + C in termianl to quit.
 
 For live execute:
 afx-cefhud-interop.exe "--url=file:///C:/source/afx-cefhud-interop/afx-cefhud-interop/examples/default/index.html" --enable-logging --log-severity=error
 
 Enter afx_interop connect 1 into CS:GO console.
 
-Console inteface:
+Console interface:
 afx_interop send cefhud [...]
 
 -->
@@ -27,12 +28,32 @@ afx_interop send cefhud [...]
 
 function AfxInterop(interop, args) {
 	
+	var fileFolderPath = window.location.toString();
+	fileFolderPath = fileFolderPath.replace("/index.html","");
+
 	var self = this;
 	
 	this.interop = interop;
 	this.args = args;
 	
 	this.messageHandlers = {
+		"drawingCreated": function(drawingInteropId) {
+			console.log("Created drawing interop #"+drawingInteropId);
+			this.drawingInteropId = drawingInteropId;
+			
+			this.interop.createEngineInterop(
+				fileFolderPath+"/engine.html",
+				JSON.stringify({
+					"indexInteropId": self.interop.id,
+					"drawingInteropId": self.drawingInteropId,
+					"pipeName": "advancedfxInterop"
+				})
+			);
+		},
+		"engineCreated": function(engineInteropId) {
+			console.log("Created engine interop #"+engineInteropId);
+			self.engineInteropId = engineInteropId;
+		}
 	};
 	
 	interop.onMessage = function(senderId, message){
@@ -45,45 +66,18 @@ function AfxInterop(interop, args) {
 	this.drawingInteropId = null;
 	this.engineInteropId = null;
 	
-	var fileFolderPath = window.location.toString();
-	fileFolderPath = fileFolderPath.replace("/index.html","");
-
 	interop.createDrawingInterop(
 		fileFolderPath+"/drawing.html",
 		JSON.stringify({
-			"indexInteropId": this.interop.id,
+			"indexInteropId": interop.id,
 			"pipeName": "advancedfxInterop_drawing"
-		}),
-		function(drawingInteropId){
-			console.log("Created drawing interop #"+drawingInteropId);
-			self.drawingInteropId = drawingInteropId;
-			
-			self.interop.createEngineInterop(
-				fileFolderPath+"/engine.html",
-				JSON.stringify({
-					"indexInteropId": self.interop.id,
-					"drawingInteropId": self.drawingInteropId,
-					"pipeName": "advancedfxInterop"
-				}),
-				function(engineInteropId){
-					console.log("Created engine interop #"+engineInteropId);
-					self.engineInteropId = drawingInteropId;
-				},
-				function(errorMessage){
-					throw "Creating engine interop failed: "+errorMessage;
-				}
-			);
-		},
-		function(errorMessage){
-			throw "Creating drawing interop failed: "+errorMessage;
-		}
+		})
 	);
 }
 
 AfxInterop.prototype.onMessage = function(senderId, message) {
 	const args = JSON.parse(message);
 	this.messageHandlers[args.id].apply(this, args.args);
-	console.log("AfxInterop.prototype.onMessage error: "+error);
 }
 
 AfxInterop.prototype.onError = function(senderId, message) {

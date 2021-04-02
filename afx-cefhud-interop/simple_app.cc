@@ -122,11 +122,10 @@ void SimpleApp::OnContextInitialized() {
     // On Windows we need to specify certain flags that will be passed to
     // CreateWindowEx().
     window_info.SetAsPopup(NULL, "cefsimple");
-    //window_info.SetAsWindowless(NULL);
-    window_info.shared_texture_enabled = false;
-    window_info.external_begin_frame_enabled = false;    
-    window_info.height = 720;
     window_info.width = 405;
+    window_info.height = 720;
+    window_info.shared_texture_enabled = false;
+    window_info.external_begin_frame_enabled = false;
 #endif
 
     CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
@@ -139,6 +138,7 @@ void SimpleApp::OnContextInitialized() {
     argStr->SetDictionary(argCmd);
 
     extra_info->SetString("argStr", CefWriteJSON(argStr, JSON_WRITER_DEFAULT));
+    extra_info->SetInt("handlerId", GetCurrentProcessId());
 
     // Create the first browser window.
     CefBrowserHost::CreateBrowser(window_info, handler, url, browser_settings,

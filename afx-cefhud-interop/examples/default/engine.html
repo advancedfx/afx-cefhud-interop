@@ -187,6 +187,11 @@ function AfxEngineInterop(interop, args) {
 	interop.gameEventSetEnrichment('ammo_refill', 'userid', useridEnrichtments);
 	// ... left out the dangerzone, feel free to add it ...
 	interop.gameEventSetEnrichment('weaponhud_selection', 'userid', useridEnrichtments);
+
+	interop.sendMessage(this.args.indexInteropId, JSON.stringify({
+		"id": "engineCreated",
+		"args": [interop.id]
+	}));
 	
 	this.connect();
 }
@@ -258,8 +263,8 @@ AfxEngineInterop.prototype.onRenderViewBegin = function(renderInfo) {
 	//passes["afterTranslucentShadow"] = true;
 	//passes["beforeTranslucent"] = true;
 	//passes["afterTranslucent"] = true;
-	//passes["beforeHud"] = true;
-	passes["afterHud"] = true;
+	passes["beforeHud"] = true;
+	//passes["afterHud"] = true;
 	//passes["afterRenderView"] = true; // Controls drawing only, onRenderViewBegin will be called nevertheless.
 	
 	return passes;

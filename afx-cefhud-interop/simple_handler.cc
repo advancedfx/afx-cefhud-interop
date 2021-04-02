@@ -87,7 +87,9 @@ bool SimpleHandler::DoClose(CefRefPtr<CefBrowser> browser) {
 
   // Allow the close. For windowed browsers this will result in the OS close
   // event being sent.
-  return false;
+  //return false;
+
+  return browser->GetIdentifier() == 1;
 }
 
 
@@ -168,6 +170,8 @@ void SimpleHandler::CloseAllBrowsers(bool force_close) {
 
 void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> browser,
                                 CefRect& rect) {
+
+  rect.Set(0, 0, 640, 480);
 
   std::unique_lock<std::mutex> lock(m_BrowserMutex);
 

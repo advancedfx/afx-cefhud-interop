@@ -6,6 +6,7 @@
 #define CEF_TESTS_CEFSIMPLE_SIMPLE_HANDLER_H_
 
 #include "include/cef_client.h"
+#include <include/base/cef_bind.h>
 #include "include/wrapper/cef_closure_task.h"
 
 #include "AfxInterop.h"
@@ -123,7 +124,7 @@ protected:
        it->second.Connection = nullptr;
      }
 
-     bool Message(int senderId, int targetId, const std::string & message) {
+     void Message(int senderId, int targetId, const std::string & message) {
         std::unique_lock<std::mutex> lock(m_BrowserMutex);
         auto it = m_Browsers.find(targetId);
         if (it == m_Browsers.end())
@@ -135,6 +136,61 @@ protected:
           throw "CHostPipeServerConnectionThread::Message failed: no target connection.";
      }
 
+    void DoDrawingResized(CefRefPtr<CefBrowser> browser) {
+
+       browser->GetHost()->WasResized();
+     }
+
+     void DoRenderFrame(CefRefPtr<CefBrowser> browser) {
+       browser->GetHost()->SendExternalBeginFrame();
+     }
+
+     void DoCreateDrawing(const std::string& argStr,
+                          const std::string& argUrl) {
+
+       CefBrowserSettings browser_settings;
+       browser_settings.file_access_from_file_urls = STATE_ENABLED;
+       browser_settings.windowless_frame_rate =
+           60;  // vsync doesn't matter only if external_begin_frame_enabled
+       CefWindowInfo window_info;
+       window_info.SetAsWindowless(NULL);
+       window_info.shared_texture_enabled = true;
+       window_info.external_begin_frame_enabled = true;
+       window_info.width = 640;
+       window_info.height = 360;
+
+       CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
+       extra_info->SetString("interopType", "drawing");
+       extra_info->SetString("argStr", argStr);
+       extra_info->SetInt("handlerId", (int)GetCurrentProcessId());
+
+       CefBrowserHost::CreateBrowser(window_info, this, argUrl,
+                                     browser_settings, extra_info, nullptr);
+     }
+
+     void DoCreateEngine(const std::string& argStr, const std::string& argUrl) {
+       CefBrowserSettings browser_settings;
+       browser_settings.file_access_from_file_urls = STATE_ENABLED;
+       browser_settings.windowless_frame_rate = 1;
+
+       CefWindowInfo window_info;
+       window_info.SetAsWindowless(NULL);
+       window_info.shared_texture_enabled = false;
+       window_info.external_begin_frame_enabled = true;
+       window_info.width = 640;
+       window_info.height = 360;
+
+       CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
+       extra_info->SetString("interopType", "engine");
+       extra_info->SetString("argStr", argStr);
+       extra_info->SetInt("handlerId", GetCurrentProcessId());
+
+       CefBrowserHost::CreateBrowser(window_info, this, argUrl,
+                                     browser_settings, extra_info, nullptr);
+     }
+
+
+ protected:
      class CHostPipeServerConnectionThread
       : public advancedfx::interop::CPipeServerConnectionThread {
    public:
@@ -157,9 +213,11 @@ protected:
        * @throws exception
        */
       void OnPainted(void* share_handle) {
+
         std::unique_lock<std::mutex> lock(m_ClientConnectionMutex);
         m_ClientConnection.WriteInt32((int)advancedfx::interop::ClientMessage::TextureHandle);
         m_ClientConnection.WriteUInt64((UINT64)share_handle);
+        m_ClientConnection.Flush();
       }
 
       /**
@@ -170,6 +228,7 @@ protected:
         m_ClientConnection.WriteInt32((int)advancedfx::interop::ClientMessage::Message);
         m_ClientConnection.WriteInt32(senderId);
         m_ClientConnection.WriteStringUTF8(message);
+        m_ClientConnection.Flush();
       }
 
     /**
@@ -177,8 +236,11 @@ protected:
      */
     virtual void HandleConnection() override {
 
-      DWORD processId = ReadUInt32();
-      int browserId = ReadInt32();
+      DWORD processId;
+      int browserId;
+
+      processId = ReadUInt32();
+      browserId = ReadInt32();     
 
       std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_client_");
       strPipeName.append(std::to_string(processId));
@@ -197,44 +259,35 @@ protected:
             {
               std::unique_lock<std::mutex> lock(m_ClientConnectionMutex);
               m_ClientConnection.WriteInt32((int)advancedfx::interop::ClientMessage::Quit);
+              m_ClientConnection.Flush();
               m_ClientConnection.ClosePipe();
             }
             return;
           case advancedfx::interop::HostMessage::DrawingResized: {
-            m_Width = ReadInt32();
-            m_Height = ReadInt32();
-            m_Browser->GetHost()->WasResized();
+              m_Width = ReadInt32();
+              m_Height = ReadInt32();
+
+              CefPostTask(
+                  TID_UI, base::Bind(&SimpleHandler::DoDrawingResized,
+                             m_Host, m_Browser));
           } break;
           case advancedfx::interop::HostMessage::RenderFrame: {
-            m_Browser->GetHost()->SendExternalBeginFrame();
+            CefPostTask(
+                TID_UI, base::Bind(&SimpleHandler::DoRenderFrame,
+                           m_Host, m_Browser));
           } break;
           case advancedfx::interop::HostMessage::CreateDrawing: {
+
             std::string argUrl;
             ReadStringUTF8(argUrl);
 
             std::string argStr;
             ReadStringUTF8(argStr);
 
-            CefBrowserSettings browser_settings;
-            browser_settings.file_access_from_file_urls = STATE_ENABLED;
-            browser_settings.windowless_frame_rate =
-                60;  // vsync doesn't matter only if external_begin_frame_enabled
-            CefWindowInfo window_info;
-            window_info.SetAsWindowless(NULL);
-            window_info.shared_texture_enabled = true;
-            window_info.external_begin_frame_enabled = true;
-
-            CefRefPtr<CefDictionaryValue> extra_info =
-                CefDictionaryValue::Create();
-            extra_info->SetString("interopType", "drawing");
-            extra_info->SetString("argStr", argStr);
-            extra_info->SetInt("handlerId", (int)GetCurrentProcessId());
-            CefBrowserHost::CreateBrowser(window_info, m_Host, argUrl,
-                                          browser_settings, extra_info, nullptr);
+            CefPostTask(TID_UI, base::Bind(&SimpleHandler::DoCreateDrawing,
+                                           m_Host, argStr, argUrl));
           } break;
           case advancedfx::interop::HostMessage::CreateEngine: {
-            int promiseIdLo = ReadInt32();
-            int promiseIdHi = ReadInt32();
 
             std::string argUrl;
             ReadStringUTF8(argUrl);
@@ -242,29 +295,15 @@ protected:
             std::string argStr;
             ReadStringUTF8(argStr);
 
-            CefBrowserSettings browser_settings;
-            browser_settings.file_access_from_file_urls = STATE_ENABLED;
-            browser_settings.windowless_frame_rate = 1;
-
-            CefWindowInfo window_info;
-            window_info.SetAsWindowless(NULL);
-            window_info.shared_texture_enabled = false;
-            window_info.external_begin_frame_enabled = true;
-
-            CefRefPtr<CefDictionaryValue> extra_info =
-                CefDictionaryValue::Create();
-            extra_info->SetString("interopType", "engine");
-            extra_info->SetString("argStr", argStr);
-           extra_info->SetInt("handlerId", GetCurrentProcessId());
-
-            CefBrowserHost::CreateBrowser(window_info, m_Host, argUrl,
-                                          browser_settings, extra_info, nullptr);
+            CefPostTask(TID_UI,
+                base::Bind(&SimpleHandler::DoCreateEngine,
+                                           m_Host, argStr, argUrl));
           } break;
           case advancedfx::interop::HostMessage::Message: {
             int targetId = ReadInt32();
-            std::string message;
-            ReadStringUTF8(message);
-            m_Host->Message(browserId, targetId, message);
+            std::string argMessage;
+            ReadStringUTF8(argMessage);
+            m_Host->Message(browserId, targetId, argMessage);
           } break;
           default:
             throw "CHostPipeServerConnectionThread::HandleConnection: Unknown message.";
@@ -284,7 +323,8 @@ protected:
     std::mutex m_ClientConnectionMutex;
     int m_Width = 640;
     int m_Height = 480;
-  };
+
+    };
 
   bool is_closing_;
 

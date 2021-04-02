@@ -578,13 +578,19 @@ function AfxDrawingInterop(interop,args) {
 				
 				this.deferTasks();
 				
-				console.log("renderCefFrame ...");
-				this.renderCefFrame(function(cefTextureHandle){
-					console.log("renderCefFrame ... DONE.");
+				//var timeout = null;
+				
+				this.interop.onCefFrameRendered = function(cefTextureHandle){
+					//clearTimeout(timeout);
+					//timeout = null;
+				
+					//console.log("renderCefFrame ... DONE.");
+					
+					self.interop.onCefFrameRendered = null;
 					
 					if(!cefTextureHandle.invalid)
 					{
-						console.log("cefTextureHandle: "+cefTextureHandle.lo+" "+cefTextureHandle.hi);
+						//console.log("cefTextureHandle: "+cefTextureHandle.lo+" "+cefTextureHandle.hi);
 						
 						if(null == self.cefTextureHandle || self.cefTextureHandle.lo != cefTextureHandle.lo || self.cefTextureHandle.hi != cefTextureHandle.hi)
 						{
@@ -607,9 +613,15 @@ function AfxDrawingInterop(interop,args) {
 					self.interop.pumpEnd();
 					
 					self.undeferTasks();
-				}, function(message){
-					throw ("The impossible has happened: "+message);
-				});
+				};
+				
+				//console.log("renderCefFrame ...");
+				this.interop.renderCefFrame();
+				
+				//timeout = setTimeout(function(){
+				//	console.log("Frame took too long, saving your ass ...");
+				//	self.interop.onCefFrameRendered(self.interop.createInvalidHandle());
+				//}, 500);
 			}
 		}
 	};
@@ -649,6 +661,11 @@ function AfxDrawingInterop(interop,args) {
 	this.vertexBuffers = {
 		"rect": null
 	}
+
+	interop.sendMessage(this.args.indexInteropId, JSON.stringify({
+		"id": "drawingCreated",
+		"args": [interop.id]
+	}));
 }
 
 AfxDrawingInterop.prototype.onMessage = function(senderId, message) {

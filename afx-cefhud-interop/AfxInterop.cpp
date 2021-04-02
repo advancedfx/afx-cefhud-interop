@@ -311,10 +311,10 @@ void CThreadedQueue::QueueThreadHandler(void) {
 
 
 void CPipeReader::ReadBytes(LPVOID bytes, DWORD offset, DWORD length) {
-  while (true) {
+  while (0 < length) {
     DWORD bytesRead = 0;
 
-    if (!(ReadFile(m_Handle, (LPVOID) & (((char*)bytes)[offset]), length,
+    if (!(ReadFile(m_Handle, (unsigned char*)bytes + offset, length,
                    &bytesRead, NULL)))
       throw CPipeException(GetLastError());
 
@@ -403,15 +403,12 @@ FLOAT CPipeReader::ReadSingle() {
 }
 
 void CPipeWriter::WriteBytes(const LPVOID bytes, DWORD offset, DWORD length) {
-  while (true) {
-    if (0 == length)
-      break;
-
+  while (0 < length) {
     DWORD bytesWritten = 0;
-    DWORD bytesToWrite = length;
 
-    if (!(WriteFile(m_Handle, (LPVOID) & (((char*)bytes)[offset]), bytesToWrite,
-                    &bytesWritten, NULL))) throw CPipeException(GetLastError());
+    if (!(WriteFile(m_Handle, (unsigned char*)bytes + offset, length,
+                    &bytesWritten, NULL)))
+      throw CPipeException(GetLastError());
 
     offset += bytesWritten;
     length -= bytesWritten;
@@ -496,11 +493,11 @@ void CPipeClient::OpenPipe(const char* pipeName, int timeOut) {
 
     if (lastError != ERROR_PIPE_BUSY)
     {
-      throw CWinApiException("CPipeClient::ClosePipe: CreateFileA failed.", lastError);
+      throw CWinApiException("CPipeClient::OpenPipe: CreateFileA failed.", lastError);
     }
     else if (FAILED(WaitNamedPipeA(pipeName, timeOut)))
     {
-      throw CWinApiException("CPipeClient::ClosePipe: WaitNamedPipe failed", GetLastError());
+      throw CWinApiException("CPipeClient::OpenPipe: WaitNamedPipe failed", GetLastError());
     }
   }
 
@@ -510,7 +507,7 @@ void CPipeClient::OpenPipe(const char* pipeName, int timeOut) {
 void CPipeClient::ClosePipe() {
   if(INVALID_HANDLE_VALUE != m_Handle) {
     if(!CloseHandle(m_Handle)) {
-      throw CWinApiException("WaitNamedPipe: timed out", GetLastError());
+      throw CWinApiException("CPipeClient::ClosePipe: CloseHandle failed.", GetLastError());
     }
     m_Handle = INVALID_HANDLE_VALUE;
   }
@@ -574,7 +571,7 @@ void CPipeServer::WaitForConnection(const char* pipeName,
 DWORD WINAPI CPipeServer::InstanceThread(LPVOID lpvParam) {
   try {
     if (lpvParam == NULL) {
-      return -1;
+      return (DWORD)-1;
     }
 
     HANDLE hPipe = ((CPipeServerConnectionThread*)lpvParam)->GetHandle();
@@ -591,7 +588,7 @@ DWORD WINAPI CPipeServer::InstanceThread(LPVOID lpvParam) {
   }
   catch(...) {
     delete ((CPipeServerConnectionThread*)lpvParam);
-    return -2;
+    return (DWORD)-2;
   }
 
   delete((CPipeServerConnectionThread*)lpvParam);
@@ -683,10 +680,14 @@ class CNamedPipeServer {
 
       DWORD bytesRead = 0;
 
-      if (!(ReadFile(m_PipeHandle, (LPVOID) & (((char*)bytes)[offset]), length,
+      if (!(ReadFile(m_PipeHandle, (unsigned char*)bytes + offset, length,
                      &bytesRead, &m_Overlapped) &&
             0 != bytesRead)) {
+
         DWORD lastError = GetLastError();
+
+        bool bContinue = false;
+
         switch (lastError) {
           case ERROR_IO_PENDING: {
             bool completed = false;
@@ -704,9 +705,15 @@ class CNamedPipeServer {
               }
             }
           } break;
+          case ERROR_INVALID_USER_BUFFER:
+          case ERROR_NOT_ENOUGH_MEMORY:
+              bContinue = true;
+              break;
           default:
             return false;
         }
+
+        if (bContinue) continue;
 
         if (!GetOverlappedResult(m_PipeHandle, &m_Overlapped, &bytesRead,
                                  FALSE))
@@ -819,12 +826,13 @@ class CNamedPipeServer {
         break;
 
       DWORD bytesWritten = 0;
-      DWORD bytesToWrite = length;
 
-      if (!(WriteFile(m_PipeHandle, (LPVOID) & (((char*)bytes)[offset]),
-                      bytesToWrite, &bytesWritten, &m_Overlapped) &&
-            bytesToWrite == bytesToWrite)) {
+      if (!WriteFile(m_PipeHandle, (unsigned char*)bytes +offset,
+                      length, &bytesWritten, &m_Overlapped)) {
         DWORD lastError = GetLastError();
+
+        bool bContinue = false;
+
         switch (lastError) {
           case ERROR_IO_PENDING: {
             bool completed = false;
@@ -843,9 +851,16 @@ class CNamedPipeServer {
               }
             }
           } break;
+          case ERROR_INVALID_USER_BUFFER:
+          case ERROR_NOT_ENOUGH_MEMORY:
+            bContinue = true;
+            break;
           default:
             return false;
         }
+
+        if (bContinue)
+          continue;
 
         if (!GetOverlappedResult(m_PipeHandle, &m_Overlapped,
                                  &bytesWritten, FALSE))
@@ -1140,6 +1155,38 @@ class CAfxObject : public CefBaseRefCounted {
 
   IMPLEMENT_REFCOUNTING(CAfxObject);
 };
+
+
+class CAfxUserData : public CefBaseRefCounted {
+ public:
+  CAfxUserData(AfxUserDataType userDataType, void* userData)
+      : m_UserDataType(userDataType), m_UserData(userData) {}
+
+  AfxUserDataType GetUserDataType() const { return m_UserDataType; }
+  void* GetUserData() const { return m_UserData; }
+
+ protected:
+  ~CAfxUserData() {}
+
+ private:
+  AfxUserDataType m_UserDataType;
+  void* m_UserData;
+
+  IMPLEMENT_REFCOUNTING(CAfxUserData);
+};
+
+template <AfxUserDataType type, class T>
+CefRefPtr<T> GetAfxUserData(CefRefPtr<CefV8Value> value) {
+  if (nullptr == value || !value->IsObject())
+    return nullptr;
+  CefRefPtr<CefBaseRefCounted> user_data = value->GetUserData();
+  if (nullptr == user_data)
+    return nullptr;
+  CAfxUserData* afxUserData = static_cast<CAfxUserData*>(user_data.get());
+  if (type != afxUserData->GetUserDataType())
+    return nullptr;
+  return (T*)afxUserData->GetUserData();
+}
 
 class CAfxInteropImpl : public CefBaseRefCounted {
   public:
@@ -1668,33 +1715,6 @@ class CAfxInterop {
   bool m_Connecting = false;
 };
 
-class CAfxUserData : public CefBaseRefCounted {
- public:
-  CAfxUserData(AfxUserDataType userDataType, void* userData)
-      : m_UserDataType(userDataType) , m_UserData(userData) {}
-
-  AfxUserDataType GetUserDataType() const { return m_UserDataType; }
-  void* GetUserData() const { return m_UserData; }
-
- protected:
-  ~CAfxUserData() {}
-
- private:
-  AfxUserDataType m_UserDataType;
-  void* m_UserData;
-
-  IMPLEMENT_REFCOUNTING(CAfxUserData);
-};
-
-template <AfxUserDataType type, class T>
-CefRefPtr<T> GetAfxUserData(CefRefPtr<CefV8Value> value) {
-  if(nullptr == value || !value->IsObject()) return nullptr;
-  CefRefPtr<CefBaseRefCounted> user_data = value->GetUserData();
-  if(nullptr == user_data) return nullptr;
-  CAfxUserData* afxUserData = static_cast<CAfxUserData *>(user_data.get());
-  if(type != afxUserData->GetUserDataType()) return nullptr;
-  return (T*)afxUserData->GetUserData();
-}
 /*
  class CAfxPromise : public CefBaseRefCounted {
   IMPLEMENT_REFCOUNTING(CAfxPromise);
@@ -1823,10 +1843,13 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop, public CPipeSer
     CefRefPtr<CDrawingInteropImpl> self = new CDrawingInteropImpl(browser->GetIdentifier());
 
     std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_handler_");
-    strPipeName.append(std::to_string(handlerId));    
+    strPipeName.append(std::to_string(handlerId));  
 
     try {
       self->OpenPipe(strPipeName.c_str(), 3000);
+      self->WriteUInt32(GetCurrentProcessId());
+      self->WriteInt32(browser->GetIdentifier());
+      self->Flush();
     }
     catch(...) {
       if(out) *out = nullptr;
@@ -1885,6 +1908,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop, public CPipeSer
               self->WriteInt32((int)HostMessage::Message);
               self->WriteInt32(argId->GetIntValue());
               self->WriteStringUTF8(argStr->GetStringValue());
+              self->Flush();
             }
             catch(const std::exception & e)
             {
@@ -3433,31 +3457,20 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop, public CPipeSer
           exceptionoverride = g_szInvalidArguments;
           return true;
         });
-    afxObject->AddFunction("renderCefFrame",
-        [self,frame](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-
-          if (2 == arguments.size()) {
-            auto argFnResolve = arguments[0];
-            auto argFnReject = arguments[1];
-
-            if (argFnResolve->IsFunction() && argFnReject->IsFunction()) {
-
-              try {
-                self->WriteInt32((int)HostMessage::RenderFrame);
-              }
-              catch(const std::exception & e)
-              {
-                exceptionoverride = e.what();
-                return true;
-              }
-
-              return true;
-            }
+    afxObject->AddFunction(
+        "renderCefFrame",
+        [self, frame](const CefString& name, CefRefPtr<CefV8Value> object,
+                      const CefV8ValueList& arguments,
+                      CefRefPtr<CefV8Value>& retval,
+                      CefString& exceptionoverride) {
+          try {
+            self->WriteInt32((int)HostMessage::RenderFrame);
+            self->Flush();
+          } catch (const std::exception& e) {
+            exceptionoverride = e.what();
+            return true;
           }
 
-          exceptionoverride = g_szInvalidArguments;
           return true;
         });
     afxObject->AddFunction(
@@ -3581,6 +3594,7 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop, public CPipeSer
 
     try {
       this->WriteInt32((int)advancedfx::interop::ClientMessage::Quit);
+      this->Flush();
     }
     catch(...) {      
     }     
@@ -3618,8 +3632,6 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop, public CPipeSer
   }
 
   virtual void OnClosing() override { m_InFlow = false; }
-
-  class CDrawingInteropImplConnectionThread;
 
   virtual advancedfx::interop::CPipeServerConnectionThread* OnNewConnection(
       HANDLE handle) override {
@@ -3675,14 +3687,19 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop, public CPipeSer
         case ClientMessage::Message:
         {
           int senderId = ReadInt32();
-          std::string message;
-          ReadStringUTF8(message);
-          CefPostTask(TID_RENDERER, base::Bind(&CDrawingInteropImpl::OnClientMessage_Message, m_Host, senderId, message));
+          std::string argMessage;
+          ReadStringUTF8(argMessage);
+          CefPostTask(TID_RENDERER,
+                      base::Bind(&CDrawingInteropImpl::OnClientMessage_Message,
+                                 m_Host, senderId, argMessage));
         } break;
         case ClientMessage::TextureHandle:
         {
           HANDLE shared_handle = (HANDLE)ReadUInt64();
-          CefPostTask(TID_RENDERER, base::Bind(&CDrawingInteropImpl::OnClientMessage_CefFrameRendered, m_Host, shared_handle));
+          CefPostTask(
+              TID_RENDERER,
+              base::Bind(&CDrawingInteropImpl::OnClientMessage_CefFrameRendered,
+                         m_Host, shared_handle));
         } break;
         default:
           throw "CHostPipeServerConnectionThread::HandleConnection: Unknown message.";
@@ -3693,6 +3710,8 @@ class CDrawingInteropImpl : public CInterop, public CAfxInterop, public CPipeSer
    private:
     CDrawingInteropImpl* m_Host;
   };
+
+ private:
 
   class CAfxD3d9VertexDeclaration : public CAfxInteropImpl {
     IMPLEMENT_REFCOUNTING(CAfxD3d9VertexDeclaration);
@@ -4452,6 +4471,9 @@ public:
 
     try {
       self->OpenPipe(strPipeName.c_str(), 3000);
+      self->WriteUInt32(GetCurrentProcessId());
+      self->WriteInt32(browser->GetIdentifier());
+      self->Flush();
     }
     catch(...) {
       if(out) *out = nullptr;
@@ -4508,6 +4530,7 @@ public:
               self->WriteInt32((int)HostMessage::Message);
               self->WriteInt32(argId->GetIntValue());
               self->WriteStringUTF8(argStr->GetStringValue());
+              self->Flush();
             }
             catch(const std::exception & e)
             {
@@ -4893,6 +4916,7 @@ public:
 
               try {
                 self->WriteInt32((int)HostMessage::RenderFrame);
+                self->Flush();
               }
               catch(const std::exception & e)
               {
@@ -4921,6 +4945,7 @@ public:
 
    try {
       this->WriteInt32((int)advancedfx::interop::ClientMessage::Quit);
+     this->Flush();
     }
     catch(...) {      
     }     
@@ -4958,8 +4983,6 @@ public:
   CEngineInteropImpl(int browserId) : CAfxInterop("advancedfxInterop") ,m_BrowserId(browserId) {
     m_WaitConnectionThread = std::thread(&CEngineInteropImpl::WaitConnectionThreadHandler, this);
   }
-
-    class CEngineInteropImplConnectionThread;
 
   virtual advancedfx::interop::CPipeServerConnectionThread* OnNewConnection(
       HANDLE handle) override {
@@ -5468,7 +5491,7 @@ public:
 
  void OnClientMessage_CefFrameRendered(HANDLE sharedTextureHandle)
  {
-  m_Context->Enter();
+   m_Context->Enter();
 
   CefV8ValueList execArgs;
   execArgs.push_back(CAfxHandle::Create(sharedTextureHandle));
@@ -5499,9 +5522,11 @@ public:
         case ClientMessage::Message:
         {
           int senderId = ReadInt32();
-          std::string message;
-          ReadStringUTF8(message);
-          CefPostTask(TID_RENDERER, base::Bind(&CEngineInteropImpl::OnClientMessage_Message, m_Host, senderId, message));
+          std::string argMessage;
+          ReadStringUTF8(argMessage);
+          CefPostTask(TID_RENDERER,
+                      base::Bind(&CEngineInteropImpl::OnClientMessage_Message,
+                                 m_Host, senderId, argMessage));
         } break;
         case ClientMessage::TextureHandle:
         {
@@ -5518,7 +5543,7 @@ public:
     CEngineInteropImpl* m_Host;
   };
 
-
+private:
   static CefRefPtr<CefV8Value> CreateAfxMatrix4x4(
       const struct advancedfx::interop::Matrix4x4_s& value) {
     CefRefPtr<CefV8Value> obj = CefV8Value::CreateArray(16);
@@ -6317,6 +6342,9 @@ class CInteropImpl : public CInterop, public CPipeServer, public CPipeClient {
 
     try {
       self->OpenPipe(strPipeName.c_str(), 3000);
+      self->WriteUInt32(GetCurrentProcessId());
+      self->WriteInt32(browser->GetIdentifier());
+      self->Flush();
     }
     catch(...) {
       if(out) *out = nullptr;
@@ -6378,6 +6406,7 @@ class CInteropImpl : public CInterop, public CPipeServer, public CPipeClient {
               self->WriteInt32((int)HostMessage::CreateDrawing);
               self->WriteStringUTF8(argUrl->GetStringValue());
               self->WriteStringUTF8(argStr->GetStringValue());
+              self->Flush();
             }
             catch(const std::exception & e)
             {
@@ -6409,6 +6438,7 @@ class CInteropImpl : public CInterop, public CPipeServer, public CPipeClient {
               self->WriteInt32((int)HostMessage::CreateEngine);
               self->WriteStringUTF8(argUrl->GetStringValue());
               self->WriteStringUTF8(argStr->GetStringValue());
+              self->Flush();
             }
             catch(const std::exception & e)
             {
@@ -6439,6 +6469,7 @@ class CInteropImpl : public CInterop, public CPipeServer, public CPipeClient {
               self->WriteInt32((int)HostMessage::Message);
               self->WriteInt32(argId->GetIntValue());
               self->WriteStringUTF8(argStr->GetStringValue());
+              self->Flush();
             }
             catch(const std::exception & e)
             {
@@ -6466,6 +6497,7 @@ class CInteropImpl : public CInterop, public CPipeServer, public CPipeClient {
 
               try {
                 self->WriteInt32((int)HostMessage::RenderFrame);
+                self->Flush();
               }
               catch(const std::exception & e)
               {
@@ -6503,6 +6535,7 @@ class CInteropImpl : public CInterop, public CPipeServer, public CPipeClient {
 
     try {
       this->WriteInt32((int)advancedfx::interop::ClientMessage::Quit);
+      this->Flush();
     }
     catch(...) {      
     }     
@@ -6529,10 +6562,9 @@ class CInteropImpl : public CInterop, public CPipeServer, public CPipeClient {
     m_WaitConnectionThread = std::thread(&CInteropImpl::WaitConnectionThreadHandler, this);
   }
 
-  class CInteropImplConnectionThread;
-
   virtual advancedfx::interop::CPipeServerConnectionThread* OnNewConnection(
       HANDLE handle) override {
+
     return new CInteropImplConnectionThread(handle, this);
   }    
 
@@ -6617,9 +6649,11 @@ class CInteropImpl : public CInterop, public CPipeServer, public CPipeClient {
         case ClientMessage::Message:
         {
           int senderId = ReadInt32();
-          std::string message;
-          ReadStringUTF8(message);
-          CefPostTask(TID_RENDERER, base::Bind(&CInteropImpl::OnClientMessage_Message, m_Host, senderId, message));
+          std::string argMessage;
+          ReadStringUTF8(argMessage);
+          CefPostTask(TID_RENDERER,
+                      base::Bind(&CInteropImpl::OnClientMessage_Message, m_Host,
+                                 senderId, argMessage));
         } break;
         case ClientMessage::TextureHandle:
         {
@@ -6636,6 +6670,8 @@ class CInteropImpl : public CInterop, public CPipeServer, public CPipeClient {
     CInteropImpl* m_Host;
   };  
 };
+
+
 
 CefRefPtr<CefV8Value> CreateInterop(CefRefPtr<CefBrowser> browser,
     CefRefPtr<CefFrame> frame,
