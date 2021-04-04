@@ -35,14 +35,12 @@ function AfxEngineInterop(interop, args) {
 	
 	var self = this;
 	
-	interop.pipeName = args.pipeName;
+	interop.setPipeName(args.pipeName);
 	
 	this.interop = interop;
 	this.args = args;
 	this.firstConnection = true;
 	this.drawingConnected = false;
-	this.timeout = null;
-	this.taskQueue = [];
 	
 	this.messageHandlers = {
 		"drawingConnected": function(senderId) {
@@ -53,6 +51,7 @@ function AfxEngineInterop(interop, args) {
 		"drawingDisconnected": function(senderId) {
 			console.log("drawingDisconnected: "+senderId);
 			this.drawingConnected = false;
+			this.disconnect();
 		},
 		"drawingConnecting": function(senderId) {
 			this.connect();
@@ -60,28 +59,15 @@ function AfxEngineInterop(interop, args) {
 	};
 	
 	interop.onMessage = function(senderId, message){
-		self.queueTask(function() {
+		queueMicrotask(function() {
 			self.onMessage(senderId, message);
 		});
 	};
-	interop.onGameEvent = function(e){
-		self.onGameEvent(e);
-	};
-	interop.onCommands = function(commands){
-		self.onCommands(commands);
-	};
-	interop.onRenderViewBegin = function(renderInfo){
-		return self.onRenderViewBegin(renderInfo);
-	};
-	interop.onHudEnd = function(){
-		self.onHudEnd();
-	};
-	
 	
 	// GameEvents:
 	//
 	// https://wiki.alliedmods.net/Counter-Strike:_Global_Offensive_Event
-	
+	/*
 	interop.gameEventSetTransmitClientTime(true);
 	interop.gameEventSetTransmitTick(true);
 	
@@ -187,12 +173,103 @@ function AfxEngineInterop(interop, args) {
 	interop.gameEventSetEnrichment('ammo_refill', 'userid', useridEnrichtments);
 	// ... left out the dangerzone, feel free to add it ...
 	interop.gameEventSetEnrichment('weaponhud_selection', 'userid', useridEnrichtments);
+*/
 
+	this.pumpEvents = {
+		"onNewConnection": function(){
+			console.log("New connection");
+		},
+		"onDone": function(){
+			queueMicrotask(function(){
+				self.interop.pump(self.pumpEvents, {});
+			});
+		},
+		"onError": function(message){
+			console.log("pump onError: "+message);
+			self.disconnect();
+		},
+		"onCommands": function(commands) {
+			
+			if(self.firstConnection) {
+				self.firstConnection = false;
+				self.interop.scheduleCommand("echo afx_interop send cefhud - To send commands to me.");
+			}
+			
+			for(var i=0; i < commands.length; ++i)
+			{
+				var command = commands[i];
+				if(0 < command.length)
+				{
+					if(2 <= command.length && "cefhud" === command[1])
+					{
+						if(3 <= command.length)
+						{
+							var handled = false;
+							var command2 = command[2];
+							switch(command2)
+							{
+							case "echo":
+								var result = "echo";
+								for(var j=3; j < command.length; ++j)
+								{
+									result += " "+command[j];
+								}
+								self.interop.scheduleCommand(result);
+								handled = true;
+								break;
+							}
+							
+							if(handled) continue;
+						}
+						self.interop.scheduleCommand("echo \""+command[0]+" cefhud echo <sText>+ - echo text back to CS:GO.\"");
+					}
+				}
+			}
+		},
+		"onGameEvent": function(e){
+			self.interop.sendMessage(self.args.drawingInteropId, JSON.stringify({
+				"id": "onGameEvent",
+				"args": [e]
+			}));
+		},
+		"onRenderViewBegin": function(renderInfo) {
+	
+			self.renderInfo = renderInfo;
+			self.pass = 0;
+			
+			self.interop.sendMessage(self.args.drawingInteropId, JSON.stringify({
+				"id": "onRenderViewBegin",
+				"args": [renderInfo]
+			}));
+			
+			var passes = {};
+			
+			//passes["beforeTranslucentShadow"] = true;
+			//passes["afterTranslucentShadow"] = true;
+			//passes["beforeTranslucent"] = true;
+			//passes["afterTranslucent"] = true;
+			//passes["hudBegin"] = true;
+			passes["hudEnd"] = true;
+			//passes["end"] = true; // Controls drawing only, onRenderViewEnd will be called nevertheless.
+			
+			return passes;
+		},
+		"onRenderViewHudEnd": function(){
+			self.interop.sendMessage(self.args.drawingInteropId, JSON.stringify({
+				"id": "onHudEnd",
+				"args": [self.renderInfo.frameCount, self.pass++]
+			}));
+		},
+		"onRenderViewEnd": function() {
+			// Note: The onRenderViewEnd currently will always be called in the engine.
+		}
+	};
+	
 	interop.sendMessage(this.args.indexInteropId, JSON.stringify({
 		"id": "engineCreated",
 		"args": [interop.id]
 	}));
-	
+
 	this.connect();
 }
 
@@ -200,176 +277,57 @@ AfxEngineInterop.prototype.onMessage = function(senderId, message) {
 	const args = JSON.parse(message);
 	this.messageHandlers[args.id].apply(this, args.args);
 }
-
-AfxEngineInterop.prototype.onGameEvent = function(e){
-	this.interop.sendMessage(this.args.drawingInteropId, JSON.stringify({
-		"id": "onGameEvent",
-		"args": [e]
-	}));
-}
-
-AfxEngineInterop.prototype.onCommands = function(commands) {
-	
-	if(this.firstConnection) {
-		this.firstConnection = false;
-		this.interop.scheduleCommand("echo afx_interop send cefhud - To send commands to me.");
-	}
-	
-	for(var i=0; i < commands.length; ++i)
-	{
-		var command = commands[i];
-		if(0 < command.length)
-		{
-			if(2 <= command.length && "cefhud" === command[1])
-			{
-				if(3 <= command.length)
-				{
-					var handled = false;
-					var command2 = command[2];
-					switch(command2)
-					{
-					case "echo":
-						var result = "echo";
-						for(var j=3; j < command.length; ++j)
-						{
-							result += " "+command[j];
-						}
-						this.interop.scheduleCommand(result);
-						handled = true;
-						break;
-					}
-					
-					if(handled) continue;
-				}
-				this.interop.scheduleCommand("echo \""+command[0]+" cefhud echo <sText>+ - echo text back to CS:GO.\"");
-			}
-		}
-	}
-}
-
-AfxEngineInterop.prototype.onRenderViewBegin = function(renderInfo) {
-	
-	this.renderInfo = renderInfo;
-	this.pass = 0;
-	
-	this.interop.sendMessage(this.args.drawingInteropId, JSON.stringify({
-		"id": "onRenderViewBegin",
-		"args": [renderInfo]
-	}));
-	
-	var passes = {};
-	
-	//passes["beforeTranslucentShadow"] = true;
-	//passes["afterTranslucentShadow"] = true;
-	//passes["beforeTranslucent"] = true;
-	//passes["afterTranslucent"] = true;
-	passes["beforeHud"] = true;
-	//passes["afterHud"] = true;
-	//passes["afterRenderView"] = true; // Controls drawing only, onRenderViewBegin will be called nevertheless.
-	
-	return passes;
-}
-
-AfxEngineInterop.prototype.onHudEnd = function(){
-	this.interop.sendMessage(this.args.drawingInteropId, JSON.stringify({
-		"id": "onHudEnd",
-		"args": [this.renderInfo.frameCount, this.pass++]
-	}));
-}
-
-AfxEngineInterop.prototype.onRenderViewEnd = function() {
-	// Note: The onRenderViewEnd currently will always be called in the engine.
-	
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 
-AfxEngineInterop.prototype.queueTask = function(task) {
-	
+AfxEngineInterop.prototype.connect = function() {
 	var self = this;
+
+	self.interop.connect(function(connected){
 	
-	this.taskQueue.push(task);
+		if(connected && self.drawingConnected)
+		{
+			queueMicrotask(function(){
+				console.log("connected "+self.pumpEvents.onNewConnection);
+				self.interop.pump(self.pumpEvents, {});
+			});
+		}
+		else if(!self.drawingConnected) {
+			self.interop.sendMessage(self.args.drawingInteropId, JSON.stringify({
+				"id": "connect",
+				"args": [self.interop.id]
+			}));
+		}
+		else {
+			queueMicrotask(function(){
+				self.connect();
+			});
+		}
+	}, function(){
 	
-	if(this.taskQueue.length === 1) {
-		queueMicrotask(function(){
-			for(var i = 0; i < self.taskQueue.length; ++i)
-			{
-				self.taskQueue[i].call(self);
-			}
-			self.taskQueue = [];
-		});
-	}
+		console.log("connect failed");
+		
+		self.interop.disconnect();
+	});
 }
 
-AfxEngineInterop.prototype.connect = function() {
-	if(!this.interop.connect() || !this.drawingConnected)
-	{
+AfxEngineInterop.prototype.disconnect = function() {
+	if(this.drawingConnected) {
 		this.interop.sendMessage(this.args.drawingInteropId, JSON.stringify({
-			"id": "connect",
+			"id": "disconnect",
 			"args": [this.interop.id]
 		}));
 		
 		return;
 	}
 	
-	this.pump();
-}
-
-
-AfxEngineInterop.prototype.pump = function() {
-	if(!this.interop.pump())
-	{
-		console.log("Pumping failed.");
-		this.disconnect();
-		
-		return;
-	}
-	
-	var self = this;
-	
-	this.timeout = setTimeout(function(){
-		self.pump();
-	}, 10);
-}
-
-AfxEngineInterop.prototype.disconnect = function() {
-	if(this.timeout !== null) {
-		clearTimeout(this.timeout);
-		this.timeout = null;
-	}
-	
-	if(this.drawingConnected) {
-		//this.interop.sendMessage(this.args.drawingInteropId, JSON.stringify({
-		//	"id": "disconnect",
-		//	"args": [this.interop.id]
-		//}));
-		
-		return;
-	}
-	
 	this.interop.close();
 	
-	this.disconnecting();
-}
-
-AfxEngineInterop.prototype.disconnecting = function() {
+	// retry in a second.
 	
-	if(this.drawingConnected)
-	{
-		var self = this;
-		
-		this.timeout = setTimeout(function(){
-			self.disconnecting();
-		}, 100);
-		return;
-	}
-	
-	if(this.timeout !== null) {
-		clearTimeout(this.timeout);
-		this.timeout = null;
-	}
-
-	this.connect();
+	var self = this;
+	setTimeout(function(){
+		self.interop.connect();
+	}, 1000);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

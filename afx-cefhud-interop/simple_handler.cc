@@ -31,28 +31,9 @@ std::string GetDataURI(const std::string& data, const std::string& mime_type) {
 }  // namespace
 
 SimpleHandler::SimpleHandler()  {
-  m_WaitConnectionThread = std::thread(&SimpleHandler::WaitConnectionThreadHandler, this);
 }
 
 SimpleHandler::~SimpleHandler() {
-  m_WaitConnectionQuit = true;
-  if(m_WaitConnectionThread.joinable()) m_WaitConnectionThread.join();
-}
-
-void SimpleHandler::WaitConnectionThreadHandler(void) {
-
-  std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_handler_");
-  strPipeName.append(std::to_string(GetCurrentProcessId()));
-
-  while(!m_WaitConnectionQuit)
-  {
-    try {
-      this->WaitForConnection(strPipeName.c_str(),512,512,500);
-    }
-    catch(...) {
-
-    }
-  }
 }
 
 void SimpleHandler::OnTitleChange(CefRefPtr<CefBrowser> browser,
@@ -61,7 +42,6 @@ void SimpleHandler::OnTitleChange(CefRefPtr<CefBrowser> browser,
 
   PlatformTitleChange(browser, title);
 }
-
 
 void SimpleHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
@@ -177,9 +157,7 @@ void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> browser,
 
   auto it = m_Browsers.find(browser->GetIdentifier());
   if (it != m_Browsers.end()) {
-    if (CHostPipeServerConnectionThread* connection = it->second.Connection) {
-      rect.Set(0, 0, connection->GetWidth(), connection->GetHeight());
-    }
+      rect.Set(0, 0, it->second.m_Width, it->second.m_Height);
   }
 }
 
@@ -189,18 +167,19 @@ void SimpleHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
     void* share_handle) {
 
   if (PET_VIEW == type) {
+    std::unique_lock<std::mutex> lock(m_BrowserMutex);
     auto it = m_Browsers.find(browser->GetIdentifier());
     if (it != m_Browsers.end()) {
-      if (CHostPipeServerConnectionThread* connection = it->second.Connection) {
-        try
-        {
-          connection->OnPainted(share_handle);
-        }
-        catch(...)
-        {
+      CefRefPtr<CefBrowser> targetBrowser = it->second.Browser;
+      lock.unlock();
 
-        }
-      }
+      auto targetMessage = CefProcessMessage::Create("afx-render");
+      auto targetArgs = targetMessage->GetArgumentList();
+      targetArgs->SetInt(0, (int)((unsigned __int64)share_handle & 0xFFFFFFFF));
+      targetArgs->SetInt(1, (int)((unsigned __int64)share_handle >> 32));
+
+      targetBrowser->GetMainFrame()->SendProcessMessage(PID_RENDERER,
+                                                        targetMessage);
     }
   }
 }
@@ -211,6 +190,111 @@ bool SimpleHandler::OnProcessMessageReceived(
     CefRefPtr<CefFrame> frame,
     CefProcessId source_process,
     CefRefPtr<CefProcessMessage> message) {
+
+    auto name = message->GetName();
+
+    if (name == "afx-message") {
+      auto args = message->GetArgumentList();
+
+      auto argTargetId = args->GetInt(0);
+      auto argMessage = args->GetString(1);
+
+      std::unique_lock<std::mutex> lock(m_BrowserMutex);
+      auto it = m_Browsers.find(argTargetId);
+      if (it != m_Browsers.end()) {
+        CefRefPtr<CefBrowser> targetBrowser = it->second.Browser;
+        lock.unlock();
+
+        auto targetMessage = CefProcessMessage::Create("afx-message");
+        auto targetArgs = targetMessage->GetArgumentList();
+        targetArgs->SetInt(0, browser->GetIdentifier());
+        targetArgs->SetString(1, argMessage);
+
+         targetBrowser->GetMainFrame()->SendProcessMessage(PID_RENDERER,
+                                                          targetMessage);
+
+         return true;
+      }
+    } else if (name == "afx-resize") {
+      auto args = message->GetArgumentList();
+      auto argWidth = args->GetInt(0);
+      auto argHeight = args->GetInt(1);
+
+      std::unique_lock<std::mutex> lock(m_BrowserMutex);
+      auto it = m_Browsers.find(browser->GetIdentifier());
+      if (it != m_Browsers.end()) {
+        CefRefPtr<CefBrowser> targetBrowser = it->second.Browser;
+        it->second.m_Width = argWidth;
+        it->second.m_Height = argHeight;
+        lock.unlock();
+
+        browser->GetHost()->WasResized();
+
+        return true;
+      }
+
+    } else if (name == "afx-render") {
+
+      std::unique_lock<std::mutex> lock(m_BrowserMutex);
+      auto it = m_Browsers.find(browser->GetIdentifier());
+      if (it != m_Browsers.end()) {
+        CefRefPtr<CefBrowser> targetBrowser = it->second.Browser;
+        lock.unlock();
+
+        browser->GetHost()->SendExternalBeginFrame();
+
+        return true;
+      }
+
+    } else if (name == "afx-create-drawing") {
+      auto args = message->GetArgumentList();
+      auto argUrl = args->GetString(0);
+      auto argStr = args->GetString(1);
+
+      CefBrowserSettings browser_settings;
+      browser_settings.file_access_from_file_urls = STATE_ENABLED;
+      browser_settings.windowless_frame_rate =
+          60;  // vsync doesn't matter only if external_begin_frame_enabled
+      CefWindowInfo window_info;
+      window_info.SetAsWindowless(NULL);
+      window_info.shared_texture_enabled = true;
+      window_info.external_begin_frame_enabled = true;
+      window_info.width = 640;
+      window_info.height = 360;
+
+      CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
+      extra_info->SetString("interopType", "drawing");
+      extra_info->SetString("argStr", argStr);
+
+      CefBrowserHost::CreateBrowser(window_info, this, argUrl, browser_settings,
+                                    extra_info, nullptr);
+
+      return true;
+    } else if (name == "afx-create-engine") {
+      auto args = message->GetArgumentList();
+      auto argUrl = args->GetString(0);
+      auto argStr = args->GetString(1);
+
+      CefBrowserSettings browser_settings;
+      browser_settings.file_access_from_file_urls = STATE_ENABLED;
+      browser_settings.windowless_frame_rate = 1;
+
+      CefWindowInfo window_info;
+      window_info.SetAsWindowless(NULL);
+      window_info.shared_texture_enabled = false;
+      window_info.external_begin_frame_enabled = true;
+      window_info.width = 640;
+      window_info.height = 360;
+
+      CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
+      extra_info->SetString("interopType", "engine");
+      extra_info->SetString("argStr", argStr);
+
+      CefBrowserHost::CreateBrowser(window_info, this, argUrl, browser_settings,
+                                    extra_info, nullptr);
+
+      return true;
+    }
 
   return false;
 }

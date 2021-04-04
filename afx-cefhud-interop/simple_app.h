@@ -47,13 +47,13 @@ class SimpleApp : public CefApp,
                                 CefRefPtr<CefV8Context> context) OVERRIDE {
 
     if (frame->IsMain()) {
-      if(m_ExtraInfo->HasKey("interopType") && m_ExtraInfo->HasKey("argStr") && m_ExtraInfo->HasKey("handlerId")) {
+      if(m_ExtraInfo->HasKey("interopType") && m_ExtraInfo->HasKey("argStr")) {
         if (m_ExtraInfo->GetString("interopType").compare("drawing") == 0) {
           auto window = context->GetGlobal();
           window->SetValue(
               "afxInterop",
               advancedfx::interop::CreateDrawingInterop(
-                  browser, frame, context, m_ExtraInfo->GetString("argStr"), m_ExtraInfo->GetInt("handlerId"), &m_Interop),
+                  browser, frame, context, m_ExtraInfo->GetString("argStr"), &m_Interop),
               V8_PROPERTY_ATTRIBUTE_NONE);
         }
         else if (m_ExtraInfo->GetString("interopType").compare("engine") == 0) {
@@ -61,14 +61,14 @@ class SimpleApp : public CefApp,
           window->SetValue("afxInterop",
                            advancedfx::interop::CreateEngineInterop(
                                browser, frame, context,
-                               m_ExtraInfo->GetString("argStr"), m_ExtraInfo->GetInt("handlerId"), &m_Interop),
+                               m_ExtraInfo->GetString("argStr"), &m_Interop),
                                V8_PROPERTY_ATTRIBUTE_NONE);
         }
         else if (m_ExtraInfo->GetString("interopType").compare("index") == 0) {
           auto window = context->GetGlobal();
           window->SetValue("afxInterop",advancedfx::interop::CreateInterop(
                                browser, frame, context,
-                               m_ExtraInfo->GetString("argStr"), m_ExtraInfo->GetInt("handlerId"), &m_Interop),
+                               m_ExtraInfo->GetString("argStr"), &m_Interop),
                                V8_PROPERTY_ATTRIBUTE_NONE);
         }
       }

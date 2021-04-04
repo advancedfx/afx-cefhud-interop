@@ -33,7 +33,6 @@ CefRefPtr<CefV8Value> CreateInterop(CefRefPtr<CefBrowser> browser,
                               CefRefPtr<CefFrame> frame,
                                           CefRefPtr<CefV8Context> context,
                                           const CefString& argStr,
-                                          DWORD handlerId,
                                           CefRefPtr<CInterop>* out = nullptr);
 
 CefRefPtr<CefV8Value> CreateEngineInterop(
@@ -41,7 +40,6 @@ CefRefPtr<CefV8Value> CreateEngineInterop(
     CefRefPtr<CefFrame> frame,
     CefRefPtr<CefV8Context> context,
     const CefString& argStr,
-    DWORD handlerId,
     CefRefPtr<CInterop>* out = nullptr);
 
 CefRefPtr<CefV8Value> CreateDrawingInterop(
@@ -49,7 +47,6 @@ CefRefPtr<CefV8Value> CreateDrawingInterop(
     CefRefPtr<CefFrame> frame,
     CefRefPtr<CefV8Context> context,
     const CefString& argStr,
-    DWORD handlerId,
     CefRefPtr<CInterop>* out = nullptr);
 
 class CPipeHandle {
