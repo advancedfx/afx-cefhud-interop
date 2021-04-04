@@ -1013,7 +1013,7 @@ template<class Tag>using type_t=typename Tag::type;
 
 class CAfxValue : public CefBaseRefCounted {
  public:
-  enum class ValueType { Invalid, Array, Object, Bool, Int, UInt, Double, V8Function, String };
+  enum class ValueType { Invalid, Array, Object, Bool, Int, UInt, Double, V8Function, String, Time };
 
   static CefRefPtr<CAfxValue> FromV8Value(CefRefPtr<CefV8Value> value) {
     return new CAfxValue(value);
@@ -1071,6 +1071,14 @@ class CAfxValue : public CefBaseRefCounted {
     CefRefPtr<CAfxValue> result = new CAfxValue();
     result->m_String = value;
     result->m_ValueType = ValueType::String;
+    return result;
+  }
+
+  
+  static CefRefPtr<CAfxValue> CreateTime(time_t value) {
+    CefRefPtr<CAfxValue> result = new CAfxValue();
+    result->m_Value.Time = value;
+    result->m_ValueType = ValueType::Time;
     return result;
   }
 
@@ -1158,6 +1166,8 @@ class CAfxValue : public CefBaseRefCounted {
       return m_Function;
   }
 
+  bool IsTime() { return m_ValueType == ValueType::Time; }
+
     bool IsString() { return m_ValueType == ValueType::String; }
 
 
@@ -1188,6 +1198,13 @@ class CAfxValue : public CefBaseRefCounted {
       return m_Function;
 
     return nullptr;
+  }
+
+    time_t GetTime() {
+    if (m_ValueType == ValueType::Time)
+      return m_Value.Time;
+
+    return false;
   }
 
   int GetBool() {
@@ -1224,10 +1241,10 @@ class CAfxValue : public CefBaseRefCounted {
     return 0;
   }
 
-  std::string GetString() {
+  const std::string & GetString() {
     if (m_ValueType == ValueType::String)
       return m_String;
-    return "";
+    return m_String;
   }
 
   CefRefPtr<CefV8Value> ToV8Value() {
@@ -1263,6 +1280,8 @@ class CAfxValue : public CefBaseRefCounted {
         }
         case ValueType::String:
           return CefV8Value::CreateString(m_String);
+        case ValueType::Time:
+          return CefV8Value::CreateDate(CefTime(m_Value.Time));
       }
 
       return nullptr;
@@ -1277,6 +1296,7 @@ class CAfxValue : public CefBaseRefCounted {
     int Int;
     unsigned int UInt;
     double Double;
+    time_t Time;
   } m_Value;
   CefRefPtr<CefV8Value> m_Function;
   std::string m_String;
@@ -4871,12 +4891,11 @@ public:
                                           const CefV8ValueList& arguments,
                                           CefRefPtr<CefV8Value>& retval,
                                           CefString& exceptionoverride) {
-      if (2 <= arguments.size() && arguments[0]->IsObject() &&
-          arguments[1]->IsObject()) {
+      if (1 <= arguments.size()) {
 
         self->m_PipeQueue.Queue(
             [self, filter = new CAfxValue(arguments[0]),
-                                 obj = new CAfxValue(arguments[1])]() {
+                                 obj = new CAfxValue(2 <= arguments.size() ? arguments[1] : nullptr)]() {
           self->DoPump(filter, obj);
         });
 
@@ -4895,25 +4914,6 @@ public:
           self->m_PipeQueue.Queue([self]() { self->Close(); });
           return true;
         });
-
-   afxObject->AddFunction("scheduleCommand",
-       [self](const CefString& name, CefRefPtr<CefV8Value> object,
-              const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-              CefString& exceptionoverride) {
-         if (1 <= arguments.size()) {
-           const CefRefPtr<CefV8Value>& arg0 = arguments[0];
-           if (arg0->IsString()) {
-             self->m_PipeQueue.Queue(
-                 [self, cmd = arg0->GetStringValue().ToString()]() {
-                   self->m_Commands.emplace(cmd.c_str());
-                 });
-             return true;
-           }
-         }
-
-         exceptionoverride = g_szInvalidArguments;
-         return true;
-       });
 
 /*
    afxObject->AddFunction("addCalcHandle",
@@ -5029,7 +5029,7 @@ public:
          exceptionoverride = g_szInvalidArguments;
          return true;
        });
-
+*/
    afxObject->AddFunction(
        "gameEventAllowAdd",
        [self](const CefString& name, CefRefPtr<CefV8Value> object,
@@ -5037,10 +5037,14 @@ public:
               CefString& exceptionoverride) {
          if (1 == arguments.size() &&
              arguments[0]->IsString()) {
-           std::string val = arguments[0]->GetStringValue().ToString();
 
-           self->m_GameEventsAllowDeletions.erase(val);
-           self->m_GameEventsAllowAdditions.insert(val);
+             self->m_PipeQueue.Queue(
+               [self, val = arguments[0]->GetStringValue()]() {
+                 std::string strVal = val.ToString();
+
+                 self->m_GameEventsAllowDeletions.erase(strVal);
+                 self->m_GameEventsAllowAdditions.insert(strVal);
+               });
 
            return true;
          }
@@ -5054,10 +5058,14 @@ public:
               CefString& exceptionoverride) {
          if (1 == arguments.size() &&
              arguments[0]->IsString()) {
-           std::string val = arguments[0]->GetStringValue().ToString();
 
-           self->m_GameEventsAllowAdditions.erase(val);
-           self->m_GameEventsAllowDeletions.insert(val);
+             self->m_PipeQueue.Queue(
+               [self, val = arguments[0]->GetStringValue()]() {
+                 std::string strVal = val.ToString();
+
+        self->m_GameEventsAllowAdditions.erase(strVal);
+                 self->m_GameEventsAllowDeletions.insert(strVal);
+               });
 
            return true;
          }
@@ -5071,10 +5079,14 @@ public:
               CefString& exceptionoverride) {
          if (1 == arguments.size() &&
              arguments[0]->IsString()) {
-           std::string val = arguments[0]->GetStringValue().ToString();
 
-           self->m_GameEventsDenyDeletions.erase(val);
-           self->m_GameEventsDenyAdditions.insert(val);
+             self->m_PipeQueue.Queue(
+               [self, val = arguments[0]->GetStringValue()]() {
+                 std::string strVal = val.ToString();
+
+           self->m_GameEventsDenyDeletions.erase(strVal);
+                 self->m_GameEventsDenyAdditions.insert(strVal);
+               });
 
            return true;
          }
@@ -5087,10 +5099,16 @@ public:
               CefString& exceptionoverride) {
          if (1 == arguments.size() &&
              arguments[0]->IsString()) {
-           std::string val = arguments[0]->GetStringValue().ToString();
 
-           self->m_GameEventsDenyAdditions.erase(val);
-           self->m_GameEventsDenyDeletions.insert(val);
+           self->m_PipeQueue.Queue(
+               [self, val = arguments[0]->GetStringValue()]() {
+                 std::string strVal = val.ToString();
+
+
+           self->m_GameEventsDenyAdditions.erase(strVal);
+                 self->m_GameEventsDenyDeletions.insert(strVal);
+               });
+
 
            return true;
          }
@@ -5104,32 +5122,34 @@ public:
               CefString& exceptionoverride) {
          if (3 == arguments.size() && arguments[0]->IsString() &&
              arguments[1]->IsString() && arguments[2]->IsUInt()) {
-           std::string strEvent = arguments[0]->GetStringValue().ToString();
-           std::string strProperty = arguments[1]->GetStringValue().ToString();
-           unsigned int uiEnrichments = arguments[2]->GetUIntValue();
+
+           self->m_PipeQueue.Queue(
+               [self, strEvent = arguments[0]->GetStringValue(),
+                strProperty = arguments[1]->GetStringValue(),
+                uiEnrichments = arguments[2]->GetUIntValue()]() {
 
            self->m_GameEventsEnrichmentsChanges[GameEventEnrichmentKey_s(
-               strEvent.c_str(), strProperty.c_str())] = uiEnrichments;
+                 strEvent.ToString().c_str(), strProperty.ToString().c_str())] =
+                 uiEnrichments;
+               });
 
            return true;
          }
          exceptionoverride = g_szInvalidArguments;
          return true;
        });
-       */
-   self->m_OnGameEvent = afxObject->AddCallback("onGameEvent");
-   /*
    afxObject->AddFunction("gameEventSetTransmitClientTime",
        [self](const CefString& name, CefRefPtr<CefV8Value> object,
               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
               CefString& exceptionoverride) {
          if (1 == arguments.size() && arguments[0]->IsBool()) {
-           bool value = arguments[0]->GetBoolValue();
-
-           self->m_GameEventsTransmitChanged =
-               self->m_GameEventsTransmitChanged ||
-               value != self->m_GameEventsTransmitClientTime;
-           self->m_GameEventsTransmitClientTime = value;
+           self->m_PipeQueue.Queue(
+               [self, value = arguments[0]->GetBoolValue()] {
+                 self->m_GameEventsTransmitChanged =
+                     self->m_GameEventsTransmitChanged ||
+                     value != self->m_GameEventsTransmitClientTime;
+                 self->m_GameEventsTransmitClientTime = value;
+               });
 
            return true;
          }
@@ -5143,12 +5163,13 @@ public:
               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
               CefString& exceptionoverride) {
          if (1 == arguments.size() && arguments[0]->IsBool()) {
-           bool value = arguments[0]->GetBoolValue();
-
-           self->m_GameEventsTransmitChanged =
-               self->m_GameEventsTransmitChanged ||
-               value != self->m_GameEventsTransmitTick;
-           self->m_GameEventsTransmitTick = value;
+           self->m_PipeQueue.Queue(
+               [self, value = arguments[0]->GetBoolValue()] {
+                 self->m_GameEventsTransmitChanged =
+                     self->m_GameEventsTransmitChanged ||
+                     value != self->m_GameEventsTransmitTick;
+                 self->m_GameEventsTransmitTick = value;
+               });
 
            return true;
          }
@@ -5162,19 +5183,20 @@ public:
               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
               CefString& exceptionoverride) {
          if (1 == arguments.size() && arguments[0]->IsBool()) {
-           bool value = arguments[0]->GetBoolValue();
-
-           self->m_GameEventsTransmitChanged =
-               self->m_GameEventsTransmitChanged ||
-               value != self->m_GameEventsTransmitSystemTime;
-           self->m_GameEventsTransmitSystemTime = value;
+           self->m_PipeQueue.Queue(
+               [self, value = arguments[0]->GetBoolValue()] {
+                 self->m_GameEventsTransmitChanged =
+                     self->m_GameEventsTransmitChanged ||
+                     value != self->m_GameEventsTransmitSystemTime;
+                 self->m_GameEventsTransmitSystemTime = value;
+               });
 
            return true;
          }
          exceptionoverride = g_szInvalidArguments;
          return true;
        });
-*/
+
    afxObject->AddFunction(
        "renderCefFrame",
        [self, frame](const CefString& name, CefRefPtr<CefV8Value> object,
@@ -5316,7 +5338,7 @@ virtual bool OnProcessMessageReceived(
         AFX_GOTO_ERROR
 #endif
 
-      if (!WriteGameEventSettings(false))
+      if (!WriteGameEventSettings(false, filter))
         AFX_GOTO_ERROR
 
       if (!m_PipeServer->Flush())
@@ -5398,7 +5420,7 @@ virtual bool OnProcessMessageReceived(
         } goto __2;
 
         case EngineMessage::BeforeFrameRenderStart: {
-          if (!WriteGameEventSettings(true))
+          if (!WriteGameEventSettings(true, filter))
             AFX_GOTO_ERROR
           if (!m_PipeServer->Flush())
             AFX_GOTO_ERROR
@@ -5666,23 +5688,33 @@ virtual bool OnProcessMessageReceived(
         } goto __5;
  
 
-        case EngineMessage::GameEvent:
-          if (!ReadGameEvent())
+        case EngineMessage::GameEvent: {
+          bool bReturn = false;
+          m_PumpResumeAt = 1;
+          if (!ReadGameEvent(filter, bReturn))
             AFX_GOTO_ERROR
-          break;
+          if (bReturn) {
+            return;
+          }
+        }
+          goto __1;
       }
     }
 
     AFX_GOTO_ERROR
 
-__2: {
-    if (!m_PipeServer->WriteCompressedUInt32((UINT32)m_Commands.size()))
+        __2: {
+      int len = obj && obj->IsArray() ? obj->GetArraySize() : 0;
+
+    if (!m_PipeServer->WriteCompressedUInt32((UINT32)(len)))
       AFX_GOTO_ERROR
 
-    while (!m_Commands.empty()) {
-      if (!m_PipeServer->WriteStringUTF8(m_Commands.front().c_str()))
-        AFX_GOTO_ERROR
-      m_Commands.pop();
+    for(int i = 0; i < len; ++i) {
+      auto elem = obj->GetArrayElement(i);
+      if (nullptr != elem && elem->IsString()) {
+        if (!m_PipeServer->WriteStringUTF8(elem->GetString()))
+          AFX_GOTO_ERROR
+      }
     }
 
     if (!m_PipeServer->Flush())
@@ -5775,45 +5807,45 @@ __4 : {
 __5 : {
       bool overriden = false;
 
-      if (obj && obj->IsObject()) {
+      if (nullptr != obj && obj->IsObject()) {
         CefRefPtr<CAfxValue> v8Tx = obj->GetChild("tX");
-        if (v8Tx && v8Tx->IsDouble()) {
+        if (nullptr != v8Tx && v8Tx->IsDouble()) {
           m_Tx = (float)v8Tx->GetDouble();
           overriden = true;
         }
 
         CefRefPtr<CAfxValue> v8Ty = obj->GetChild("tY");
-        if (v8Ty && v8Ty->IsDouble()) {
+        if (nullptr != v8Ty && v8Ty->IsDouble()) {
           m_Ty = (float)v8Ty->GetDouble();
           overriden = true;
         }
 
         CefRefPtr<CAfxValue> v8Tz = obj->GetChild("tZ");
-        if (v8Tz && v8Tz->IsDouble()) {
+        if (nullptr != v8Tz && v8Tz->IsDouble()) {
           m_Tz = (float)v8Tz->GetDouble();
           overriden = true;
         }
 
         CefRefPtr<CAfxValue> v8Rx = obj->GetChild("rX");
-        if (v8Rx && v8Rx->IsDouble()) {
+        if (nullptr != v8Rx && v8Rx->IsDouble()) {
           m_Rx = (float)v8Rx->GetDouble();
           overriden = true;
         }
 
         CefRefPtr<CAfxValue> v8Ry = obj->GetChild("rY");
-        if (v8Ry && v8Ry->IsDouble()) {
+        if (nullptr != v8Ry && v8Ry->IsDouble()) {
           m_Ry = (float)v8Ry->GetDouble();
           overriden = true;
         }
 
         CefRefPtr<CAfxValue> v8Rz = obj->GetChild("rZ");
-        if (v8Rz && v8Rz->IsDouble()) {
+        if (nullptr != v8Rz && v8Rz->IsDouble()) {
           m_Rz = (float)v8Rz->GetDouble();
           overriden = true;
         }
 
         CefRefPtr<CAfxValue> v8Fov = obj->GetChild("fov");
-        if (v8Fov && v8Fov->IsDouble()) {
+        if (nullptr != v8Fov && v8Fov->IsDouble()) {
           m_Fov = (float)v8Fov->GetDouble();
           overriden = true;
         }
@@ -5849,8 +5881,8 @@ __5 : {
   }
 
   error:
-    AFX_PRINT_ERROR("CEngineInteropImpl::DoPump", errorLine)
-    m_PumpResumeAt = -1;
+    //AFX_PRINT_ERROR("CEngineInteropImpl::DoPump", errorLine)
+    m_PumpResumeAt = 0;
     auto onError = GetPumpFilter(filter, "onError");
     if (nullptr != onError) {
       CefPostTask(TID_RENDERER, new CAfxTask([this, onError, errorLine]() {
@@ -5975,8 +6007,6 @@ private:
 
   bool m_NewConnection = true;
 
-  std::queue<std::string> m_Commands;
-
   CHandleCalcCallbacks m_HandleCalcCallbacks;
   CVecAngCalcCallbacks m_VecAngCalcCallbacks;
   CCamCalcCallbacks m_CamCalcCallbacks;
@@ -5986,7 +6016,6 @@ private:
 
   CefRefPtr<CAfxCallback> m_OnMessage;
   CefRefPtr<CAfxCallback> m_OnError;
-  CefRefPtr<CAfxCallback> m_OnGameEvent;
 
   CefRefPtr<CAfxCallback> m_OnCefFrameRendered;
 
@@ -6074,7 +6103,7 @@ private:
     auto onRenderPass = GetPumpFilter(filter, what);
     if (nullptr != onRenderPass) {
       m_PumpResumeAt = 1;
-
+      bReturn = true;
       CefPostTask(TID_RENDERER, new CAfxTask([this, onRenderPass,
                                               argView = CreateAfxView(view)]() {
                     m_Context->Enter();
@@ -6083,7 +6112,6 @@ private:
                     onRenderPass->ExecuteFunction(nullptr, args);
                     m_Context->Exit();
                   }));
-      bReturn = true;
       return true;
     }
 
@@ -6142,7 +6170,10 @@ private:
 
   std::map<int, KnownGameEvent_s> m_KnownGameEvents;
 
-  bool ReadGameEvent() {
+  bool ReadGameEvent(CefRefPtr<CAfxValue> filter, bool & bReturn) {
+
+    bReturn = false;
+
     int iEventId;
     if (!m_PipeServer->ReadInt32(iEventId))
       return false;
@@ -6190,35 +6221,30 @@ private:
     if (itKnown == m_KnownGameEvents.end())
       return false;
 
-    CefRefPtr<CefV8Value> objEvent =
-        CefV8Value::CreateObject(nullptr, nullptr);
+    CefRefPtr<CAfxValue> objEvent = CAfxValue::CreateObject();
 
-    objEvent->SetValue("name", CefV8Value::CreateString(itKnown->second.Name),
-                        V8_PROPERTY_ATTRIBUTE_NONE);
+    objEvent->SetChild("name", CAfxValue::CreateString(itKnown->second.Name));
 
     if (m_GameEventsTransmitClientTime) {
       float clientTime;
       if (!m_PipeServer->ReadSingle(clientTime))
         return false;
-      objEvent->SetValue("clientTime", CefV8Value::CreateDouble(clientTime),
-                          V8_PROPERTY_ATTRIBUTE_NONE);
+      objEvent->SetChild("clientTime", CAfxValue::CreateDouble(clientTime));
     }
 
     if (m_GameEventsTransmitTick) {
       int tick;
       if (!m_PipeServer->ReadInt32(tick))
         return false;
-      objEvent->SetValue("tick", CefV8Value::CreateInt(tick),
-                          V8_PROPERTY_ATTRIBUTE_NONE);
+      objEvent->SetChild("tick", CAfxValue::CreateInt(tick));
     }
 
     if (m_GameEventsTransmitSystemTime) {
       uint64_t systemTime;
       if (!m_PipeServer->ReadUInt64(systemTime))
         return false;
-      CefTime time((time_t)systemTime);
-      objEvent->SetValue("systemTime", CefV8Value::CreateDate(time),
-                          V8_PROPERTY_ATTRIBUTE_NONE);
+      objEvent->SetChild("systemTime",
+                         CAfxValue::CreateTime((time_t)systemTime));
     }
 
     std::string tmpString;
@@ -6229,61 +6255,56 @@ private:
     bool tmpBool;
     unsigned __int64 tmpUint64;
 
-   CefRefPtr<CefV8Value> objKeys = CefV8Value::CreateObject(nullptr, nullptr);
+   CefRefPtr<CAfxValue> objKeys = CAfxValue::CreateObject();
 
     for (auto itKey = itKnown->second.Keys.begin();
          itKey != itKnown->second.Keys.end(); ++itKey) {
-      CefRefPtr<CefV8Value> objKey = CefV8Value::CreateObject(nullptr, nullptr);
+     CefRefPtr<CAfxValue> objKey = CAfxValue::CreateObject();
 
-      objKey->SetValue("type", CefV8Value::CreateInt((int)itKey->Type),
-                          V8_PROPERTY_ATTRIBUTE_NONE);
+      objKey->SetChild("type", CAfxValue::CreateInt((int)itKey->Type));
 
       switch (itKey->Type) {
         case GameEventFieldType::CString:
           if (!m_PipeServer->ReadStringUTF8(tmpString))
             return false;
-          objKey->SetValue("value", CefV8Value::CreateString(tmpString),
-                           V8_PROPERTY_ATTRIBUTE_NONE);
+          objKey->SetChild("value", CAfxValue::CreateString(tmpString));
           break;
         case GameEventFieldType::Float:
           if (!m_PipeServer->ReadSingle(tmpFloat))
             return false;
-          objKey->SetValue("value", CefV8Value::CreateDouble(tmpFloat),
-                           V8_PROPERTY_ATTRIBUTE_NONE);
+          objKey->SetChild("value", CAfxValue::CreateDouble(tmpFloat));
           break;
         case GameEventFieldType::Long:
           if (!m_PipeServer->ReadInt32(tmpLong))
             return false;
-          objKey->SetValue("value", CefV8Value::CreateInt(tmpLong),
-                           V8_PROPERTY_ATTRIBUTE_NONE);
+          objKey->SetChild("value", CAfxValue::CreateInt(tmpLong));
           break;
         case GameEventFieldType::Short:
           if (!m_PipeServer->ReadInt16(tmpShort))
             return false;
-          objKey->SetValue("value", CefV8Value::CreateInt(tmpShort),
-                           V8_PROPERTY_ATTRIBUTE_NONE);
+          objKey->SetChild("value", CAfxValue::CreateInt(tmpShort));
           break;
         case GameEventFieldType::Byte:
           if (!m_PipeServer->ReadByte(tmpByte))
             return false;
-          objKey->SetValue("value", CefV8Value::CreateUInt(tmpByte),
-                           V8_PROPERTY_ATTRIBUTE_NONE);
+          objKey->SetChild("value", CAfxValue::CreateUInt(tmpByte));
           break;
         case GameEventFieldType::Bool:
           if (!m_PipeServer->ReadBoolean(tmpBool))
             return false;
-          objKey->SetValue("value", CefV8Value::CreateBool(tmpBool),
-                           V8_PROPERTY_ATTRIBUTE_NONE);
+          objKey->SetChild("value", CAfxValue::CreateBool(tmpBool));
           break;
         case GameEventFieldType::Uint64:
           if (!m_PipeServer->ReadUInt64(tmpUint64))
             return false;
-          CefRefPtr<CefV8Value> objValue = CefV8Value::CreateArray(2);
-          objValue->SetValue(0, CefV8Value::CreateUInt(
+          CefRefPtr<CAfxValue> objValue = CAfxValue::CreateArray(2);
+          objValue->SetArrayElement(0, CAfxValue::CreateUInt(
                                     (unsigned int)(tmpUint64 & 0x0ffffffff)));
-          objValue->SetValue(1, CefV8Value::CreateUInt(
+          objValue->SetArrayElement(
+              1,
+              CAfxValue::CreateUInt(
                                     (unsigned int)(tmpUint64 & 0x0ffffffff)));
-          objKey->SetValue("value", objValue, V8_PROPERTY_ATTRIBUTE_NONE);
+          objKey->SetChild("value", objValue);
           break;
       }
 
@@ -6292,23 +6313,21 @@ private:
       if (itEnrichment != m_GameEventsEnrichments.end()) {
         int enrichmentType = itEnrichment->second;
 
-        CefRefPtr<CefV8Value> objEnrichments =
-            CefV8Value::CreateObject(nullptr, nullptr);
+        CefRefPtr<CAfxValue> objEnrichments =
+            CAfxValue::CreateObject();
 
         if (enrichmentType & (1 << 0)) {
           uint64_t value;
           if (!m_PipeServer->ReadUInt64(value))
             return false;
 
-          CefRefPtr<CefV8Value> objValue = CefV8Value::CreateArray(2);
-          objValue->SetValue(
-              0, CefV8Value::CreateUInt((unsigned int)(value & 0x0ffffffff)));
-          objValue->SetValue(1,
-                             CefV8Value::CreateUInt(
+          CefRefPtr<CAfxValue> objValue = CAfxValue::CreateArray(2);
+          objValue->SetArrayElement(
+              0, CAfxValue::CreateUInt((unsigned int)(value & 0x0ffffffff)));
+          objValue->SetArrayElement(1, CAfxValue::CreateUInt(
                                  (unsigned int)((value >> 32) & 0x0ffffffff)));
 
-          objEnrichments->SetValue("userIdWithSteamId", objValue,
-                                   V8_PROPERTY_ATTRIBUTE_NONE);
+          objEnrichments->SetChild("userIdWithSteamId", objValue);
         }
 
         if (enrichmentType & (1 << 1)) {
@@ -6320,16 +6339,12 @@ private:
           if (!m_PipeServer->ReadSingle(value.Z))
             return false;
 
-          CefRefPtr<CefV8Value> objValue =
-              CefV8Value::CreateObject(nullptr, nullptr);
-          objValue->SetValue("x", CefV8Value::CreateDouble(value.X),
-                             V8_PROPERTY_ATTRIBUTE_NONE);
-          objValue->SetValue("y", CefV8Value::CreateDouble(value.Y),
-                             V8_PROPERTY_ATTRIBUTE_NONE);
-          objValue->SetValue("z", CefV8Value::CreateDouble(value.Z),
-                             V8_PROPERTY_ATTRIBUTE_NONE);
-          objEnrichments->SetValue("entnumWithOrigin", objValue,
-                                   V8_PROPERTY_ATTRIBUTE_NONE);
+          CefRefPtr<CAfxValue> objValue =
+              CAfxValue::CreateObject();
+          objValue->SetChild("x", CAfxValue::CreateDouble(value.X));
+          objValue->SetChild("y", CAfxValue::CreateDouble(value.Y));
+          objValue->SetChild("z", CAfxValue::CreateDouble(value.Z));
+          objEnrichments->SetChild("entnumWithOrigin", objValue);
         }
 
         if (enrichmentType & (1 << 2)) {
@@ -6340,17 +6355,13 @@ private:
             return false;
           if (!m_PipeServer->ReadSingle(value.Roll))
             return false;
-          CefRefPtr<CefV8Value> objValue =
-              CefV8Value::CreateObject(nullptr, nullptr);
-          objValue->SetValue("pitch", CefV8Value::CreateDouble(value.Pitch),
-                             V8_PROPERTY_ATTRIBUTE_NONE);
-          objValue->SetValue("yaw", CefV8Value::CreateDouble(value.Yaw),
-                             V8_PROPERTY_ATTRIBUTE_NONE);
-          objValue->SetValue("roll", CefV8Value::CreateDouble(value.Roll),
-                             V8_PROPERTY_ATTRIBUTE_NONE);
+          CefRefPtr<CAfxValue> objValue =
+              CAfxValue::CreateObject();
+          objValue->SetChild("pitch", CAfxValue::CreateDouble(value.Pitch));
+          objValue->SetChild("yaw", CAfxValue::CreateDouble(value.Yaw));
+          objValue->SetChild("roll", CAfxValue::CreateDouble(value.Roll));
 
-          objEnrichments->SetValue("entnumWithAngles", objValue,
-                                   V8_PROPERTY_ATTRIBUTE_NONE);
+          objEnrichments->SetChild("entnumWithAngles", objValue);
         }
 
         if (enrichmentType & (1 << 3)) {
@@ -6362,16 +6373,12 @@ private:
           if (!m_PipeServer->ReadSingle(value.Z))
             return false;
 
-          CefRefPtr<CefV8Value> objValue =
-              CefV8Value::CreateObject(nullptr, nullptr);
-          objValue->SetValue("x", CefV8Value::CreateDouble(value.X),
-                             V8_PROPERTY_ATTRIBUTE_NONE);
-          objValue->SetValue("y", CefV8Value::CreateDouble(value.Y),
-                             V8_PROPERTY_ATTRIBUTE_NONE);
-          objValue->SetValue("z", CefV8Value::CreateDouble(value.Z),
-                             V8_PROPERTY_ATTRIBUTE_NONE);
-          objEnrichments->SetValue("useridWithEyePosition", objValue,
-                                   V8_PROPERTY_ATTRIBUTE_NONE);
+          CefRefPtr<CAfxValue> objValue =
+              CAfxValue::CreateObject();
+          objValue->SetChild("x", CAfxValue::CreateDouble(value.X));
+          objValue->SetChild("y", CAfxValue::CreateDouble(value.Y));
+          objValue->SetChild("z", CAfxValue::CreateDouble(value.Z));
+          objEnrichments->SetChild("useridWithEyePosition", objValue);
         }
 
         if (enrichmentType & (1 << 4)) {
@@ -6382,43 +6389,47 @@ private:
             return false;
           if (!m_PipeServer->ReadSingle(value.Roll))
             return false;
-          CefRefPtr<CefV8Value> objValue =
-              CefV8Value::CreateObject(nullptr, nullptr);
-          objValue->SetValue("pitch", CefV8Value::CreateDouble(value.Pitch),
-                             V8_PROPERTY_ATTRIBUTE_NONE);
-          objValue->SetValue("yaw", CefV8Value::CreateDouble(value.Yaw),
-                             V8_PROPERTY_ATTRIBUTE_NONE);
-          objValue->SetValue("roll", CefV8Value::CreateDouble(value.Roll),
-                             V8_PROPERTY_ATTRIBUTE_NONE);
+          CefRefPtr<CAfxValue> objValue =
+              CAfxValue::CreateObject();
+          objValue->SetChild("pitch", CAfxValue::CreateDouble(value.Pitch));
+          objValue->SetChild("yaw", CAfxValue::CreateDouble(value.Yaw));
+          objValue->SetChild("roll", CAfxValue::CreateDouble(value.Roll));
 
-          objEnrichments->SetValue("useridWithEyeAngels", objValue,
-                                   V8_PROPERTY_ATTRIBUTE_NONE);
+          objEnrichments->SetChild("useridWithEyeAngels", objValue);
         }
 
-        objKey->SetValue("enrichments", objEnrichments,
-                         V8_PROPERTY_ATTRIBUTE_NONE);
+        objKey->SetChild("enrichments", objEnrichments);
       }
 
-      objKeys->SetValue(itKey->Key, objKey, V8_PROPERTY_ATTRIBUTE_NONE);
+      objKeys->SetChild(itKey->Key.c_str(), objKey);
     }
 
-    objEvent->SetValue("keys", objKeys, V8_PROPERTY_ATTRIBUTE_NONE);
+    objEvent->SetChild("keys", objKeys);
 
-    if (m_OnGameEvent->IsValid()) {
-      CefV8ValueList args;
-      args.push_back(objEvent);
-      m_OnGameEvent->ExecuteCallback(args);
+    auto onGameEvent = GetPumpFilter(filter, "onGameEvent");
+    if (nullptr != onGameEvent) {
+      bReturn = true;
+      CefPostTask(TID_RENDERER, new CAfxTask([this, onGameEvent, objEvent]() {
+                m_Context->Enter();
+                    CefV8ValueList args;
+                args.push_back(objEvent->ToV8Value());
+                    onGameEvent->ExecuteFunction(nullptr, args);
+                m_Context->Exit();
+                       }));
     }
 
     return true;
   }
 
-  bool WriteGameEventSettings(bool delta) {
-    if (!m_PipeServer->WriteBoolean(m_OnGameEvent->IsValid() ? true
+  bool WriteGameEventSettings(bool delta, CefRefPtr<CAfxValue> filter) {
+
+    auto onGameEvent = GetPumpFilter(filter, "onGameEvent");
+
+    if (!m_PipeServer->WriteBoolean(nullptr != onGameEvent ? true
                                                                    : false))
       return false;
 
-    if (!m_OnGameEvent->IsValid())
+    if (nullptr == onGameEvent)
       return true;
 
     if (!delta) {

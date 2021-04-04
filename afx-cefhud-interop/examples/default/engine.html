@@ -67,7 +67,7 @@ function AfxEngineInterop(interop, args) {
 	// GameEvents:
 	//
 	// https://wiki.alliedmods.net/Counter-Strike:_Global_Offensive_Event
-	/*
+
 	interop.gameEventSetTransmitClientTime(true);
 	interop.gameEventSetTransmitTick(true);
 	
@@ -173,21 +173,18 @@ function AfxEngineInterop(interop, args) {
 	interop.gameEventSetEnrichment('ammo_refill', 'userid', useridEnrichtments);
 	// ... left out the dangerzone, feel free to add it ...
 	interop.gameEventSetEnrichment('weaponhud_selection', 'userid', useridEnrichtments);
-*/
+	
+	//
 
 	this.pumpEvents = {
 		// optional.
 		"onNewConnection": function(){
 			console.log("New connection");
-			queueMicrotask(function(){
-				self.interop.pump(self.pumpEvents, {});
-			});
+			self.interop.pump(self.pumpEvents);
 		},
 		// recommended.
 		"onDone": function(){
-			queueMicrotask(function(){
-				self.interop.pump(self.pumpEvents, {});
-			});
+			self.interop.pump(self.pumpEvents);
 		},
 		// recommended.
 		"onError": function(message){
@@ -197,9 +194,11 @@ function AfxEngineInterop(interop, args) {
 		// optional.
 		"onCommands": function(commands) {
 		
+			var doCommands = [];
+		
 			if(self.firstConnection) {
 				self.firstConnection = false;
-				self.interop.scheduleCommand("echo afx_interop send cefhud - To send commands to me.");
+				doCommands.push("echo afx_interop send cefhud - To send commands to me.");
 			}
 			
 			for(var i=0; i < commands.length; ++i)
@@ -221,20 +220,18 @@ function AfxEngineInterop(interop, args) {
 								{
 									result += " "+command[j];
 								}
-								self.interop.scheduleCommand(result);
+								doCommands.push(result);
 								handled = true;
 								break;
 							}
 							
 							if(handled) continue;
 						}
-						self.interop.scheduleCommand("echo \""+command[0]+" cefhud echo <sText>+ - echo text back to CS:GO.\"");
+						doCommands.push("echo \""+command[0]+" cefhud echo <sText>+ - echo text back to CS:GO.\"");
 					}
 				}
 			}
-			queueMicrotask(function(){
-				self.interop.pump(self.pumpEvents, {});
-			});
+			self.interop.pump(self.pumpEvents, doCommands);
 		},
 		// optional.
 		"onGameEvent": function(e){
@@ -242,9 +239,7 @@ function AfxEngineInterop(interop, args) {
 				"id": "onGameEvent",
 				"args": [e]
 			}));
-			queueMicrotask(function(){
-				self.interop.pump(self.pumpEvents, {});
-			});
+			self.interop.pump(self.pumpEvents);
 		},
 		// optional.
 		"onRenderViewBegin": function(renderInfo) {
@@ -256,44 +251,32 @@ function AfxEngineInterop(interop, args) {
 				"id": "onRenderViewBegin",
 				"args": [renderInfo]
 			}));
-			queueMicrotask(function(){
-				self.interop.pump(self.pumpEvents, {});
-			});
+			self.interop.pump(self.pumpEvents);
 		},
 		/*
 		// optional.
 		"onRenderViewBeforeTranslucent" : function(view) {
-			queueMicrotask(function(){
-				self.interop.pump(self.pumpEvents, {});
-			});
+			self.interop.pump(self.pumpEvents);
 		},*/
 		/*
 		// optional.
 		"onRenderViewAfterTranslucent" : function(view) {
-			queueMicrotask(function(){
-				self.interop.pump(self.pumpEvents, {});
-			});
+			self.interop.pump(self.pumpEvents);
 		},*/
 		/*
 		// optional.
 		"onRenderViewBeforeTranslucentShadow" : function(view) {
-			queueMicrotask(function(){
-				self.interop.pump(self.pumpEvents, {});
-			});
+			self.interop.pump(self.pumpEvents);
 		},*/
 		/*
 		// optional.
 		"onRenderViewAfterTranslucentShadow" : function(view) {
-			queueMicrotask(function(){
-				self.interop.pump(self.pumpEvents, {});
-			});
+			self.interop.pump(self.pumpEvents);
 		},*/
 		/*
 		// optional.
 		"onRenderViewHudBegin" : function() {
-			queueMicrotask(function(){
-				self.interop.pump(self.pumpEvents, {});
-			});
+			self.interop.pump(self.pumpEvents);
 		},*/
 		// optional.
 		"onRenderViewHudEnd": function(){
@@ -301,29 +284,23 @@ function AfxEngineInterop(interop, args) {
 				"id": "onHudEnd",
 				"args": [self.renderInfo.frameCount, self.pass++]
 			}));
-			queueMicrotask(function(){
-				self.interop.pump(self.pumpEvents, {});
-			});
+			self.interop.pump(self.pumpEvents);
 		},
 		// optional.
 		"onRenderViewEnd": function() {
-			queueMicrotask(function(){
-				self.interop.pump(self.pumpEvents, {});
-			});
+			self.interop.pump(self.pumpEvents);
 		},
 		/*
 		// optional.
 		"onViewOverride": function(view) {
-			queueMicrotask(function(){
-				self.interop.pump(self.pumpEvents, {
-					//tX: 0,
-					//tY: 0,
-					//tZ: 0,
-					//rX: 0,
-					//rY: 0,
-					//rZ: 0,
-					//fov: 90,
-				});
+			self.interop.pump(self.pumpEvents, {
+				//tX: 0,
+				//tY: 0,
+				//tZ: 0,
+				//rX: 0,
+				//rY: 0,
+				//rZ: 0,
+				//fov: 90,
 			});
 		},*/
 	};
@@ -349,10 +326,8 @@ AfxEngineInterop.prototype.connect = function() {
 	
 		if(connected && self.drawingConnected)
 		{
-			queueMicrotask(function(){
-				console.log("connected");
-				self.interop.pump(self.pumpEvents, {});
-			});
+			console.log("connected");
+			self.interop.pump(self.pumpEvents);
 		}
 		else if(!self.drawingConnected) {
 			self.interop.sendMessage(self.args.drawingInteropId, JSON.stringify({
@@ -389,7 +364,7 @@ AfxEngineInterop.prototype.disconnect = function() {
 	
 	var self = this;
 	setTimeout(function(){
-		self.interop.connect();
+		self.connect();
 	}, 1000);
 }
 

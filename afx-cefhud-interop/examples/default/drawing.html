@@ -562,7 +562,7 @@ function AfxDrawingInterop(interop,args) {
 			var docP = document.createElement('p');
 			docP.appendChild(document.createTextNode(JSON.stringify(e)));
 			this.divGameEvents.insertBefore(docP, this.divGameEvents.firstElementChild);
-			//console.log(JSON.stringify(e));
+			console.log(JSON.stringify(e));
 		},
 		"onHudEnd": function(frameCount,pass){
 			this.interop.pumpBegin(frameCount, pass, function(isInFlow) {
