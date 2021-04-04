@@ -1079,41 +1079,44 @@ class CAfxValue : public CefBaseRefCounted {
 
   CAfxValue(CefRefPtr<CefV8Value> value)
       : m_ValueType(ValueType::Invalid), m_Value({false}) {
-    if (value->IsString()) {
-      m_ValueType = ValueType::String;
-      m_String = value->GetStringValue().ToString();
-    }
-    else if (value->IsArray()) {
-      m_ValueType = ValueType::Array;
-      for (int i = 0; i < value->GetArrayLength(); ++i) {
-        m_Elements.emplace_back(FromV8Value(value->GetValue(i)));
-      }
-    } else if (value->IsObject() ) {
-      m_ValueType = ValueType::Object;
-      std::vector<CefString> keys;
-      if (value->GetKeys(keys)) {
+    if (value) {
+      if (value->IsBool()) {
+        m_ValueType = ValueType::Int;
+        m_Value.Double = value->GetBoolValue();
+      } else if (value->IsInt()) {
+        m_ValueType = ValueType::Int;
+        m_Value.Double = value->GetIntValue();
+      } else if (value->IsUInt()) {
+        m_ValueType = ValueType::UInt;
+        m_Value.UInt = value->GetUIntValue();
+      } else if (value->IsString()) {
+        m_ValueType = ValueType::String;
+        m_String = value->GetStringValue().ToString();
+      } else if (value->IsDouble()) {
+        m_ValueType = ValueType::Double;
+        m_Value.Double = value->GetDoubleValue();
+      } else if (value->IsFunction()) {
+        m_ValueType = ValueType::V8Function;
+        m_Function = value;
+      } else if (value->IsArray()) {
+        m_ValueType = ValueType::Array;
+        for (int i = 0; i < value->GetArrayLength(); ++i) {
+          m_Elements.emplace_back(FromV8Value(value->GetValue(i)));
+        }
+      } else if (value->IsObject()) {
+        m_ValueType = ValueType::Object;
+        std::vector<CefString> keys;
+        if (value->GetKeys(keys)) {
           int i = 0;
           for (auto it = keys.begin(); it != keys.end(); ++it) {
-            m_Children.emplace(it->ToString(), FromV8Value(value->GetValue(*it)));
+
+            m_Children.emplace(it->ToString(),
+                               FromV8Value(value->GetValue(*it)));
             ++i;
+          }
         }
       }
-    } else if (value->IsFunction()) {
-      m_ValueType = ValueType::V8Function;
-      m_Function = value;
-    } else if (value->IsDouble()) {
-      m_ValueType = ValueType::Double;
-      m_Value.Double = value->GetDoubleValue();
-    } else if (value->IsInt()) {
-      m_ValueType = ValueType::Int;
-      m_Value.Double = value->GetIntValue();
-    } else if (value->IsUInt()) {
-      m_ValueType = ValueType::UInt;
-      m_Value.UInt = value->GetUIntValue();
-    } else if (value->IsBool()) {
-      m_ValueType = ValueType::Int;
-      m_Value.Double = value->GetBoolValue();
-    }    
+    }
   }
 
   void AddChild(const char* name, CefRefPtr<CAfxValue> value){
@@ -5247,10 +5250,11 @@ virtual bool OnProcessMessageReceived(
 
   CefRefPtr<CefV8Value> GetPumpFilter(CefRefPtr<CAfxValue> filter,
                                       const char* what) {
-    if (filter != nullptr && filter->IsObject()) {
+      if (filter != nullptr && filter->IsObject()) {
       auto value = filter->GetChild(what);
-      if (value && value->IsV8Function())
+      if (value && value->IsV8Function()) {
         return value->GetFunction();
+      }
     }
     return nullptr;
   }
@@ -5398,7 +5402,7 @@ virtual bool OnProcessMessageReceived(
             AFX_GOTO_ERROR
           if (!m_PipeServer->Flush())
             AFX_GOTO_ERROR
-        } break;
+        } goto __1;
 
         case EngineMessage::AfterFrameRenderStart: {
           if (!m_HandleCalcCallbacks.BatchUpdateRequest(m_PipeServer))
@@ -5429,7 +5433,8 @@ virtual bool OnProcessMessageReceived(
             AFX_GOTO_ERROR
           if (!m_IntCalcCallbacks.BatchUpdateResult(m_PipeServer))
             AFX_GOTO_ERROR
-        } break;
+        }
+          goto __1;
 
         case EngineMessage::OnRenderView: {
           struct RenderInfo_s renderInfo;
@@ -5562,7 +5567,7 @@ virtual bool OnProcessMessageReceived(
           }
         } goto __1;
 
-                    case EngineMessage::AfterHud: {
+        case EngineMessage::AfterHud: {
           auto onHudEnd = GetPumpFilter(filter, "onRenderViewHudEnd");
           if (nullptr != onHudEnd) {
             CefPostTask(TID_RENDERER, new CAfxTask([this, onHudEnd]() {
@@ -5573,8 +5578,7 @@ virtual bool OnProcessMessageReceived(
                         }));
             return;
           }
-        }
-                      goto __1;
+        } goto __1;
 
         case EngineMessage::BeforeTranslucentShadow: {
           bool bReturn;
@@ -5687,7 +5691,7 @@ __2: {
     goto __1;
 }
 
-__3: {
+__3 : {
   bool outBeforeTranslucentShadow = false;
   bool outAfterTranslucentShadow = false;
   bool outBeforeTranslucent = false;
@@ -5696,38 +5700,39 @@ __3: {
   bool outAfterHud = false;
   bool outAfterRenderView = false;
 
-  if (obj && obj->IsObject()) {
+  if (filter && filter->IsObject()) {
     CefRefPtr<CAfxValue> beforeTranslucentShadow =
-        obj->GetChild("beforeTranslucentShadow");
+        filter->GetChild("onRenderViewBeforeTranslucentShadow");
     if (beforeTranslucentShadow && beforeTranslucentShadow->IsBool())
       outBeforeTranslucentShadow = beforeTranslucentShadow->GetBool();
 
     CefRefPtr<CAfxValue> afterTranslucentShadow =
-        obj->GetChild("afterTranslucentShadow");
+        filter->GetChild("onRenderViewAfterTranslucentShadow");
     if (afterTranslucentShadow && afterTranslucentShadow->IsBool())
       outAfterTranslucentShadow = afterTranslucentShadow->GetBool();
 
-    CefRefPtr<CAfxValue> beforeTranslucent = obj->GetChild("beforeTranslucent");
+    CefRefPtr<CAfxValue> beforeTranslucent =
+        filter->GetChild("onRenderViewBeforeTranslucent");
     if (beforeTranslucent && beforeTranslucent->IsBool())
       outBeforeTranslucent = beforeTranslucent->GetBool();
 
-    CefRefPtr<CAfxValue> afterTranslucent = obj->GetChild("afterTranslucent");
+    CefRefPtr<CAfxValue> afterTranslucent =
+        filter->GetChild("onRenderViewAfterTranslucent");
     if (afterTranslucent && afterTranslucent->IsBool())
       outAfterTranslucent = afterTranslucent->GetBool();
 
-    CefRefPtr<CAfxValue> beforeHud = obj->GetChild("hudBegin");
+    CefRefPtr<CAfxValue> beforeHud = filter->GetChild("onRenderViewHudBegin");
     if (beforeHud && beforeHud->IsBool())
       outBeforeHud = beforeHud->GetBool();
 
-    CefRefPtr<CAfxValue> afterHud = obj->GetChild("hudEnd");
+    CefRefPtr<CAfxValue> afterHud = filter->GetChild("onRenderViewHudEnd");
     if (afterHud && afterHud->IsBool())
       outAfterHud = afterHud->GetBool();
 
-    CefRefPtr<CAfxValue> afterRenderView = obj->GetChild("end");
+    CefRefPtr<CAfxValue> afterRenderView = filter->GetChild("onRenderViewEnd");
     if (afterRenderView && afterRenderView->IsBool())
       outAfterRenderView = afterRenderView->GetBool();
   }
-
 
   if (!m_PipeServer->WriteBoolean(outBeforeTranslucentShadow))
     AFX_GOTO_ERROR
@@ -5745,8 +5750,8 @@ __3: {
     AFX_GOTO_ERROR
 
   bool done = !(outBeforeTranslucentShadow || outAfterTranslucentShadow ||
-           outBeforeTranslucent || outAfterTranslucent || outBeforeHud ||
-           outAfterHud || outAfterRenderView || true);
+                outBeforeTranslucent || outAfterTranslucent || outBeforeHud ||
+                outAfterHud || outAfterRenderView || true);
 
   if (done)
     goto __4;

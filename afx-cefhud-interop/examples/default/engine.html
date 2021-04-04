@@ -176,20 +176,27 @@ function AfxEngineInterop(interop, args) {
 */
 
 	this.pumpEvents = {
+		// optional.
 		"onNewConnection": function(){
 			console.log("New connection");
+			queueMicrotask(function(){
+				self.interop.pump(self.pumpEvents, {});
+			});
 		},
+		// recommended.
 		"onDone": function(){
 			queueMicrotask(function(){
 				self.interop.pump(self.pumpEvents, {});
 			});
 		},
+		// recommended.
 		"onError": function(message){
 			console.log("pump onError: "+message);
 			self.disconnect();
 		},
+		// optional.
 		"onCommands": function(commands) {
-			
+		
 			if(self.firstConnection) {
 				self.firstConnection = false;
 				self.interop.scheduleCommand("echo afx_interop send cefhud - To send commands to me.");
@@ -225,13 +232,21 @@ function AfxEngineInterop(interop, args) {
 					}
 				}
 			}
+			queueMicrotask(function(){
+				self.interop.pump(self.pumpEvents, {});
+			});
 		},
+		// optional.
 		"onGameEvent": function(e){
 			self.interop.sendMessage(self.args.drawingInteropId, JSON.stringify({
 				"id": "onGameEvent",
 				"args": [e]
 			}));
+			queueMicrotask(function(){
+				self.interop.pump(self.pumpEvents, {});
+			});
 		},
+		// optional.
 		"onRenderViewBegin": function(renderInfo) {
 	
 			self.renderInfo = renderInfo;
@@ -241,28 +256,76 @@ function AfxEngineInterop(interop, args) {
 				"id": "onRenderViewBegin",
 				"args": [renderInfo]
 			}));
-			
-			var passes = {};
-			
-			//passes["beforeTranslucentShadow"] = true;
-			//passes["afterTranslucentShadow"] = true;
-			//passes["beforeTranslucent"] = true;
-			//passes["afterTranslucent"] = true;
-			//passes["hudBegin"] = true;
-			passes["hudEnd"] = true;
-			//passes["end"] = true; // Controls drawing only, onRenderViewEnd will be called nevertheless.
-			
-			return passes;
+			queueMicrotask(function(){
+				self.interop.pump(self.pumpEvents, {});
+			});
 		},
+		/*
+		// optional.
+		"onRenderViewBeforeTranslucent" : function(view) {
+			queueMicrotask(function(){
+				self.interop.pump(self.pumpEvents, {});
+			});
+		},*/
+		/*
+		// optional.
+		"onRenderViewAfterTranslucent" : function(view) {
+			queueMicrotask(function(){
+				self.interop.pump(self.pumpEvents, {});
+			});
+		},*/
+		/*
+		// optional.
+		"onRenderViewBeforeTranslucentShadow" : function(view) {
+			queueMicrotask(function(){
+				self.interop.pump(self.pumpEvents, {});
+			});
+		},*/
+		/*
+		// optional.
+		"onRenderViewAfterTranslucentShadow" : function(view) {
+			queueMicrotask(function(){
+				self.interop.pump(self.pumpEvents, {});
+			});
+		},*/
+		/*
+		// optional.
+		"onRenderViewHudBegin" : function() {
+			queueMicrotask(function(){
+				self.interop.pump(self.pumpEvents, {});
+			});
+		},*/
+		// optional.
 		"onRenderViewHudEnd": function(){
 			self.interop.sendMessage(self.args.drawingInteropId, JSON.stringify({
 				"id": "onHudEnd",
 				"args": [self.renderInfo.frameCount, self.pass++]
 			}));
+			queueMicrotask(function(){
+				self.interop.pump(self.pumpEvents, {});
+			});
 		},
+		// optional.
 		"onRenderViewEnd": function() {
-			// Note: The onRenderViewEnd currently will always be called in the engine.
-		}
+			queueMicrotask(function(){
+				self.interop.pump(self.pumpEvents, {});
+			});
+		},
+		/*
+		// optional.
+		"onViewOverride": function(view) {
+			queueMicrotask(function(){
+				self.interop.pump(self.pumpEvents, {
+					//tX: 0,
+					//tY: 0,
+					//tZ: 0,
+					//rX: 0,
+					//rY: 0,
+					//rZ: 0,
+					//fov: 90,
+				});
+			});
+		},*/
 	};
 	
 	interop.sendMessage(this.args.indexInteropId, JSON.stringify({
@@ -287,7 +350,7 @@ AfxEngineInterop.prototype.connect = function() {
 		if(connected && self.drawingConnected)
 		{
 			queueMicrotask(function(){
-				console.log("connected "+self.pumpEvents.onNewConnection);
+				console.log("connected");
 				self.interop.pump(self.pumpEvents, {});
 			});
 		}
