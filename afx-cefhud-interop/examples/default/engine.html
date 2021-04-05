@@ -187,8 +187,8 @@ function AfxEngineInterop(interop, args) {
 			self.interop.pump(self.pumpEvents);
 		},
 		// recommended.
-		"onError": function(message){
-			console.log("pump onError: "+message);
+		"onError": function(error){
+			console.log("pump onError: "+error);
 			self.disconnect();
 		},
 		// optional.

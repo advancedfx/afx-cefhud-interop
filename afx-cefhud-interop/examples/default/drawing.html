@@ -435,6 +435,14 @@ const D3DTRANSFORMSTATETYPE = {
 	D3DTS_WORLD3 : (256 + 3),
 };
 
+function SUCCEEDED(hr) {
+	return hr >= 0;
+}
+
+function FAILED(hr) {
+	return hr < 0;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 function base64ToArrayBuffer(base64_string) {
@@ -482,7 +490,7 @@ function AfxDrawingInterop(interop,args) {
 	this.divGameEvents = document.getElementById('gameEvents');
 	
 	this.engineInteropId = null;
-	/*
+
 	this.shaderData = {
 		"afx_drawtexture_vs20": this.compileShader(this.stringToAfxData(`
 			sampler g_sTextureSampler : register( s0 );
@@ -523,7 +531,7 @@ function AfxDrawingInterop(interop,args) {
 			}
 		`), null, null, null, "main", "ps_2_0", 0, 0, 0, null),
 	};
-	*/
+	
 	this.shaders = {
 		"afx_drawtexture_vs20": null,
 		"afx_drawtexture_ps20": null,
@@ -565,72 +573,116 @@ function AfxDrawingInterop(interop,args) {
 			console.log(JSON.stringify(e));
 		},
 		"onHudEnd": function(frameCount,pass){
-			this.interop.pumpBegin(frameCount, pass, function(isInFlow) {
+			
+			var self = this;
+			
+			self.deferTasks();
+			
+			function reject(error) {
+				console.log(error);
+				
+				if(!(error && error.soft))
+				{
+					self.disconnect();
+				}
+				
+				self.undeferTasks();
+			}
+
+			self.interop.op("pumpBegin", [frameCount,pass], function(isInFlow){
 				if(isInFlow) {
-					//if(null == this.shaders["afx_drawtexture_vs20"])
-					//	this.shaders["afx_drawtexture_vs20"] = this.interop.d3d9CreateVertexShader(this.shaderData["afx_drawtexture_vs20"]);
 					
-					//if(null == this.shaders["afx_drawtexture_ps20"])
-					//	this.shaders["afx_drawtexture_ps20"] = this.interop.d3d9CreatePixelShader(this.shaderData["afx_drawtexture_ps20"]);
-					
-					//if(null == this.vertexDeclarations["pos3_uv2"])
-					//	this.vertexDeclarations["pos3_uv2"] = this.interop.d3d9CreateVertexDeclaration(this.vertexElements["pos3_uv2"]);
-					
-					this.deferTasks();
-					
-					//var timeout = null;
-					
-					this.interop.onCefFrameRendered = function(cefTextureHandle){
-						//clearTimeout(timeout);
-						//timeout = null;
-					
-						//console.log("renderCefFrame ... DONE.");
+					self.interop.onCefFrameRendered = function(cefTextureHandle) {
 						
 						self.interop.onCefFrameRendered = null;
 						
-						if(!cefTextureHandle.invalid)
-						{
-							//console.log("cefTextureHandle: "+cefTextureHandle.lo+" "+cefTextureHandle.hi);
-							
+						console.log("renderCefFrame ... DONE.");
+						
+						//console.log("cefTextureHandle: "+cefTextureHandle.lo+" "+cefTextureHandle.hi);
+						
+						function abort(error) {
+							error.soft = true;
+							return new Promise((resolve,reject) => {
+								self.interop.op("pumpEnd", [], resolve, reject);
+							}).then(function(){
+								return Promise.reject(error);
+							});
+						}
+						
+						new Promise((resolve, reject) => {
+							if(cefTextureHandle.invalid) return abort(new Error("cefTextureHandle.invalid"));
+						
 							if(null == self.cefTextureHandle || self.cefTextureHandle.lo != cefTextureHandle.lo || self.cefTextureHandle.hi != cefTextureHandle.hi)
 							{
 								self.cefTextureHandle = cefTextureHandle;
 								if(self.cefTexture) {
-									cefTexture.release();
-									cefTexture = null;
+									return new Promise((resolve, reject) => {
+										self.interop.op("releaseTexture", [self.cefTexture], resolve, reject);
+									}.then(function(){
+										self.cefTexture = null;
+									});
 								}
 							}
-							
-							if(null == self.cefTexture)
-								cefTexture = self.interop.d3d9CreateTexture(self.width, self.height, 1, D3DUSAGE.D3DUSAGE_RENDERTARGET, 21 /* D3DFMT_A8R8G8B8 */, D3DPOOL.D3DPOOL_DEFAULT, self.cefTextureHandle);
-							
-							//self.drawRect2d(self.cefTexture, self.renderInfo.view.x, self.renderInfo.view.y, self.renderInfo.view.width, self.renderInfo.view.height, 0, 0, 1, 1);
-							
-							self.interop.waitForClientGpu();
-						}
-						else console.log("cefTextureHandle.invalid");
-						
-						self.interop.pumpEnd(function(){
+						}).then(function(){
+							if(null == self.shaders["afx_drawtexture_vs20"])
+							{
+								return new Promise((resolve, reject) => {
+									self.interop.op("d3d9CreateVertexShader", [self.shaderData["afx_drawtexture_vs20"]], resolve, reject)
+								}).then(function(hr,vertexShader) {
+									if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+									self.shaders["afx_drawtexture_vs20"] = vertexShader;
+								});
+							}
+						}).then(function(){
+							if(null == self.shaders["afx_drawtexture_ps20"]) {
+								return new Promise((resolve, reject) => {
+									self.interop.op("d3d9CreatePixelShader", [self.shaderData["afx_drawtexture_ps20"]], resolve, reject)
+								}).then(function(hr,pixelShader) {
+									if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+									self.shaders["afx_drawtexture_ps20"] = pixelShader;
+								});
+							}
+						}).then(function(){
+							if(null == self.vertexDeclarations["pos3_uv2"])
+							{
+								return new Promise((resolve, reject) => {
+									self.interop.op("d3d9CreateVertexDeclaration", [self.vertexElements["pos3_uv2"]], resolve, reject);
+								}).then(function(hr,vertexDeclaration){
+									if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+									self.vertexDeclarations["pos3_uv2"] = vertexDeclaration;
+								});
+							}
+						}).then(function(){
+							if(null == self.cefTexture) {
+								return new Promise((resolve, reject) => {
+									self.interop.op("d3d9CreateTexture", [self.width, self.height, 1, D3DUSAGE.D3DUSAGE_RENDERTARGET, 21 /* D3DFMT_A8R8G8B8 */, D3DPOOL.D3DPOOL_DEFAULT, self.cefTextureHandle], resolve, reject);
+								}).then(function(hr,texture){
+									if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+									self.cefTexture = texture;
+								});
+							}
+						}).then(function(){
+							return self.drawRect2d(self.cefTexture, self.renderInfo.view.x, self.renderInfo.view.y, self.renderInfo.view.width, self.renderInfo.view.height, 0, 0, 1, 1)
+						}).then(function(){
+							return new Promise((resolve, reject) => {
+								self.interop.op("waitForClientGpu", [], resolve, reject);
+							});
+						}).then(function(){
+							return new Promise((resolve, reject) => {
+								self.interop.op("pumpEnd", [], resolve, reject);
+							});
+						}).then(function(){
+							// FINISHED.
 							self.undeferTasks();
-						}, function(){
-							console.log("pumpEnd failed");
-							self.disconnect();
+						}).catch(function(error){
+							reject(error);
 						});
-					};
+					}
 					
-					//console.log("renderCefFrame ...");
-					//this.interop.renderCefFrame();
-					
-					//timeout = setTimeout(function(){
-					//	console.log("Frame took too long, saving your ass ...");
-						self.interop.onCefFrameRendered(self.interop.createInvalidHandle());
-					//}, 500);
+					console.log("renderCefFrame ...");
+					self.interop.renderCefFrame();
 				}
-			}, function(){
-				console.log("pumpBegin failed");
-				
-				self.disconnect();
-			});
+			}, reject);
 		}
 	};
 	
@@ -642,7 +694,6 @@ function AfxDrawingInterop(interop,args) {
 	interop.onDeviceReset = function(){
 		self.onDeviceReset();
 	};
-	/*TODO
 	this.vertexElements = {
 		"pos3_uv2": this.buildD3d9VertexElements([
 			{
@@ -661,7 +712,6 @@ function AfxDrawingInterop(interop,args) {
 			},
 		])
 	};
-	*/
 
 	this.vertexDeclarations = {
 		"pos3_uv2": null
@@ -684,27 +734,56 @@ AfxDrawingInterop.prototype.onMessage = function(senderId, message) {
 
 AfxDrawingInterop.prototype.onDeviceReset = function() {
 	
-	// We currently re-create all resources, even non-pooled ones,
-	// since they are currently not acknowledged and thus we can not
-	// know if they went through or not.
+	var self = this;
 	
-	this.cefTextureHandle = null;
-	if(this.cefTexture) {
-		this.cefTexture.release();
-		this.cefTexture = null;
-	}
-	if(this.shaders["afx_drawtexture_vs20"]) {
-		this.shaders["afx_drawtexture_vs20"].release();
-		this.shaders["afx_drawtexture_vs20"] = null;
-	}
-	if(this.shaders["afx_drawtexture_ps20"]) {
-		this.shaders["afx_drawtexture_ps20"].release();
-		this.shaders["afx_drawtexture_ps20"] = null;
-	}
-	if(this.vertexDeclarations["pos3_uv2"]) {
-		this.vertexDeclarations["pos3_uv2"].release();
-		this.vertexDeclarations["pos3_uv2"] = null;
-	}
+	// We currently re-create all resources, even non-pooled ones.
+	// TODO: change the above.
+	
+	self.deferTasks();
+	
+	new Promise((resolve, reject) => {
+		if(self.cefTexture)
+		{
+			return new Promise((resolve, reject) => {
+				self.interop.op("releaseTexture", [self.cefTexture], resolve, reject);
+			}).then(function(){
+				self.cefTexture = null;
+			});
+		}
+	}).then(function(){
+		if(self.shaders["afx_drawtexture_vs20"])
+		{
+			return new Promise((resolve, reject) => {
+				self.interop.op("releaseVertexShader", [self.shaders["afx_drawtexture_vs20"]], resolve, reject);
+			}).then(function(){
+				self.shaders["afx_drawtexture_vs20"] = null;
+			});
+		}
+	}).then(function(){
+		if(self.shaders["afx_drawtexture_ps20"])
+		{
+			return new Promise((resolve, reject) => {
+				self.interop.op("releasePixelShader", [self.shaders["afx_drawtexture_ps20"]], resolve, reject);
+			}).then(function(){
+				self.shaders["afx_drawtexture_ps20"] = null;
+			});
+		}
+	}).then(function(){
+		if(self.vertexDeclarations["pos3_uv2"])
+		{
+			return new Promise((resolve, reject) => {
+				self.interop.op("releaseVertexDeclaration", [self.vertexDeclarations["pos3_uv2"]], resolve, reject);
+			}).then(function(){
+				self.vertexDeclarations["pos3_uv2"] = null;
+			});
+		}
+	}).catch(function(error){
+		console.log(error);
+		
+		self.disconnect();
+	}).finally(function(){
+		self.undeferTasks();
+	});
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -821,80 +900,31 @@ AfxDrawingInterop.prototype.compileShader = function(srcData,sourceName,defines,
 }
 
 AfxDrawingInterop.prototype.drawRect2d = function(texture,x,y,width,height,x0,y0,x1,y1) {
-
-	this.interop.beginCleanState();
 	
-	this.interop.d3d9SetVertexDeclaration(this.vertexDeclarations["pos3_uv2"]);
+	var self = this;
 	
-	this.interop.d3d9SetViewport({
-		"x": x,
-		"y": y,
-		"width": width,	
-		"height": height,
-		"minZ": 0.0,
-		"maxZ": 1.0
-	});
+	// Orthographic projection matrix:
+	const L = 0.5 + x;
+	const R = 0.5 + x + width;
+	const T = (0.5 + y);
+	const B = (0.5 + y + height);
+	const mat_identity = [
+		1.0, 0.0, 0.0, 0.0,
+		0.0, 1.0, 0.0, 0.0,
+		0.0, 0.0, 1.0, 0.0,
+		0.0, 0.0, 0.0, 1.0
+	];
+	const mat_projection = [
+		2.0 / (R - L)    , 0.0              , 0.0, 0.0,
+		0.0              , 2.0 / (T - B)    , 0.0, 0.0,
+		0.0              , 0.0              , 0.5, 0.0,
+		(L + R) / (L - R), (T + B) / (B - T), 0.5, 1.0
+	];
 	
-	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_SRGBWRITEENABLE, BOOL.FALSE);
-	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_COLORWRITEENABLE, D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_ALPHA | D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_BLUE | D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_GREEN | D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_RED);
-	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_SEPARATEALPHABLENDENABLE, BOOL.FALSE);
-	
-	this.interop.d3d9SetVertexShader(this.shaders["afx_drawtexture_vs20"]);
-	this.interop.d3d9SetPixelShader(this.shaders["afx_drawtexture_ps20"]);
-	
-	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_CULLMODE, D3DCULL.D3DCULL_NONE);
-	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_ZWRITEENABLE, BOOL.FALSE);
-	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_ZFUNC, D3DCMPFUNC.D3DCMP_ALWAYS); // redundant due to ZENABLE
-	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_ZENABLE, D3DZBUFFERTYPE.D3DZB_FALSE);
-	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_ALPHABLENDENABLE, BOOL.TRUE);
-	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_ALPHATESTENABLE, BOOL.FALSE);
-	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_MULTISAMPLEANTIALIAS, BOOL.FALSE);
-	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_LIGHTING, BOOL.FALSE);
-	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_SRCBLEND, D3DBLEND.D3DBLEND_SRCALPHA);
-	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_DESTBLEND, D3DBLEND.D3DBLEND_INVSRCALPHA);
-	this.interop.d3d9SetRenderState(D3DRENDERSTATETYPE.D3DRS_FILLMODE, D3DFILLMODE.D3DFILL_SOLID);
-
-	this.interop.d3d9SetTextureStageState(0, D3DTEXTURESTAGESTATETYPE.D3DTSS_COLOROP, D3DTEXTUREOP.D3DTOP_SELECTARG1);
-	this.interop.d3d9SetTextureStageState(0, D3DTEXTURESTAGESTATETYPE.D3DTSS_COLORARG1, D3DTEXTUREARG.D3DTA_TEXTURE);
-	this.interop.d3d9SetTextureStageState(0, D3DTEXTURESTAGESTATETYPE.D3DTSS_ALPHAOP, D3DTEXTUREOP.D3DTOP_SELECTARG1);
-	this.interop.d3d9SetTextureStageState(0, D3DTEXTURESTAGESTATETYPE.D3DTSS_ALPHAARG1, D3DTEXTUREARG.D3DTA_TEXTURE);
-
-	this.interop.d3d9SetSamplerState(0, D3DSAMPLERSTATETYPE.D3DSAMP_MINFILTER, D3DTEXTUREFILTERTYPE.D3DTEXF_LINEAR);
-	this.interop.d3d9SetSamplerState(0, D3DSAMPLERSTATETYPE.D3DSAMP_MAGFILTER, D3DTEXTUREFILTERTYPE.D3DTEXF_LINEAR);
-	this.interop.d3d9SetSamplerState(0, D3DSAMPLERSTATETYPE.D3DSAMP_SRGBTEXTURE, BOOL.FALSE);
-	
-	// texture:
-	this.interop.d3d9SetTexture(0, texture);
-	
-	// Setup orthographic projection matrix
+	//
+	var vertexStreamZeroData = self.interop.createDrawingData(4 * (4*3+4*2));
 	{
-		const L = 0.5 + x;
-		const R = 0.5 + x + width;
-		const T = (0.5 + y);
-		const B = (0.5 + y + height);
-		const mat_identity = [
-			1.0, 0.0, 0.0, 0.0,
-			0.0, 1.0, 0.0, 0.0,
-			0.0, 0.0, 1.0, 0.0,
-			0.0, 0.0, 0.0, 1.0
-		];
-		const mat_projection = [
-			2.0 / (R - L)    , 0.0              , 0.0, 0.0,
-			0.0              , 2.0 / (T - B)    , 0.0, 0.0,
-			0.0              , 0.0              , 0.5, 0.0,
-			(L + R) / (L - R), (T + B) / (B - T), 0.5, 1.0
-		];
-		this.interop.d3d9SetTransform(D3DTRANSFORMSTATETYPE.D3DTS_WORLD, mat_identity);
-		this.interop.d3d9SetTransform(D3DTRANSFORMSTATETYPE.D3DTS_VIEW, mat_identity);
-		this.interop.d3d9SetTransform(D3DTRANSFORMSTATETYPE.D3DTS_PROJECTION, mat_projection);
-	}
-	
-	// Render:
-	{
-		// TODO: Consider to add and use this.interop.d3d9DrawPrimitiveUP instead.
-	
-		var dd = this.interop.createDrawingData(4 * (4*3+4*2));
-		var dv = new DataView(dd.buffer);
+		var dv = new DataView(vertexStreamZeroData.buffer);
 		
 		dv.setFloat32( 0*4, 0, true);
 		dv.setFloat32( 1*4, height, true);
@@ -919,19 +949,185 @@ AfxDrawingInterop.prototype.drawRect2d = function(texture,x,y,width,height,x0,y0
 		dv.setFloat32(17*4, 0, true);
 		dv.setFloat32(18*4, x1, true);
 		dv.setFloat32(19*4, y1, true);
-		
-		var vertexBuffer = this.interop.d3d9CreateVertexBuffer(dd.buffer.byteLength, D3DUSAGE.D3DUSAGE_WRITEONLY, 0, D3DPOOL.D3DPOOL_DEFAULT, null);
-		
-		vertexBuffer.update(dd, 0, dd.buffer.byteLength);
-		
-		this.interop.d3d9SetStreamSource(0, vertexBuffer, 0, dd.buffer.byteLength);
-		
-		this.interop.d3d9DrawPrimitive(D3DPRIMITIVETYPE.D3DPT_TRIANGLESTRIP, 0, 2);
-		
-		vertexBuffer.release();
 	}
 	
-	this.interop.endCleanState();
+	//
+	
+	function abort(error) {
+		error.soft = true;
+		return new Promise((resolve,reject) => {
+			self.interop.op("endCleanState", [], resolve, reject);
+		}).then(function(){
+			return Promise.reject(error);
+		});
+	}
+	
+	return new Promise((resolve, reject) => {
+		self.interop.op("beginCleanState", [], resolve, reject);
+	}).then(function(){
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetVertexDeclaration", [self.vertexDeclarations["pos3_uv2"]], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetViewport", [{
+				"x": x,
+				"y": y,
+				"width": width,	
+				"height": height,
+				"minZ": 0.0,
+				"maxZ": 1.0
+			}], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetRenderState", [D3DRENDERSTATETYPE.D3DRS_SRGBWRITEENABLE, BOOL.FALSE], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetRenderState", [D3DRENDERSTATETYPE.D3DRS_COLORWRITEENABLE, D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_ALPHA | D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_BLUE | D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_GREEN | D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_RED], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetRenderState", [D3DRENDERSTATETYPE.D3DRS_SEPARATEALPHABLENDENABLE, BOOL.FALSE], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetVertexShader", [self.shaders["afx_drawtexture_vs20"]], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetPixelShader", [self.shaders["afx_drawtexture_ps20"]], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetRenderState", [D3DRENDERSTATETYPE.D3DRS_CULLMODE, D3DCULL.D3DCULL_NONE], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetRenderState", [D3DRENDERSTATETYPE.D3DRS_ZWRITEENABLE, BOOL.FALSE], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetRenderState", [D3DRENDERSTATETYPE.D3DRS_ZFUNC, D3DCMPFUNC.D3DCMP_ALWAYS], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetRenderState", [D3DRENDERSTATETYPE.D3DRS_ZENABLE, D3DZBUFFERTYPE.D3DZB_FALSE], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetRenderState", [D3DRENDERSTATETYPE.D3DRS_ALPHABLENDENABLE, BOOL.TRUE], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetRenderState", [D3DRENDERSTATETYPE.D3DRS_ALPHATESTENABLE, BOOL.FALSE], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetRenderState", [D3DRENDERSTATETYPE.D3DRS_MULTISAMPLEANTIALIAS, BOOL.FALSE], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetRenderState", [D3DRENDERSTATETYPE.D3DRS_LIGHTING, BOOL.FALSE], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetRenderState", [D3DRENDERSTATETYPE.D3DRS_SRCBLEND, D3DBLEND.D3DBLEND_SRCALPHA], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetRenderState", [D3DRENDERSTATETYPE.D3DRS_DESTBLEND, D3DBLEND.D3DBLEND_INVSRCALPHA], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetRenderState", [D3DRENDERSTATETYPE.D3DRS_FILLMODE, D3DFILLMODE.D3DFILL_SOLID], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetTextureStageState", [0, D3DTEXTURESTAGESTATETYPE.D3DTSS_COLOROP, D3DTEXTUREOP.D3DTOP_SELECTARG1], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetTextureStageState", [0, D3DTEXTURESTAGESTATETYPE.D3DTSS_COLORARG1, D3DTEXTUREARG.D3DTA_TEXTURE], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetTextureStageState", [0, D3DTEXTURESTAGESTATETYPE.D3DTSS_ALPHAOP, D3DTEXTUREOP.D3DTOP_SELECTARG1], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetTextureStageState", [0, D3DTEXTURESTAGESTATETYPE.D3DTSS_ALPHAARG1, D3DTEXTUREARG.D3DTA_TEXTURE], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetSamplerState", [0, D3DSAMPLERSTATETYPE.D3DSAMP_MINFILTER, D3DTEXTUREFILTERTYPE.D3DTEXF_LINEAR], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetSamplerState", [0, D3DSAMPLERSTATETYPE.D3DSAMP_MAGFILTER, D3DTEXTUREFILTERTYPE.D3DTEXF_LINEAR], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetSamplerState", [0, D3DSAMPLERSTATETYPE.D3DSAMP_SRGBTEXTURE, BOOL.FALSE], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetTexture", [0, texture], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetTransform", [D3DTRANSFORMSTATETYPE.D3DTS_WORLD, mat_identity], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetTransform", [D3DTRANSFORMSTATETYPE.D3DTS_VIEW, mat_identity], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9SetTransform", [D3DTRANSFORMSTATETYPE.D3DTS_PROJECTION, mat_projection], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("d3d9DrawPrimitiveUP", [D3DPRIMITIVETYPE.D3DPT_TRIANGLESTRIP, 2, vertexStreamZeroData, 16], resolve, reject);
+		});
+	}).then(function(hr){
+		if(FAILED(hr)) return abort(new Error("HRESULT: "+hr));
+		return new Promise((resolve,reject) => {
+			self.interop.op("endCleanState", [], resolve, reject);
+		});
+	}).then(function(){
+		return true;
+	});
 }
 
 
@@ -991,21 +1187,18 @@ AfxDrawingInterop.prototype.connect = function(senderId) {
 
 AfxDrawingInterop.prototype.disconnect = function(senderId) {
 	
-	try {
-		this.onDeviceReset();
-	}
-	catch(error)
-	{
-		console.log(error);
-	}
-	finally {
-		this.interop.close();
-		
-		this.interop.sendMessage(senderId, JSON.stringify({
-			"id": "drawingDisconnected",
-			"args": [this.interop.id]
-		}));
-	}
+	this.interop.close();
+	
+	this.cefTextureHandle = null;
+	this.cefTexture = null;
+	this.shaders["afx_drawtexture_vs20"] = null;
+	this.shaders["afx_drawtexture_ps20"] = null;
+	this.vertexDeclarations["pos3_uv2"] = null;	
+	
+	this.interop.sendMessage(senderId, JSON.stringify({
+		"id": "drawingDisconnected",
+		"args": [this.interop.id]
+	}));
 }
 
 /**
