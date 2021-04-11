@@ -2,22 +2,22 @@
 
 This project is still under development, so it's not fully ready yet, esepcially the afx_interop version 7.
 
-The master branch is probably not fully functionial atm (sorry about that), the official HLAE is compatbile with the v3 branch (afx_interop version 6) released a while ago:  
-https://github.com/advancedfx/afx-cefhud-interop/tree/v3
+The master branch is probably not fully functionial atm (sorry about that), the official HLAE is compatbile with the v6 branch released a while ago:  
+https://github.com/advancedfx/afx-cefhud-interop/tree/v6
 
-There's already pre-built binaries for the v3 / afx_interop version 6 version here:
+There's already pre-built binaries for the v6 version here:
 https://drive.google.com/drive/folders/1CQFGMYhmz4x9DxunmwhWMp37ow6YOBON  
 First install / extract the Release-Base.7z and over that replace with the contents from Release.7z - the AfxHookSource.7z is not needed, since the officcial HLAE fully supports the v6 by now.
 
-If you want to build v3 / afx_interop_v6 yourself please:
+If you want to build afx_interop_v6 yourself please:
 
 - Obtain Visual Studio 2019 (e.g. Community edition) and make sure at least the "Desktop Development with C++ component" is installed.
-- Clone the v3 branch with git:
+- Clone the v6 branch with git:
 ```
 cd /c/some/directory
 git clone --recursive https://github.com/advancedfx/afx-cefhud-interop.git
 cd afx-cefhud-interop
-git checkout v3
+git checkout v6
 ```
 
 Now open the Start -> Visual Studios 2019 -> Developer Command Prompt for VS 2019
