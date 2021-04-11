@@ -93,6 +93,8 @@ class SimpleHandler : public CefClient,
   bool IsClosing() const { return is_closing_; }
 
  protected:
+
+
    
   bool is_closing_;
 

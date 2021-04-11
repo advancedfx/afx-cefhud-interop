@@ -103,7 +103,7 @@ class SimpleApp : public CefApp,
     // un-comment to show the built-in Chromium fps meter
     //command_line->AppendSwitch("show-fps-counter");
 
-    command_line->AppendSwitch("disable-gpu-vsync");
+    //command_line->AppendSwitch("disable-gpu-vsync");
 
     // Most systems would not need to use this switch - but on older hardware,
     // Chromium may still choose to disable D3D11 for gpu workarounds.

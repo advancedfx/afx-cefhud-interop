@@ -165,7 +165,7 @@ void SimpleHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
     PaintElementType type,
     const RectList& dirtyRects,
     void* share_handle) {
-
+ 
   if (PET_VIEW == type) {
     std::unique_lock<std::mutex> lock(m_BrowserMutex);
     auto it = m_Browsers.find(browser->GetIdentifier());
@@ -241,7 +241,7 @@ bool SimpleHandler::OnProcessMessageReceived(
         CefRefPtr<CefBrowser> targetBrowser = it->second.Browser;
         lock.unlock();
 
-        browser->GetHost()->SendExternalBeginFrame();
+        targetBrowser->GetHost()->SendExternalBeginFrame();
 
         return true;
       }
