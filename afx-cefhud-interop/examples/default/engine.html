@@ -1,15 +1,8 @@
 <!DOCTYPE html>
 <html>
 <body>
+<script type="text/javascript" src="common.js"></script>
 <script>
-
-function toPromise(interopFn,...args)
-{
-	return new Promise((resolve,reject) => {
-		console.log(interopFn);
-		interopFn(resolve,reject,...args);
-	});
-}
 
 var AFX_GAMEVENT_ENRICHMENTS = {
 	UserIdWithSteamId: (1 << 0),
@@ -48,28 +41,55 @@ function AfxEngineInterop(interop, args) {
 	this.interop = interop;
 	this.args = args;
 	this.firstConnection = true;
-	this.drawingConnected = false;
+	this.connected = 0;
+	this.drawingConnected = 0;
+	this.taskQueue = [];
+	this.taskQueueDeferred = 0;	
 	
 	this.messageHandlers = {
 		"drawingConnected": function(senderId) {
+			if(self.drawingConnected) return;
+
 			console.log("drawingConnected: "+senderId);
-			this.drawingConnected = true;
-			this.connect();
+			++self.drawingConnected;
+
+			self.deferTasks();
+			toPromise(self.interop.connect).then((connected)=>{
+				self.undeferTasks();
+				if(self.connected && self.drawingConnected)
+				{
+					self.interop.pump(self.pumpEvents);
+				}
+			}).catch((error)=>{
+				logError(error);
+				self.disconnect(true);
+			});
 		},
 		"drawingDisconnected": function(senderId) {
+			if(!self.drawingConnected) return;
+
 			console.log("drawingDisconnected: "+senderId);
-			this.drawingConnected = false;
-			this.disconnect();
+			--self.drawingConnected;
+
+			if(self.connected)
+			{
+				self.disconnect(true);
+			}
 		},
 		"drawingConnecting": function(senderId) {
-			this.connect();
+			toPromise(self.interop.sendMessage, self.args.drawingInteropId, JSON.stringify({
+				"id": "connect",
+				"args": [self.interop.id]
+			})).catch((e)=>{
+				logError(e);
+			});
 		},
 	};
 	
 	interop.onMessage = function(senderId, message){
-		queueMicrotask(function() {
+		self.queueTask(function() {
 			self.onMessage(senderId, message);
-		});
+		})
 	};
 	
 	// GameEvents:
@@ -197,7 +217,7 @@ function AfxEngineInterop(interop, args) {
 		// recommended.
 		"onError": function(error){
 			console.log("pump onError: "+error);
-			self.disconnect();
+			self.disconnect(true);
 		},
 		// optional.
 		"onCommands": function(commands) {
@@ -243,10 +263,12 @@ function AfxEngineInterop(interop, args) {
 		},
 		// optional.
 		"onGameEvent": function(e){
-			self.interop.sendMessage(self.args.drawingInteropId, JSON.stringify({
+			toPromise(self.interop.sendMessage, self.args.drawingInteropId, JSON.stringify({
 				"id": "onGameEvent",
 				"args": [e]
-			}));
+			})).catch((e)=>{
+				logError(e);
+			});
 			self.interop.pump(self.pumpEvents);
 		},
 		// optional.
@@ -255,10 +277,12 @@ function AfxEngineInterop(interop, args) {
 			self.renderInfo = renderInfo;
 			self.pass = 0;
 			
-			self.interop.sendMessage(self.args.drawingInteropId, JSON.stringify({
+			toPromise(self.interop.sendMessage, self.args.drawingInteropId, JSON.stringify({
 				"id": "onRenderViewBegin",
 				"args": [renderInfo]
-			}));
+			})).catch((e)=>{
+				logError(e);
+			});
 			self.interop.pump(self.pumpEvents);
 		},
 		/*
@@ -288,16 +312,20 @@ function AfxEngineInterop(interop, args) {
 		},*/
 		// optional.
 		"onRenderViewHudEnd": function(){
-			self.interop.sendMessage(self.args.drawingInteropId, JSON.stringify({
+			console.log("onHudEnd");
+			toPromise(self.interop.sendMessage, self.args.drawingInteropId, JSON.stringify({
 				"id": "onHudEnd",
-				"args": [self.renderInfo.frameCount, self.pass++]
-			}));
+				"args": [self.renderInfo.frameCount , self.pass]
+			})).catch((e)=>{
+				logError(e);
+			});
+			self.pass++;
 			self.interop.pump(self.pumpEvents);
 		},
 		// optional.
-		"onRenderViewEnd": function() {
-			self.interop.pump(self.pumpEvents);
-		},
+		//"onRenderViewEnd": function() {
+		//	self.interop.pump(self.pumpEvents);
+		//},
 		/*
 		// optional.
 		"onViewOverride": function(view) {
@@ -313,10 +341,12 @@ function AfxEngineInterop(interop, args) {
 		},*/
 	};
 	
-	interop.sendMessage(this.args.indexInteropId, JSON.stringify({
+	toPromise(self.interop.sendMessage, this.args.indexInteropId, JSON.stringify({
 		"id": "engineCreated",
-		"args": [interop.id]
-	}));
+		"args": [self.interop.id]
+	})).catch((e)=>{
+		logError(e);
+	});
 
 	this.connect();
 }
@@ -327,53 +357,144 @@ AfxEngineInterop.prototype.onMessage = function(senderId, message) {
 }
 ////////////////////////////////////////////////////////////////////////////////
 
-AfxEngineInterop.prototype.connect = function() {
+
+AfxEngineInterop.prototype.queueTask = function(task) {
+	
+	if(Array.isArray(task))
+	{
+		for(var i = 0; i < task.length; ++i)
+			this.queueTask(tasks[i]);
+		return;
+	}
+	
+	if(0 == this.taskQueueDeferred)
+	{
+		task();
+		return;
+	}
+	
+	this.taskQueue.push(task);
+}
+
+AfxEngineInterop.prototype.stackTask = function(task) {
+	
+	if(Array.isArray(task))
+	{
+		for(var i = 0; i < task.length; ++i)
+			this.stackTask(tasks[i]);
+		return;
+	}
+	
+	if(0 == this.taskQueueDeferred)
+	{
+		task();
+		return;
+	}
+	
+	this.taskQueue.unshift(task);
+}
+
+AfxEngineInterop.prototype.deferTasks = function() {
+	++this.taskQueueDeferred;
+}
+
+AfxEngineInterop.prototype.undeferTasks = function() {
+	--this.taskQueueDeferred;
+
 	var self = this;
+	
+	function runTasks() {
+		self.taskQueue.shift()();
+		if(self.taskQueueDeferred === 0 && 0 < self.taskQueue.length)
+		{
+			queueMicrotask(runTasks);
+		}
+	}
+	
+	if(self.taskQueueDeferred === 0 && 0 < self.taskQueue.length)
+	{
+		queueMicrotask(runTasks);
+	}
+}
+
+AfxEngineInterop.prototype.connect = function() {
+
+	var self = this;
+
+	if(self.connected) return;
+	
+	self.deferTasks();
 
 	self.interop.connect(function(connected){
 	
-		if(connected && self.drawingConnected)
+		if(connected)
 		{
-			console.log("connected");
-			self.interop.pump(self.pumpEvents);
-		}
-		else if(!self.drawingConnected) {
-			self.interop.sendMessage(self.args.drawingInteropId, JSON.stringify({
+			++self.connected;
+
+			toPromise(self.interop.sendMessage, self.args.drawingInteropId, JSON.stringify({
 				"id": "connect",
 				"args": [self.interop.id]
-			}));
+			})).catch((e)=>{
+				logError(e);
+			});
+
+			self.undeferTasks();
 		}
 		else {
+			self.undeferTasks();
+
+			if(self.connected) return;
+
 			queueMicrotask(function(){
 				self.connect();
 			});
 		}
+
 	}, function(){
 	
 		console.log("connect failed");
 		
-		self.interop.disconnect();
+		self.disconnect(true);
 	});
 }
 
-AfxEngineInterop.prototype.disconnect = function() {
-	if(this.drawingConnected) {
-		this.interop.sendMessage(this.args.drawingInteropId, JSON.stringify({
+AfxEngineInterop.prototype.disconnect = function(purge) {
+
+	var self = this;
+
+	if(!self.connected) return;
+
+	if(self.drawingConnected) {
+		toPromise(self.interop.sendMessage, self.args.drawingInteropId, JSON.stringify({
 			"id": "disconnect",
-			"args": [this.interop.id]
-		}));
+			"args": [self.interop.id]
+		})).catch((e)=>{
+			logError(e);
+		});
 		
 		return;
 	}
+
+	self.deferTasks();
 	
-	this.interop.close();
-	
-	// retry in a second.
-	
-	var self = this;
-	setTimeout(function(){
-		self.connect();
-	}, 1000);
+	toPromise(self.interop.close).finally(() => {
+
+		if(purge)
+		{
+			self.taskQueue = [];
+			self.taskQueueDeferred = 1;
+		}
+		--self.connected;
+		self.undeferTasks();
+
+		if(self.connected) return;
+
+		// retry in a second.
+		
+		setTimeout(function(){
+			self.connect();
+		}, 1000);
+	});
 }
 
 ////////////////////////////////////////////////////////////////////////////////

@@ -30,24 +30,25 @@ class CInterop : public CefBaseRefCounted {
 };
 
 CefRefPtr<CefV8Value> CreateInterop(CefRefPtr<CefBrowser> browser,
-                              CefRefPtr<CefFrame> frame,
+                                    CefRefPtr<CefFrame> frame,
+                                    CefRefPtr<CefV8Context> context,
+                                    const CefString& argStr,
+                                    DWORD handlerId,
+                                    CefRefPtr<CInterop>* out = nullptr);
+
+CefRefPtr<CefV8Value> CreateEngineInterop(CefRefPtr<CefBrowser> browser,
+                                          CefRefPtr<CefFrame> frame,
                                           CefRefPtr<CefV8Context> context,
                                           const CefString& argStr,
+                                          DWORD handlerId,
                                           CefRefPtr<CInterop>* out = nullptr);
 
-CefRefPtr<CefV8Value> CreateEngineInterop(
-    CefRefPtr<CefBrowser> browser,
-    CefRefPtr<CefFrame> frame,
-    CefRefPtr<CefV8Context> context,
-    const CefString& argStr,
-    CefRefPtr<CInterop>* out = nullptr);
-
-CefRefPtr<CefV8Value> CreateDrawingInterop(
-    CefRefPtr<CefBrowser> browser,
-    CefRefPtr<CefFrame> frame,
-    CefRefPtr<CefV8Context> context,
-    const CefString& argStr,
-    CefRefPtr<CInterop>* out = nullptr);
+CefRefPtr<CefV8Value> CreateDrawingInterop(CefRefPtr<CefBrowser> browser,
+                                           CefRefPtr<CefFrame> frame,
+                                           CefRefPtr<CefV8Context> context,
+                                           const CefString& argStr,
+                                           DWORD handlerId,
+                                           CefRefPtr<CInterop>* out = nullptr);
 
 class CPipeHandle {
  public:

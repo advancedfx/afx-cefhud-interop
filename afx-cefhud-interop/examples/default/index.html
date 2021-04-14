@@ -24,6 +24,7 @@ afx_interop send cefhud [...]
 </head>
 <body>
 <h1>Default example</h1>
+<script type="text/javascript" src="common.js"></script>
 <script>
 
 function AfxInterop(interop, args) {
@@ -41,14 +42,16 @@ function AfxInterop(interop, args) {
 			console.log("Created drawing interop #"+drawingInteropId);
 			this.drawingInteropId = drawingInteropId;
 			
-			this.interop.createEngineInterop(
+			toPromise(this.interop.createEngineInterop,
 				fileFolderPath+"/engine.html",
 				JSON.stringify({
 					"indexInteropId": self.interop.id,
 					"drawingInteropId": self.drawingInteropId,
 					"pipeName": "advancedfxInterop"
 				})
-			);
+			).catch((e)=>{
+				logError(e);
+			});
 		},
 		"engineCreated": function(engineInteropId) {
 			console.log("Created engine interop #"+engineInteropId);
@@ -63,16 +66,22 @@ function AfxInterop(interop, args) {
 		self.onError(senderId, message);
 	};
 	
-	this.drawingInteropId = null;
-	this.engineInteropId = null;
-	
-	interop.createDrawingInterop(
+	self.drawingInteropId = null;
+	self.engineInteropId = null;
+
+	console.log("HAHA");
+
+	toPromise(self.interop.createDrawingInterop,
 		fileFolderPath+"/drawing.html",
 		JSON.stringify({
-			"indexInteropId": interop.id,
+			"indexInteropId": self.interop.id,
 			"pipeName": "advancedfxInterop_drawing"
 		})
-	);
+	).then(()=>{
+		console.log("HI")
+	}).catch((e)=>{
+		logError(e);
+	});
 }
 
 AfxInterop.prototype.onMessage = function(senderId, message) {
@@ -98,7 +107,6 @@ window.afxInterop.init(function(interop, message){
 	console.log(message);
 	new AfxInterop(interop, JSON.parse(message));
 });
-
 </script>
 </body>
 </html>

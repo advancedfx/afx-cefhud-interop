@@ -27,7 +27,7 @@ c:
 cd c:\some\directory\afx-cefhud-interop
 mkdir build
 cd build
-cmake -G "Visual Studio 16" -A x64 ..
+cmake -G "Visual Studio 16" -A x64 "-DUSE_SANDBOX=Off" ..
 ```
 
 Then, open the newly created c:\some\directory\afx-cefhud-interop\build\cef.sln in Visual Studio 2019 and select **Release** and **x64** in the confugration, right click afx-cefhud-interop in Solution tree and select Build.

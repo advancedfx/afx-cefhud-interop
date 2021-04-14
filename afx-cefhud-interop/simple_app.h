@@ -47,28 +47,29 @@ class SimpleApp : public CefApp,
                                 CefRefPtr<CefV8Context> context) OVERRIDE {
 
     if (frame->IsMain()) {
-      if(m_ExtraInfo->HasKey("interopType") && m_ExtraInfo->HasKey("argStr")) {
+      if(m_ExtraInfo->HasKey("interopType") && m_ExtraInfo->HasKey("argStr") && m_ExtraInfo->HasKey("handlerId")) {
         if (m_ExtraInfo->GetString("interopType").compare("drawing") == 0) {
           auto window = context->GetGlobal();
           window->SetValue(
               "afxInterop",
               advancedfx::interop::CreateDrawingInterop(
-                  browser, frame, context, m_ExtraInfo->GetString("argStr"), &m_Interop),
+                  browser, frame, context, m_ExtraInfo->GetString("argStr"),
+                  m_ExtraInfo->GetInt("handlerId"), &m_Interop),
               V8_PROPERTY_ATTRIBUTE_NONE);
         }
         else if (m_ExtraInfo->GetString("interopType").compare("engine") == 0) {
           auto window = context->GetGlobal();
           window->SetValue("afxInterop",
                            advancedfx::interop::CreateEngineInterop(
-                               browser, frame, context,
-                               m_ExtraInfo->GetString("argStr"), &m_Interop),
+                               browser, frame, context, m_ExtraInfo->GetString("argStr"),
+                  m_ExtraInfo->GetInt("handlerId"), &m_Interop),
                                V8_PROPERTY_ATTRIBUTE_NONE);
         }
         else if (m_ExtraInfo->GetString("interopType").compare("index") == 0) {
           auto window = context->GetGlobal();
           window->SetValue("afxInterop",advancedfx::interop::CreateInterop(
-                               browser, frame, context,
-                               m_ExtraInfo->GetString("argStr"), &m_Interop),
+                               browser, frame, context, m_ExtraInfo->GetString("argStr"),
+                  m_ExtraInfo->GetInt("handlerId"), &m_Interop),
                                V8_PROPERTY_ATTRIBUTE_NONE);
         }
       }
@@ -98,7 +99,7 @@ class SimpleApp : public CefApp,
     // disable creation of a GPUCache/ folder on disk
     command_line->AppendSwitch("disable-gpu-shader-disk-cache");
 
-    command_line->AppendSwitch("disable-accelerated-video-decode");
+    //command_line->AppendSwitch("disable-accelerated-video-decode");
 
     // un-comment to show the built-in Chromium fps meter
     //command_line->AppendSwitch("show-fps-counter");
