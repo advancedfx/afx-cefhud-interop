@@ -6249,16 +6249,13 @@ private:
 
         if(!m_PipeServer->Flush())
             return false;
-
-        // OutputDebugStringA("DrawingReply::Retry\n");
-        /*std::string code = std::to_string(clientFrameCount) + " < " +
-                           std::to_string(frameCount) + " || " +
-                           std::to_string(clientFrameCount) +
-                           " == " + std::to_string(frameCount) + " && " +
-                           std::to_string(pass) + " < " +
-                           std::to_string(clientPass);
-        MessageBoxA(0, code.c_str(), "DrawingReply::Retry", MB_OK);*/
-
+/*
+         std::string code = std::to_string(clientFrameCount) + " > " +
+                           std::to_string(frameCount) + " @ " +
+                           std::to_string(clientPass) + " / " +
+                           std::to_string(pass);
+        MessageBoxA(0, code.c_str(), "DrawingReply::Retry", MB_OK);
+*/
         return true;
 
       } else if (frameDiff > 0) {
@@ -6269,22 +6266,26 @@ private:
 
         if(!m_PipeServer->Flush())
             return false;
-
-        // OutputDebugStringA("DrawingReply::Skip\n");
-        /*std::string code = std::to_string(clientFrameCount) + " > " +
-                           std::to_string(frameCount) + " || " +
-                           std::to_string(clientFrameCount) +
-                           " == " + std::to_string(frameCount) + " && " +
-                           std::to_string(pass) + "> " +
-                           std::to_string(clientPass);
+/*
+        std::string code = std::to_string(clientFrameCount) + " < " +
+                           std::to_string(frameCount) + " @ " +
+                           std::to_string(clientPass) + " / " +
+                           std::to_string(pass);
         MessageBoxA(0, code.c_str(), "DrawingReply::Retry", MB_OK);*/
       } else {
         // we are right on.
 
         m_InFlow = pass == clientPass;
+/*
+        std::string code = std::to_string(clientFrameCount) + " == " +
+                           std::to_string(frameCount) + " @ " +
+                           std::to_string(clientPass) + " / " +
+                           std::to_string(pass);
+        MessageBoxA(0, code.c_str(), "DrawingReply::Retry", MB_OK);*/
 
         if(!m_InFlow) 
         {
+
           if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::Finished))
             return false;
 
@@ -6555,12 +6556,26 @@ public:
                                           const CefV8ValueList& arguments,
                                           CefRefPtr<CefV8Value>& retval,
                                           CefString& exceptionoverride) {
-      if (1 <= arguments.size()) {
-
+          if (3 <= arguments.size() && arguments[0]->IsFunction() &&
+              arguments[1]->IsFunction()) {
         self->m_PipeQueue.Queue(
-            [self, filter = new CAfxValue(arguments[0]),
-                                 obj = new CAfxValue(2 <= arguments.size() ? arguments[1] : nullptr)]() {
-          self->DoPump(filter, obj);
+            [self, fn_resolve = arguments[0], fn_reject = arguments[1], filter = new CAfxValue(arguments[2]),
+                                 obj = new CAfxValue(4 <= arguments.size() ? arguments[3] : nullptr)]() {
+          if(self->DoPump(filter, obj)) {
+              CefPostTask(TID_RENDERER,
+                          new CAfxTask([ctx = self->m_Context, fn_resolve]() {
+                            ctx->Enter();
+                            fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                            ctx->Exit();
+                          }));            
+          } else {
+              CefPostTask(TID_RENDERER,
+                          new CAfxTask([ctx = self->m_Context, fn_reject]() {
+                            ctx->Enter();
+                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            ctx->Exit();
+                          }));            
+          }
         });
 
         return true;
@@ -7029,7 +7044,7 @@ private:
   float m_Rz = 0;
   float m_Fov = 90;
 
-  void DoPump(CefRefPtr<CAfxValue> filter, CefRefPtr<CAfxValue> obj) {
+  bool DoPump(CefRefPtr<CAfxValue> filter, CefRefPtr<CAfxValue> obj) {
     int errorLine = 0;
 
     if (!Connected())
@@ -7155,7 +7170,7 @@ private:
                       onNewConnection->ExecuteFunction(nullptr, CefV8ValueList());
                       m_Context->Exit();
                     }));
-        return;
+        return true;
       }
     }
 
@@ -7217,7 +7232,7 @@ private:
                             onCommands->ExecuteFunction(nullptr, args);
                             m_Context->Exit();
                           }));
-              return;
+              return true;
             }
           }          
         } goto __2;
@@ -7361,47 +7376,47 @@ private:
                           onRenderViewBegin->ExecuteFunction(nullptr, args);
                           m_Context->Exit();
                         }));
-            return;
+            return true;
           }
         } goto __3;
 
         case EngineMessage::OnRenderViewEnd: {
           auto onRenderViewEnd = GetPumpFilter(filter, "onRenderViewEnd");
           if (nullptr != onRenderViewEnd) {
+            m_PumpResumeAt = 4;
             CefPostTask(TID_RENDERER, new CAfxTask([this, onRenderViewEnd]() {
-                          m_PumpResumeAt = 4;
                           m_Context->Enter();
                           onRenderViewEnd->ExecuteFunction(nullptr,
                                                            CefV8ValueList());
                           m_Context->Exit();
                         }));
-            return;
+            return true;
           }
         } goto __4;
 
         case EngineMessage::BeforeHud: {
           auto onHudBegin = GetPumpFilter(filter, "onRenderViewHudBegin");
           if (nullptr != onHudBegin) {
+            m_PumpResumeAt = 1;
             CefPostTask(TID_RENDERER, new CAfxTask([this, onHudBegin]() {
-                          m_PumpResumeAt = 1;
                           m_Context->Enter();
                           onHudBegin->ExecuteFunction(nullptr, CefV8ValueList());
                           m_Context->Exit();
                         }));
-            return;
+            return true;
           }
         } goto __1;
 
         case EngineMessage::AfterHud: {
           auto onHudEnd = GetPumpFilter(filter, "onRenderViewHudEnd");
           if (nullptr != onHudEnd) {
+            m_PumpResumeAt = 1;
             CefPostTask(TID_RENDERER, new CAfxTask([this, onHudEnd]() {
-                          m_PumpResumeAt = 1;
                           m_Context->Enter();
                           onHudEnd->ExecuteFunction(nullptr, CefV8ValueList());
                           m_Context->Exit();
                         }));
-            return;
+            return true;
           }
         } goto __1;
 
@@ -7410,7 +7425,7 @@ private:
           if (!DoRenderPass(filter, "onRenderViewBeforeTranslucentShadow", bReturn))
             AFX_GOTO_ERROR
           if (bReturn)
-            return;
+            return true;
         }
           goto __1;
         case EngineMessage::AfterTranslucentShadow: {
@@ -7418,7 +7433,7 @@ private:
           if (!DoRenderPass(filter, "onRenderViewAfterTranslucentShadow", bReturn))
             AFX_GOTO_ERROR
           if (bReturn)
-            return;
+            return true;
         }
           goto __1;
         case EngineMessage::BeforeTranslucent: {
@@ -7426,7 +7441,7 @@ private:
           if (!DoRenderPass(filter, "onRenderViewBeforeTranslucent", bReturn))
             AFX_GOTO_ERROR
           if (bReturn)
-            return;
+            return true;
         }
           goto __1;
         case EngineMessage::AfterTranslucent: {
@@ -7434,7 +7449,7 @@ private:
           if (!DoRenderPass(filter, "onRenderViewAfterTranslucent", bReturn))
             AFX_GOTO_ERROR
           if (bReturn)
-            return;
+            return true;
         }
           goto __1;
 
@@ -7457,7 +7472,6 @@ private:
           auto onViewOverride = GetPumpFilter(filter, "onViewOverride");
           if (nullptr != onViewOverride) {
             m_PumpResumeAt = 5;
-
             CefPostTask(TID_RENDERER,
                         new CAfxTask([this, onViewOverride, tx = m_Tx, ty = m_Ty, tz = m_Tz, rx = m_Rx, ry = m_Ry, rz = m_Rz, fov= m_Fov]() {
                           m_Context->Enter();
@@ -7486,7 +7500,7 @@ private:
                           onViewOverride->ExecuteFunction(nullptr, args);
                           m_Context->Exit();
                         }));
-            return;
+            return true;
           }
         } goto __5;
  
@@ -7497,7 +7511,7 @@ private:
           if (!ReadGameEvent(filter, bReturn))
             AFX_GOTO_ERROR
           if (bReturn) {
-            return;
+            return true;
           }
         }
           goto __1;
@@ -7567,16 +7581,17 @@ __3 : {
 }
 
 __4 : {
+  m_PumpResumeAt = 1;
   auto onDone = GetPumpFilter(filter, "onDone");
   if (nullptr != onDone) {
-    m_PumpResumeAt = 1;
     CefPostTask(TID_RENDERER, new CAfxTask([this, onDone]() {
                   m_Context->Enter();
                   onDone->ExecuteFunction(nullptr, CefV8ValueList());
                   m_Context->Exit();
                 }));
-    return;
+    return true;
   }
+  return true;
 }
 
 __5 : {
@@ -7658,17 +7673,7 @@ __5 : {
   error:
     //AFX_PRINT_ERROR("CEngineInteropImpl::DoPump", errorLine)
     m_PumpResumeAt = 0;
-    auto onError = GetPumpFilter(filter, "onError");
-    if (nullptr != onError) {
-      CefPostTask(TID_RENDERER, new CAfxTask([this, onError, errorLine]() {
-                    m_Context->Enter();
-                    CefV8ValueList args;
-                    args.push_back(CefV8Value::CreateInt(errorLine));
-                    onError->ExecuteFunction(nullptr, args);
-                    m_Context->Exit();
-                  }));
-    }
-    return;
+    return false;
   }
 
 

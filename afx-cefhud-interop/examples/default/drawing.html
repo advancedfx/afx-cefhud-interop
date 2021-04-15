@@ -501,8 +501,6 @@ function AfxDrawingInterop(interop,args) {
 	
 	this.interop = interop;
 	this.args = args;
-	this.taskQueue = [];
-	this.painters = 0;
 	
 	this.width = null;
 	this.height = null;
@@ -513,6 +511,10 @@ function AfxDrawingInterop(interop,args) {
 	this.divGameEvents = document.getElementById('gameEvents');
 	
 	this.engineInteropId = null;
+
+	this.queued = 0;
+	this.connected = false;
+	this.messages = [];
 
 	this.shaderData = {
 		"afx_drawtexture_vs20": this.compileShader(this.stringToAfxData(`
@@ -593,19 +595,27 @@ function AfxDrawingInterop(interop,args) {
 			var docP = document.createElement('p');
 			docP.appendChild(document.createTextNode(JSON.stringify(e)));
 			this.divGameEvents.insertBefore(docP, this.divGameEvents.firstElementChild);
-			console.log(JSON.stringify(e));
 		},
 		"onHudEnd": async function(frameCount,pass){
-			
+		
 			var self = this;
-			
+
+			console.log("PUMP BEGIN: "+frameCount);
+
 			var isInFlow = await toPromise(self.interop.pumpBegin, frameCount, pass);
 
-			if(!isInFlow)
-				return;
+			console.log("PUMP BEGIN 2: "+frameCount);
 
+			if(!isInFlow)
+			{
+				return;
+			}
+
+			console.log("PUMP BEGIN 3: "+frameCount);
 			try {
 				var cefTextureHandle = await toPromise.apply(self, [self.renderCefFrame]);
+
+				console.log("PUMP BEGIN 4: "+frameCount);
 
 				if(cefTextureHandle.invalid) throw toSoftError(new Error("cefTextureHandle.invalid"));
 
@@ -643,9 +653,7 @@ function AfxDrawingInterop(interop,args) {
 
 				if(null === self.cefTexture) {
 					var refTexture = [undefined];
-					console.log("HI");
 					var hr = await toPromise(self.interop.d3d9CreateTexture, self.width, self.height, 1, D3DUSAGE.D3DUSAGE_RENDERTARGET, 21 /* D3DFMT_A8R8G8B8 */, D3DPOOL.D3DPOOL_DEFAULT, refTexture, [self.cefTextureHandle]);
-					console.log("HI2");
 					if(FAILED(hr)) throw toSoftError(failedHResultToError(hr));
 					self.cefTexture = refTexture[0];
 				}
@@ -654,23 +662,31 @@ function AfxDrawingInterop(interop,args) {
 
 				await toPromise(self.interop.waitForClientGpu);
 			}
-			finally {
-				await toPromise(self.interop.pumpEnd);
+			catch(e) {
+				if(e && e.soft)
+				{
+					logError(e);
+				}
+				else throw e;
 			}
+
+			await toPromise(self.interop.pumpEnd);
+
+			console.log("PUMP END: "+frameCount);
 		}
 	};
 	
 	interop.onMessage = function(senderId, message){
 		self.onMessage(senderId, message).catch((e)=>{
 			logError(e);
-			if(!e.soft)
+			if(!(e && e.soft))
 				return self.disconnect();
 		});
 	};
 	interop.onDeviceReset = function(){
 		self.onDeviceReset().catch((e)=>{
 			logError(e);
-			if(!e.soft)
+			if(!(e && e.soft))
 				return self.disconnect();
 		});
 	};
@@ -701,21 +717,35 @@ function AfxDrawingInterop(interop,args) {
 		"rect": null
 	}
 
-	this.queued = 0;
-
-	this.connected = false;
-
 	toPromise(interop.sendMessage, this.args.indexInteropId, JSON.stringify({
 		"id": "drawingCreated",
 		"args": [interop.id]
-	})).catch((e)=>{
-		logError(e);
-	});
+	}));
 }
 
 AfxDrawingInterop.prototype.onMessage = async function(senderId, message) {
-	const args = JSON.parse(message);
-	await this.messageHandlers[args.id].apply(this, args.args);
+	this.messages.push([senderId,message]);
+
+	if(1 < this.messages.length)
+		return;
+
+	while(0 < this.messages.length)
+	{
+		var curMessage = this.messages[0];
+
+		const args = JSON.parse(curMessage[1]);
+
+		try {
+			await this.messageHandlers[args.id].apply(this, args.args);
+		}
+		catch(e) {
+			if(e && e.soft)
+				logError(e);
+			else
+				throw(e);
+		}
+		this.messages.shift();
+	}
 }
 
 AfxDrawingInterop.prototype.onDeviceReset = async function() {
@@ -1005,6 +1035,10 @@ AfxDrawingInterop.prototype.connect = async function() {
 		
 	if(connected) {
 		self.connected = true;
+		await toPromise(self.interop.sendMessage, self.args.indexInteropId, JSON.stringify({
+			"id": "drawingConnected",
+			"args": [self.interop.id]
+		}));
 		await toPromise(self.interop.sendMessage, self.engineInteropId, JSON.stringify({
 			"id": "drawingConnected",
 			"args": [self.interop.id]
@@ -1037,7 +1071,13 @@ AfxDrawingInterop.prototype.disconnect = async function() {
 	self.shaders["afx_drawtexture_vs20"] = null;
 	self.shaders["afx_drawtexture_ps20"] = null;
 	self.vertexDeclarations["pos3_uv2"] = null;	
+
+	this.messages = []; // drop all messages, they are useless now.
 	
+	await toPromise(self.interop.sendMessage, self.args.indexInteropId, JSON.stringify({
+		"id": "drawingDisconnected",
+		"args": [self.interop.id]
+	}));
 	await toPromise(self.interop.sendMessage, self.engineInteropId, JSON.stringify({
 		"id": "drawingDisconnected",
 		"args": [self.interop.id]
@@ -1065,7 +1105,6 @@ AfxDrawingInterop.prototype.renderCefFrame = function(resolve,reject) {
 		}
 
 		self.interop.renderCefFrame((cefTextureHandle) => {
-			console.log("LOL");
 
 			if(interval)
 			{
@@ -1075,8 +1114,8 @@ AfxDrawingInterop.prototype.renderCefFrame = function(resolve,reject) {
 			self.queued = 0;
 
 			resolve(cefTextureHandle);
+
 		}, (error) => {
-			console.log("HM");
 
 			if(interval)
 			{
@@ -1089,20 +1128,21 @@ AfxDrawingInterop.prototype.renderCefFrame = function(resolve,reject) {
 		});
 	}
 
-	interval = setInterval(function(){
-		requestRender();
-	}, 40);
-
+	//interval = setInterval(function(){
+	//	requestRender();
+	//}, 40);
 	requestRender();
 }
 
 
 ////////////////////////////////////////////////////////////////////////////////
 
-window.afxInterop.init(function(interop,message){
-	console.log("new AfxDrawingInterop: "+message); 
-	new AfxDrawingInterop(interop, JSON.parse(message));
-});
+document.addEventListener('DOMContentLoaded', function(){
+	window.afxInterop.init(function(interop,message){
+		console.log("new AfxDrawingInterop: "+message); 
+		new AfxDrawingInterop(interop, JSON.parse(message));
+	});	
+}, false);
 
 </script>
 </body>

@@ -24,69 +24,130 @@ afx_interop send cefhud [...]
 </head>
 <body>
 <h1>Default example</h1>
+<p>Number of reconnects: <span id="reconnects">0</span></p>
+<p>Engine connected: <span id="engineStatus">n/a</span></p>
+<p>Drawing connected: <span id="drawingStatus">n/a</span></p>
 <script type="text/javascript" src="common.js"></script>
 <script>
 
 function AfxInterop(interop, args) {
 	
+	var self = this;
+	
 	var fileFolderPath = window.location.toString();
 	fileFolderPath = fileFolderPath.replace("/index.html","");
 
-	var self = this;
-	
 	this.interop = interop;
 	this.args = args;
+
+	this.drawingInteropId = null;
+	this.engineInteropId = null;
+
+	this.messages = [];
+
+	this.reconnects = 0;
+
+	this.elReconnects = document.getElementById('reconnects');
+	this.elEngineStatus = document.getElementById('engineStatus');
+	this.elDrawingStatus = document.getElementById('drawingStatus');
 	
 	this.messageHandlers = {
-		"drawingCreated": function(drawingInteropId) {
+		"drawingCreated": async function(drawingInteropId) {
 			console.log("Created drawing interop #"+drawingInteropId);
+
 			this.drawingInteropId = drawingInteropId;
 			
-			toPromise(this.interop.createEngineInterop,
+			await toPromise(this.interop.createEngineInterop,
 				fileFolderPath+"/engine.html",
 				JSON.stringify({
-					"indexInteropId": self.interop.id,
-					"drawingInteropId": self.drawingInteropId,
+					"indexInteropId": this.interop.id,
+					"drawingInteropId": this.drawingInteropId,
 					"pipeName": "advancedfxInterop"
 				})
-			).catch((e)=>{
-				logError(e);
-			});
+			);
 		},
-		"engineCreated": function(engineInteropId) {
-			console.log("Created engine interop #"+engineInteropId);
-			self.engineInteropId = engineInteropId;
-		}
+		"engineCreated": async function(engineInteropId) {
+			console.log("Created engine interop #"+engineInteropId+", connecting ...");
+			this.engineInteropId = engineInteropId;
+
+			await this.reconnect();
+		},
+		"engineConnected": async function(engineInteropId) {
+			this.elEngineStatus.innerText = "connected";
+		},
+		"engineDisconnected": async function(engineInteropId) {
+			console.warn("Engine disconnected, reconnecting in 1 second ...");
+			this.elEngineStatus.innerText = "DISCONNECTED";
+
+			await new Promise((resolve,reject)=>{
+				setTimeout(resolve, 1000);
+			});
+
+			await this.reconnect();
+		},
+		"engineConnecting": async function(senderId) {
+
+			await new Promise((resolve,reject)=>{
+				setTimeout(resolve, 100);
+			});
+
+			await toPromise(this.interop.sendMessage, this.engineInteropId, JSON.stringify({
+				"id": "connect",
+				"args": [this.interop.id]
+			}));
+		},
+		"drawingConnected": async function(engineInteropId) {
+			this.elDrawingStatus.innerText = "connected";
+		},
+		"drawingDisconnected": async function(engineInteropId) {
+			this.elDrawingStatus.innerText = "DISCONNECTED";
+		},
 	};
 	
 	interop.onMessage = function(senderId, message){
-		self.onMessage(senderId, message);
+		self.onMessage(senderId, message).catch((e)=>{
+			logError(e);
+			if(!(e && e.soft))
+				return self.reconnect();
+		});
 	};
+	
 	interop.onError = function(senderId, message){
 		self.onError(senderId, message);
 	};
 	
-	self.drawingInteropId = null;
-	self.engineInteropId = null;
-
-	console.log("HAHA");
-
-	toPromise(self.interop.createDrawingInterop,
+	toPromise(this.interop.createDrawingInterop,
 		fileFolderPath+"/drawing.html",
 		JSON.stringify({
-			"indexInteropId": self.interop.id,
+			"indexInteropId": this.interop.id,
 			"pipeName": "advancedfxInterop_drawing"
 		})
-	).then(()=>{
-		console.log("HI")
-	}).catch((e)=>{
-		logError(e);
-	});
+	);
 }
 
-AfxInterop.prototype.onMessage = function(senderId, message) {
-	const args = JSON.parse(message);
-	this.messageHandlers[args.id].apply(this, args.args);
+AfxInterop.prototype.onMessage = async function(senderId, message) {
+	this.messages.push([senderId,message]);
+
+	if(1 < this.messages.length)
+		return;
+
+	while(0 < this.messages.length)
+	{
+		var curMessage = this.messages[0];
+
+		const args = JSON.parse(curMessage[1]);
+
+		try {
+			await this.messageHandlers[args.id].apply(this, args.args);
+		}
+		catch(e) {
+			if(e && e.soft)
+				logError(e);
+			else
+				throw(e);
+		}
+		this.messages.shift();
+	}
 }
 
 AfxInterop.prototype.onError = function(senderId, message) {
@@ -99,14 +160,30 @@ AfxInterop.prototype.onError = function(senderId, message) {
 		throw ("Interop #"+senderId+" error: "+message);
 }
 
+AfxInterop.prototype.reconnect = async function(senderId, message) {
+
+	this.messages = [];
+
+	++this.reconnects;
+	this.elReconnects.innerText = this.reconnects;
+	
+	await toPromise(this.interop.sendMessage, this.engineInteropId, JSON.stringify({
+		"id": "connect",
+		"args": [this.interop.id]
+	}));
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 //window.open("http://google.com");
 
-window.afxInterop.init(function(interop, message){
-	console.log(message);
-	new AfxInterop(interop, JSON.parse(message));
-});
+document.addEventListener('DOMContentLoaded', function(){
+	window.afxInterop.init(function(interop, message){
+		console.log(message);
+		new AfxInterop(interop, JSON.parse(message));
+	});
+}, false);
+
 </script>
 </body>
 </html>
