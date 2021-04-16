@@ -41,6 +41,8 @@ ID3D11Device* pDevice = NULL;
 //ID3D11DeviceContext* pContext = NULL;
 ID3D11Query* pQuery = NULL;
 
+//HANDLE g_SharedHandle = INVALID_HANDLE_VALUE; 
+
 HANDLE AfxInteropGetSharedHandle(void* d3d11ResourcePtr) {
   HANDLE result = NULL;
 
@@ -83,13 +85,12 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
     /* [annotation] */
     _COM_Outptr_opt_ ID3D11Texture2D** ppTexture2D) {
   if (pDesc) {
+
     switch (pDesc->Format) {
       default:
         break;
       case DXGI_FORMAT_B8G8R8A8_UNORM: 
           {
-        char value[33];
-
         if (pDesc->MiscFlags & D3D11_RESOURCE_MISC_SHARED) {
           D3D11_TEXTURE2D_DESC Desc = *pDesc;
 
@@ -108,10 +109,17 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
 
           HRESULT result =
               True_CreateTexture2D(This, &Desc, pInitialData, ppTexture2D);
+/*              
+          g_SharedHandle = AfxInteropGetSharedHandle(*ppTexture2D);
 
-          HANDLE handle = AfxInteropGetSharedHandle(*ppTexture2D);
-
-          OutputDebugStringA(ultoa(HandleToULong(handle), &value[0], 16));
+      std::string tmp;
+      tmp += "Format: "+std::to_string(pDesc->Format)+"\n";
+      tmp += "Usage: "+std::to_string(pDesc->Usage)+"\n";
+      tmp += "BindFlags: "+std::to_string(pDesc->BindFlags)+"\n";
+      tmp += "MiscFlags: "+std::to_string(pDesc->MiscFlags)+"\n";
+      tmp += "HRESULT: "+std::to_string(result)+"\n";
+      tmp += "HADNLE: "+std::to_string(HandleToULong(g_SharedHandle))+"\n";
+      MessageBoxA(0,tmp.c_str(),"INFO",MB_OK);*/
 
           return result;
         }

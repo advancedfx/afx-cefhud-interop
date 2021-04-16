@@ -17,39 +17,6 @@
 namespace advancedfx {
 namespace interop {
 
-class CInterop : public CefBaseRefCounted {
- public:
-  virtual void CloseInterop() = 0;
-
-  // Must be called on TID_RENDERER.
-  virtual bool OnProcessMessageReceived(
-      CefRefPtr<CefBrowser> browser,
-      CefRefPtr<CefFrame> frame,
-      CefProcessId source_process,
-      CefRefPtr<CefProcessMessage> message) = 0;
-};
-
-CefRefPtr<CefV8Value> CreateInterop(CefRefPtr<CefBrowser> browser,
-                                    CefRefPtr<CefFrame> frame,
-                                    CefRefPtr<CefV8Context> context,
-                                    const CefString& argStr,
-                                    DWORD handlerId,
-                                    CefRefPtr<CInterop>* out = nullptr);
-
-CefRefPtr<CefV8Value> CreateEngineInterop(CefRefPtr<CefBrowser> browser,
-                                          CefRefPtr<CefFrame> frame,
-                                          CefRefPtr<CefV8Context> context,
-                                          const CefString& argStr,
-                                          DWORD handlerId,
-                                          CefRefPtr<CInterop>* out = nullptr);
-
-CefRefPtr<CefV8Value> CreateDrawingInterop(CefRefPtr<CefBrowser> browser,
-                                           CefRefPtr<CefFrame> frame,
-                                           CefRefPtr<CefV8Context> context,
-                                           const CefString& argStr,
-                                           DWORD handlerId,
-                                           CefRefPtr<CInterop>* out = nullptr);
-
 class CPipeHandle {
  public:
   HANDLE GetHandle() { return m_Handle; }
@@ -315,6 +282,42 @@ enum class HostMessage : int {
   CreateEngine = 4,
   Message = 5
 };
+
+
+class CInterop : public CefBaseRefCounted {
+  public:
+    virtual void CloseInterop() = 0;
+
+    // Must be called on TID_RENDERER.
+    virtual bool OnProcessMessageReceived(
+        CefRefPtr<CefBrowser> browser,
+        CefProcessId source_process,
+        CefRefPtr<CefProcessMessage> message) = 0;
+
+  protected:
+    CThreadedQueue m_InteropQueue;
+};
+
+CefRefPtr<CefV8Value> CreateInterop(CefRefPtr<CefBrowser> browser,
+                                    CefRefPtr<CefFrame> frame,
+                                    CefRefPtr<CefV8Context> context,
+                                    const CefString& argStr,
+                                    DWORD handlerId,
+                                    CefRefPtr<CInterop>* out = nullptr);
+
+CefRefPtr<CefV8Value> CreateEngineInterop(CefRefPtr<CefBrowser> browser,
+                                          CefRefPtr<CefFrame> frame,
+                                          CefRefPtr<CefV8Context> context,
+                                          const CefString& argStr,
+                                          DWORD handlerId,
+                                          CefRefPtr<CInterop>* out = nullptr);
+
+CefRefPtr<CefV8Value> CreateDrawingInterop(CefRefPtr<CefBrowser> browser,
+                                           CefRefPtr<CefFrame> frame,
+                                           CefRefPtr<CefV8Context> context,
+                                           const CefString& argStr,
+                                           DWORD handlerId,
+                                           CefRefPtr<CInterop>* out = nullptr);
 
 }  // namespace interop
 }  // namespace advancedfx

@@ -5,9 +5,11 @@
 #ifndef CEF_TESTS_CEFSIMPLE_SIMPLE_HANDLER_H_
 #define CEF_TESTS_CEFSIMPLE_SIMPLE_HANDLER_H_
 
-#include "include/cef_client.h"
+#include <include/cef_client.h>
 #include <include/base/cef_bind.h>
-#include "include/wrapper/cef_closure_task.h"
+#include <include/wrapper/cef_closure_task.h>
+
+#include <include/cef_parser.h>
 
 #include "AfxInterop.h"
 
@@ -46,11 +48,9 @@ class SimpleHandler : public CefClient,
 
   virtual CefRefPtr<CefLoadHandler> GetLoadHandler() OVERRIDE { return this; }
 
-    virtual bool OnProcessMessageReceived(
-      CefRefPtr<CefBrowser> browser,
-      CefRefPtr<CefFrame> frame,
-      CefProcessId source_process,
-      CefRefPtr<CefProcessMessage> message) OVERRIDE;
+    virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                        CefProcessId source_process,
+                                        CefRefPtr<CefProcessMessage> message) OVERRIDE;
 
 
   // CefDisplayHandler methods:
@@ -124,14 +124,20 @@ class SimpleHandler : public CefClient,
     it->second.Connection = nullptr;
   }
 
+  /**
+   * @throws exception
+   */
   void Message(int senderId, int targetId, const std::string& message) {
     std::unique_lock<std::mutex> lock(m_BrowserMutex);
     auto it = m_Browsers.find(targetId);
     if (it == m_Browsers.end())
       throw "CHostPipeServerConnectionThread::Message failed: no target browser.";
 
-    if (it->second.Connection)
+    if (CHostPipeServerConnectionThread* connection = it->second.Connection)
+    {
+      lock.unlock();
       it->second.Connection->Message(senderId, message);
+    }
     else
       throw "CHostPipeServerConnectionThread::Message failed: no target connection.";
   }
@@ -156,13 +162,43 @@ class SimpleHandler : public CefClient,
     window_info.width = 640;
     window_info.height = 360;
 
+    
     CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
     extra_info->SetString("interopType", "drawing");
     extra_info->SetString("argStr", argStr);
     extra_info->SetInt("handlerId", (int)GetCurrentProcessId());
 
-    CefBrowserHost::CreateBrowser(window_info, this, argUrl, browser_settings,
-                                  extra_info, nullptr);
+    auto val = CefValue::Create();
+    val->SetDictionary(extra_info);
+
+    std::string prefix;
+    std::string query;
+    std::string suffix;
+
+    size_t pos_hash = argUrl.find("#"); 
+    if(std::string::npos != pos_hash)
+    {
+      prefix = argUrl.substr(0, pos_hash);
+      suffix = argUrl.substr(pos_hash);
+    }
+    else {
+      prefix = argUrl;
+    }
+
+    size_t pos_query = prefix.find("?");
+
+    if(std::string::npos != pos_query)
+    {
+      query = prefix.substr(pos_query + 1);
+      prefix = prefix.substr(0, pos_query);
+    }
+
+    if(0 < query.size()) query += "&";
+    query += "afx="+CefURIEncode(CefWriteJSON(val, JSON_WRITER_DEFAULT), false).ToString();
+
+    std::string url = prefix+"?"+query+suffix;
+
+    CefBrowserHost::CreateBrowser(window_info, this, url, browser_settings, nullptr);
   }
 
   void DoCreateEngine(const std::string& argStr, const std::string& argUrl) {
@@ -182,8 +218,38 @@ class SimpleHandler : public CefClient,
     extra_info->SetString("argStr", argStr);
     extra_info->SetInt("handlerId", GetCurrentProcessId());
 
-    CefBrowserHost::CreateBrowser(window_info, this, argUrl, browser_settings,
-                                  extra_info, nullptr);
+    auto val = CefValue::Create();
+    val->SetDictionary(extra_info);
+
+    std::string prefix;
+    std::string query;
+    std::string suffix;
+
+    size_t pos_hash = argUrl.find("#"); 
+    if(std::string::npos != pos_hash)
+    {
+      prefix = argUrl.substr(0, pos_hash);
+      suffix = argUrl.substr(pos_hash);
+    }
+    else {
+      prefix = argUrl;
+    }
+
+    size_t pos_query = prefix.find("?");
+
+    if(std::string::npos != pos_query)
+    {
+      query = prefix.substr(pos_query + 1);
+      prefix = prefix.substr(0, pos_query);
+    }
+
+    if(0 < query.size()) query += "&";
+    query += "afx="+CefURIEncode(CefWriteJSON(val, JSON_WRITER_DEFAULT), false).ToString();
+
+    std::string url = prefix+"?"+query+suffix;
+    
+    CefBrowserHost::CreateBrowser(window_info, this, url, browser_settings,
+                                  nullptr);
   }
 
  protected:
@@ -297,6 +363,8 @@ class SimpleHandler : public CefClient,
           }
         }
       } catch (const std::exception& e) {
+        //MessageBoxA(0, e.what(), "Error in simple_handler.h", MB_OK|MB_ICONERROR);
+
         if (m_Browser)
           m_Host->RemoveBrowserConnection(browserId);
         throw e;

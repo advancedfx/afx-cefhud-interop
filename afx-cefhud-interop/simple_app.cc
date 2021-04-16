@@ -102,16 +102,16 @@ void SimpleApp::OnContextInitialized() {
   browser_settings.file_access_from_file_urls = STATE_ENABLED;
   browser_settings.windowless_frame_rate = 60;
 
-  std::string url;
+  std::string argUrl;
 
   // Check if a "--url=" value was provided via the command-line. If so, use
   // that instead of the default URL.
-  url = command_line->GetSwitchValue("url");
-  if (url.empty()) {
+  argUrl = command_line->GetSwitchValue("url");
+  if (argUrl.empty()) {
     std::stringstream ss;
     ss << "<html><body bgcolor=\"white\">"
           "<h2>You forgot to pass the URL d(o)(O)b</h2></body></html>";
-    url = GetDataURI(ss.str(), "text/html");
+    argUrl = GetDataURI(ss.str(), "text/html");
   }
 
   {
@@ -124,7 +124,7 @@ void SimpleApp::OnContextInitialized() {
     window_info.SetAsPopup(NULL, "cefsimple");
     window_info.width = 405;
     window_info.height = 720;
-    window_info.shared_texture_enabled = false;
+    window_info.shared_texture_enabled =  false;
     window_info.external_begin_frame_enabled = false;
 #endif
 
@@ -140,19 +140,48 @@ void SimpleApp::OnContextInitialized() {
     extra_info->SetString("argStr", CefWriteJSON(argStr, JSON_WRITER_DEFAULT));
     extra_info->SetInt("handlerId", GetCurrentProcessId());
 
+    auto val = CefValue::Create();
+    val->SetDictionary(extra_info);
+
+    std::string prefix;
+    std::string query;
+    std::string suffix;
+
+    size_t pos_hash = argUrl.find("#"); 
+    if(std::string::npos != pos_hash)
+    {
+      prefix = argUrl.substr(0, pos_hash);
+      suffix = argUrl.substr(pos_hash);
+    }
+    else {
+      prefix = argUrl;
+    }
+
+    size_t pos_query = prefix.find("?");
+
+    if(std::string::npos != pos_query)
+    {
+      query = prefix.substr(pos_query + 1);
+      prefix = prefix.substr(0, pos_query);
+    }
+
+    if(0 < query.size()) query += "&";
+    query += "afx="+CefURIEncode(CefWriteJSON(val, JSON_WRITER_DEFAULT), false).ToString();
+
+    std::string url = prefix+"?"+query+suffix;
+
     // Create the first browser window.
     CefBrowserHost::CreateBrowser(window_info, handler, url, browser_settings,
-                                  extra_info, nullptr);
+                                  nullptr);
   }
 }
 
 bool SimpleApp::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
-                                         CefRefPtr<CefFrame> frame,
                                          CefProcessId source_process,
                                          CefRefPtr<CefProcessMessage> message) {
 
   if (nullptr != m_Interop) {
-    return m_Interop->OnProcessMessageReceived(browser, frame, source_process,
+    return m_Interop->OnProcessMessageReceived(browser, source_process,
                                         message);
   }
 

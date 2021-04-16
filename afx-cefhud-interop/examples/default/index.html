@@ -34,9 +34,6 @@ function AfxInterop(interop, args) {
 	
 	var self = this;
 	
-	var fileFolderPath = window.location.toString();
-	fileFolderPath = fileFolderPath.replace("/index.html","");
-
 	this.interop = interop;
 	this.args = args;
 
@@ -58,7 +55,7 @@ function AfxInterop(interop, args) {
 			this.drawingInteropId = drawingInteropId;
 			
 			await toPromise(this.interop.createEngineInterop,
-				fileFolderPath+"/engine.html",
+				new URL("engine.html", window.location).toString(),
 				JSON.stringify({
 					"indexInteropId": this.interop.id,
 					"drawingInteropId": this.drawingInteropId,
@@ -117,7 +114,7 @@ function AfxInterop(interop, args) {
 	};
 	
 	toPromise(this.interop.createDrawingInterop,
-		fileFolderPath+"/drawing.html",
+		new URL("drawing.html", window.location).toString(),
 		JSON.stringify({
 			"indexInteropId": this.interop.id,
 			"pipeName": "advancedfxInterop_drawing"

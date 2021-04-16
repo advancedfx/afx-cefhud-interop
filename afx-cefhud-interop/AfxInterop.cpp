@@ -758,8 +758,7 @@ class CNamedPipeServer {
  private:
   HANDLE m_PipeHandle;
 
-  OVERLAPPED m_Overlapped = {};
-  //OVERLAPPED m_OverlappedWrite = {};
+  HANDLE m_hEvent = INVALID_HANDLE_VALUE;
 
   State m_State = State_Error;
 
@@ -774,8 +773,7 @@ class CNamedPipeServer {
                    DWORD readTimeOutMs = 5000,
                    DWORD writeTimeOutMs = 5000)
       : m_ReadTimeoutMs(readTimeOutMs), m_WriteTimeoutMs(writeTimeOutMs) {
-    m_Overlapped.hEvent = CreateEventA(NULL, true, true, NULL);
-    //m_OverlappedWrite.hEvent = CreateEventA(NULL, true, true, NULL);
+    m_hEvent = CreateEventA(NULL, TRUE, TRUE, NULL);
 
     std::string strPipeName("\\\\.\\pipe\\");
     strPipeName.append(pipeName);
@@ -787,17 +785,19 @@ class CNamedPipeServer {
             PIPE_REJECT_REMOTE_CLIENTS,
         1, m_ReadBufferSize, m_WriteBufferSize, 5000, NULL);
 
-    if (INVALID_HANDLE_VALUE != m_Overlapped.hEvent &&
-        //INVALID_HANDLE_VALUE != m_OverlappedWrite.hEvent &&
+    OVERLAPPED overlapped = {0};
+    overlapped.hEvent = m_hEvent;
+
+    if (INVALID_HANDLE_VALUE != m_hEvent &&
         INVALID_HANDLE_VALUE != m_PipeHandle &&
-        FALSE == ConnectNamedPipe(m_PipeHandle, &m_Overlapped)) {
+        FALSE == ConnectNamedPipe(m_PipeHandle, &overlapped)) {
       switch (GetLastError()) {
         case ERROR_IO_PENDING:
           m_State = State_Waiting;
           break;
         case ERROR_PIPE_CONNECTED:
           m_State = State_Connected;
-          SetEvent(m_Overlapped.hEvent);
+          SetEvent(m_hEvent);
           break;
       }
     }
@@ -806,20 +806,21 @@ class CNamedPipeServer {
   ~CNamedPipeServer() {
     if (INVALID_HANDLE_VALUE != m_PipeHandle)
       CloseHandle(m_PipeHandle);
-    //if (INVALID_HANDLE_VALUE != m_OverlappedWrite.hEvent)
-    //  CloseHandle(m_OverlappedWrite.hEvent);
-    if (INVALID_HANDLE_VALUE != m_Overlapped.hEvent)
-      CloseHandle(m_Overlapped.hEvent);
+    if (INVALID_HANDLE_VALUE != m_hEvent)
+      CloseHandle(m_hEvent);
   }
 
   State Connect() {
     if (State_Waiting == m_State) {
-      DWORD waitResult = WaitForSingleObject(m_Overlapped.hEvent, 0);
+      DWORD waitResult = WaitForSingleObject(m_hEvent, 0);
 
       if (WAIT_OBJECT_0 == waitResult) {
         DWORD cb;
 
-        if (!GetOverlappedResult(m_PipeHandle, &m_Overlapped, &cb, FALSE))
+        OVERLAPPED overlapped = {0};
+        overlapped.hEvent = m_hEvent;
+        
+        if (!GetOverlappedResult(m_PipeHandle, &overlapped, &cb, FALSE))
           m_State = State_Error;
         else
           m_State = State_Connected;
@@ -830,51 +831,31 @@ class CNamedPipeServer {
   }
 
   bool ReadBytes(LPVOID bytes, DWORD offset, DWORD length) {
+
     while (true) {
       if (0 == length)
         break;
 
       DWORD bytesRead = 0;
+      OVERLAPPED overlapped = {0};
+      overlapped.hEvent = m_hEvent;
 
-      if (!(ReadFile(m_PipeHandle, (unsigned char*)bytes + offset, length,
-                     &bytesRead, &m_Overlapped) &&
-            0 != bytesRead)) {
+      if (!ReadFile(m_PipeHandle, (unsigned char*)bytes + offset, length,
+                    NULL, &overlapped)) {
 
         DWORD lastError = GetLastError();
 
-        bool bContinue = false;
-
         switch (lastError) {
-          case ERROR_IO_PENDING: {
-            bool completed = false;
-            while (!completed) {
-              DWORD result =
-                  WaitForSingleObject(m_Overlapped.hEvent, m_ReadTimeoutMs);
-              switch (result) {
-                case WAIT_OBJECT_0:
-                  completed = true;
-                  break;
-                case WAIT_TIMEOUT:
-                  return false;
-                default:
-                  return false;
-              }
-            }
-          } break;
-          case ERROR_INVALID_USER_BUFFER:
-          case ERROR_NOT_ENOUGH_MEMORY:
-              bContinue = true;
-              break;
+          case ERROR_IO_PENDING:
+            break;
           default:
             return false;
         }
-
-        if (bContinue) continue;
-
-        if (!GetOverlappedResult(m_PipeHandle, &m_Overlapped, &bytesRead,
-                                 FALSE))
-          return false;
       }
+
+      if (!GetOverlappedResult(m_PipeHandle, &overlapped, &bytesRead,
+                                TRUE))
+        return false;
 
       offset += bytesRead;
       length -= bytesRead;
@@ -976,51 +957,31 @@ class CNamedPipeServer {
   }
 
   bool WriteBytes(const LPVOID bytes, DWORD offset, DWORD length) {
+
     while (true) {
       if (0 == length)
         break;
 
       DWORD bytesWritten = 0;
 
+      OVERLAPPED overlapped = {0};
+      overlapped.hEvent = m_hEvent;
+
       if (!WriteFile(m_PipeHandle, (unsigned char*)bytes +offset,
-                      length, &bytesWritten, &m_Overlapped)) {
+                      length, NULL, &overlapped)) {
         DWORD lastError = GetLastError();
 
-        bool bContinue = false;
-
         switch (lastError) {
-          case ERROR_IO_PENDING: {
-            bool completed = false;
-            while (!completed) {
-              DWORD result =
-                  WaitForSingleObject(m_Overlapped.hEvent,
-                                                 m_ReadTimeoutMs);
-              switch (result) {
-                case WAIT_OBJECT_0:
-                  completed = true;
-                  break;
-                case WAIT_TIMEOUT:
-                  return false;
-                default:
-                  return false;
-              }
-            }
-          } break;
-          case ERROR_INVALID_USER_BUFFER:
-          case ERROR_NOT_ENOUGH_MEMORY:
-            bContinue = true;
+          case ERROR_IO_PENDING:
             break;
           default:
             return false;
         }
-
-        if (bContinue)
-          continue;
-
-        if (!GetOverlappedResult(m_PipeHandle, &m_Overlapped,
-                                 &bytesWritten, FALSE))
-          return false;
       }
+
+      if (!GetOverlappedResult(m_PipeHandle, &overlapped,
+                              &bytesWritten, TRUE))
+        return false;
 
       offset += bytesWritten;
       length -= bytesWritten;
@@ -2127,7 +2088,7 @@ class CAfxInterop {
  public:
   CAfxInterop(const char* pipeName) : m_PipeName(pipeName) {}
 
-  virtual bool Connection(DWORD readTimeOutMs = 15000, DWORD writeTimeOutMs = 15000) {
+  virtual bool Connection(DWORD readTimeOutMs = 36000000, DWORD writeTimeOutMs = 36000000) {
     if (nullptr == m_PipeServer) {
       std::string pipeName(m_PipeName);
 
@@ -2383,7 +2344,7 @@ afxObject->AddFunction(
           if (4 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction() && arguments[2]->IsInt() &&
               arguments[3]->IsString()) {
-            self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
+            self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
                                       fn_reject = arguments[1],
                                       id = arguments[2]->GetIntValue(),
                                       str = arguments[3]->GetStringValue()]() {
@@ -2432,7 +2393,7 @@ afxObject->AddFunction(
                                               CefRefPtr<CefV8Value>& retval,
                                               CefString& exceptionoverride) {
       if (1 <= arguments.size() && arguments[0]->IsString()) {
-        self->m_PipeQueue.Queue(
+        self->m_InteropQueue.Queue(
             [self, pipeName = arguments[0]->GetStringValue().ToString()]() {
               self->SetPipeName(pipeName.c_str());
             });
@@ -2454,9 +2415,9 @@ afxObject->AddFunction(
                                              CefString& exceptionoverride) {
       if (2 <= arguments.size() && arguments[0]->IsFunction() &&
           arguments[1]->IsFunction()) {
-        self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
+        self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
                                  fn_reject = arguments[1]]() {
-          if (self->Connection(12000, 12000)) {
+          if (self->Connection()) {
             CefPostTask(TID_RENDERER,
                         new CAfxTask([ctx = self->m_Context, fn_resolve, connected = self->Connected()]() {
                           ctx->Enter();
@@ -2487,7 +2448,7 @@ afxObject->AddFunction(
                CefString& exceptionoverride) {
           if (2 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction()) {
-            self->m_PipeQueue.Queue([self, fn_resolve = arguments[0]]() {
+            self->m_InteropQueue.Queue([self, fn_resolve = arguments[0]]() {
               self->Close();
               CefPostTask(TID_RENDERER,
                           new CAfxTask([ctx = self->m_Context, fn_resolve]() {
@@ -2512,7 +2473,10 @@ afxObject->AddFunction(
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
                                  fn_reject = arguments[1], frameCount = arguments[2]->GetIntValue(),
                                  pass = arguments[3]->GetIntValue()]() {
-          if (self->Connected() && self->DoPumpBegin(frameCount, pass)) {
+
+          int errorLine = __LINE__;
+
+          if (self->Connected() && 0 == (errorLine = self->DoPumpBegin(frameCount, pass))) {
             bool inFlow = self->m_InFlow;
             CefPostTask(TID_RENDERER,
                         new CAfxTask([ctx = self->m_Context, fn_resolve,
@@ -2525,9 +2489,11 @@ afxObject->AddFunction(
                         }));
           } else {
             CefPostTask(TID_RENDERER,
-                        new CAfxTask([ctx = self->m_Context, fn_reject]() {
+                        new CAfxTask([ctx = self->m_Context, fn_reject, errorLine]() {
                           ctx->Enter();
-                          fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                          CefV8ValueList args;
+                          args.push_back(CefV8Value::CreateString("AfxInterop.cpp:"+std::to_string(errorLine)));
+                          fn_reject->ExecuteFunction(NULL, args);
                           ctx->Exit();
                         }));
           }
@@ -4910,7 +4876,7 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
           if (4 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction() && arguments[2]->IsInt() &&
               arguments[3]->IsInt()) {
-            self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
+            self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
                                       fn_reject = arguments[1],
                                       width = arguments[2]->GetIntValue(),
                                       height = arguments[3]->GetIntValue()]() {
@@ -4957,7 +4923,7 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
                       CefString& exceptionoverride) {
           if (2 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction()) {
-            self->m_PipeQueue.Queue(
+            self->m_InteropQueue.Queue(
                 [self, fn_resolve = arguments[0],
                                       fn_reject = arguments[1]]() {
                   self->m_CefFrameRenderedResolves.push(fn_resolve);
@@ -5132,7 +5098,6 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
 
   virtual bool OnProcessMessageReceived(
       CefRefPtr<CefBrowser> browser,
-      CefRefPtr<CefFrame> frame,
       CefProcessId source_process,
       CefRefPtr<CefProcessMessage> message) override {
     return false;
@@ -6180,19 +6145,19 @@ private:
 
     while (!m_WaitConnectionQuit) {
       try {
-        this->WaitForConnection(strPipeName.c_str(), 512, 512, 500);
+        this->WaitForConnection(strPipeName.c_str(), 4096, 4096, 36000000);
       } catch (...) {
       }
     }
   }
 
-  bool DoPumpBegin(int frameCount, unsigned int pass) {
+  int DoPumpBegin(int frameCount, unsigned int pass) {
        m_InFlow = false;
 
     while (true) {
       INT32 drawingMessage;
       if (!m_PipeServer->ReadInt32(drawingMessage))
-        return false;
+        return __LINE__;
 
       bool bContinue = false;
 
@@ -6224,7 +6189,7 @@ private:
           break;
 
         default:
-          return false;
+          return __LINE__;
       }
 
       if (bContinue)
@@ -6232,68 +6197,67 @@ private:
 
       INT32 clientFrameCount;
       if(!m_PipeServer->ReadInt32(clientFrameCount))
-          return false;
+          return __LINE__;
 
       UINT32 clientPass;
       if (!m_PipeServer->ReadUInt32(clientPass))
-        return false;
+        return __LINE__;
 
       INT32 frameDiff = frameCount - clientFrameCount;
 
-      if (frameDiff < 0) {
+      if (frameDiff < 0 || frameDiff == 0 && pass < clientPass) {
         // Error: client is ahead, otherwise we would have correct
         // data by now.
 
         if (!m_PipeServer->WriteInt32((INT32)DrawingReply::Retry))
-          return false;
+          return __LINE__;
 
         if(!m_PipeServer->Flush())
-            return false;
+            return __LINE__;
 /*
-         std::string code = std::to_string(clientFrameCount) + " > " +
+         std::string code = std::to_string(clientFrameCount) + "/> " +
                            std::to_string(frameCount) + " @ " +
                            std::to_string(clientPass) + " / " +
                            std::to_string(pass);
-        MessageBoxA(0, code.c_str(), "DrawingReply::Retry", MB_OK);
-*/
-        return true;
+        MessageBoxA(0, code.c_str(), "DrawingReply::Retry", MB_OK);*/
+
+        return 0;
 
       } else if (frameDiff > 0) {
         // client is behind.
 
         if (!m_PipeServer->WriteInt32((INT32)DrawingReply::Skip))
-          return false;
+          return __LINE__;
 
         if(!m_PipeServer->Flush())
-            return false;
+            return __LINE__;
 /*
-        std::string code = std::to_string(clientFrameCount) + " < " +
+        std::string code = std::to_string(clientFrameCount) + " / " +
                            std::to_string(frameCount) + " @ " +
                            std::to_string(clientPass) + " / " +
                            std::to_string(pass);
-        MessageBoxA(0, code.c_str(), "DrawingReply::Retry", MB_OK);*/
+        MessageBoxA(0, code.c_str(), "DrawingReply::Skip", MB_OK);*/
       } else {
         // we are right on.
 
-        m_InFlow = pass == clientPass;
-/*
-        std::string code = std::to_string(clientFrameCount) + " == " +
-                           std::to_string(frameCount) + " @ " +
-                           std::to_string(clientPass) + " / " +
-                           std::to_string(pass);
-        MessageBoxA(0, code.c_str(), "DrawingReply::Retry", MB_OK);*/
+        m_InFlow = false; // pass == clientPass;
 
         if(!m_InFlow) 
         {
-
           if (!m_PipeServer->WriteUInt32((UINT32)DrawingReply::Finished))
-            return false;
+            return __LINE__;
 
           if (!m_PipeServer->Flush())
-            return false;
+            return __LINE__;
+/*
+          std::string code = std::to_string(clientFrameCount) + " == " +
+                            std::to_string(frameCount) + " @ " +
+                            std::to_string(clientPass) + " / " +
+                            std::to_string(pass);
+          MessageBoxA(0, code.c_str(), "DrawingReply::Finished", MB_OK);*/            
         }
 
-        return true;
+        return 0;
       }
     }
   }
@@ -6435,7 +6399,7 @@ public:
      if (4 <= arguments.size() && arguments[0]->IsFunction() &&
          arguments[1]->IsFunction() && arguments[2]->IsInt() &&
          arguments[3]->IsString()) {
-       self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
+       self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
                                  fn_reject = arguments[1],
                                  id = arguments[2]->GetIntValue(),
                                  str = arguments[3]->GetStringValue()]() {
@@ -6484,7 +6448,7 @@ public:
               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
               CefString& exceptionoverride) {
          if (1 <= arguments.size() && arguments[0]->IsString()) {
-           self->m_PipeQueue.Queue(
+           self->m_InteropQueue.Queue(
                [self, pipeName = arguments[0]->GetStringValue().ToString()]() {
                  self->SetPipeName(pipeName.c_str());
                });
@@ -6502,9 +6466,9 @@ public:
                                              CefString& exceptionoverride) {
       if (2 <= arguments.size() && arguments[0]->IsFunction() &&
           arguments[1]->IsFunction()) {
-        self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
+        self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
                                  fn_reject = arguments[1]]() {
-          if (self->Connection(12000, 12000)) {
+          if (self->Connection()) {
             CefPostTask(TID_RENDERER,
                         new CAfxTask([ctx = self->m_Context, fn_resolve,
                                       connected = self->Connected()]() {
@@ -6536,7 +6500,7 @@ public:
                CefString& exceptionoverride) {
           if (2 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction()) {
-            self->m_PipeQueue.Queue([self, fn_resolve = arguments[0]]() {
+            self->m_InteropQueue.Queue([self, fn_resolve = arguments[0]]() {
               self->Close();
               CefPostTask(TID_RENDERER,
                           new CAfxTask([ctx = self->m_Context, fn_resolve]() {
@@ -6561,7 +6525,10 @@ public:
         self->m_PipeQueue.Queue(
             [self, fn_resolve = arguments[0], fn_reject = arguments[1], filter = new CAfxValue(arguments[2]),
                                  obj = new CAfxValue(4 <= arguments.size() ? arguments[3] : nullptr)]() {
-          if(self->DoPump(filter, obj)) {
+
+          int errorLine = __LINE__;
+
+          if(0 == (errorLine = self->DoPump(filter, obj))) {
               CefPostTask(TID_RENDERER,
                           new CAfxTask([ctx = self->m_Context, fn_resolve]() {
                             ctx->Enter();
@@ -6570,9 +6537,11 @@ public:
                           }));            
           } else {
               CefPostTask(TID_RENDERER,
-                          new CAfxTask([ctx = self->m_Context, fn_reject]() {
+                          new CAfxTask([ctx = self->m_Context, fn_reject, errorLine]() {
                             ctx->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            CefV8ValueList args;
+                            args.push_back(CefV8Value::CreateString("AfxInterop.cpp:"+std::to_string(errorLine)));
+                            fn_reject->ExecuteFunction(NULL, args);
                             ctx->Exit();
                           }));            
           }
@@ -6876,7 +6845,7 @@ public:
      if (4 <= arguments.size() && arguments[0]->IsFunction() &&
          arguments[1]->IsFunction() && arguments[2]->IsInt() &&
          arguments[3]->IsInt()) {
-       self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
+       self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
                                  fn_reject = arguments[1],
                                  width = arguments[2]->GetIntValue(),
                                  height = arguments[3]->GetIntValue()]() {
@@ -6922,7 +6891,7 @@ public:
                      CefString& exceptionoverride) {
          if (2 <= arguments.size() && arguments[0]->IsFunction() &&
              arguments[1]->IsFunction()) {
-           self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
+           self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
                                      fn_reject = arguments[1]]() {
                  self->m_CefFrameRenderedResolves.push(fn_resolve);
                  try {
@@ -6990,7 +6959,6 @@ private:
 
   virtual bool OnProcessMessageReceived(
       CefRefPtr<CefBrowser> browser,
-      CefRefPtr<CefFrame> frame,
       CefProcessId source_process,
       CefRefPtr<CefProcessMessage> message) override {
     return false;
@@ -7044,7 +7012,7 @@ private:
   float m_Rz = 0;
   float m_Fov = 90;
 
-  bool DoPump(CefRefPtr<CAfxValue> filter, CefRefPtr<CAfxValue> obj) {
+  int DoPump(CefRefPtr<CAfxValue> filter, CefRefPtr<CAfxValue> obj) {
     int errorLine = 0;
 
     if (!Connected())
@@ -7170,7 +7138,7 @@ private:
                       onNewConnection->ExecuteFunction(nullptr, CefV8ValueList());
                       m_Context->Exit();
                     }));
-        return true;
+        return 0;
       }
     }
 
@@ -7232,17 +7200,26 @@ private:
                             onCommands->ExecuteFunction(nullptr, args);
                             m_Context->Exit();
                           }));
-              return true;
+              return 0;
             }
-          }          
-        } goto __2;
+          }
+          if (!m_PipeServer->WriteCompressedUInt32((UINT32)(0)))
+            AFX_GOTO_ERROR
+        
+          if (!m_PipeServer->Flush())
+              AFX_GOTO_ERROR
+
+          goto __1;     
+        } break;
 
         case EngineMessage::BeforeFrameRenderStart: {
           if (!WriteGameEventSettings(true, filter))
             AFX_GOTO_ERROR
           if (!m_PipeServer->Flush())
             AFX_GOTO_ERROR
-        } goto __1;
+
+          goto __1;
+        } break;
 
         case EngineMessage::AfterFrameRenderStart: {
           if (!m_HandleCalcCallbacks.BatchUpdateRequest(m_PipeServer))
@@ -7273,8 +7250,9 @@ private:
             AFX_GOTO_ERROR
           if (!m_IntCalcCallbacks.BatchUpdateResult(m_PipeServer))
             AFX_GOTO_ERROR
-        }
+
           goto __1;
+        } break;
 
         case EngineMessage::OnRenderView: {
           struct RenderInfo_s renderInfo;
@@ -7376,9 +7354,11 @@ private:
                           onRenderViewBegin->ExecuteFunction(nullptr, args);
                           m_Context->Exit();
                         }));
-            return true;
+            return 0;
           }
-        } goto __3;
+
+           goto __3;
+        } break;
 
         case EngineMessage::OnRenderViewEnd: {
           auto onRenderViewEnd = GetPumpFilter(filter, "onRenderViewEnd");
@@ -7390,7 +7370,7 @@ private:
                                                            CefV8ValueList());
                           m_Context->Exit();
                         }));
-            return true;
+            return 0;
           }
         } goto __4;
 
@@ -7403,7 +7383,7 @@ private:
                           onHudBegin->ExecuteFunction(nullptr, CefV8ValueList());
                           m_Context->Exit();
                         }));
-            return true;
+            return 0;
           }
         } goto __1;
 
@@ -7416,7 +7396,7 @@ private:
                           onHudEnd->ExecuteFunction(nullptr, CefV8ValueList());
                           m_Context->Exit();
                         }));
-            return true;
+            return 0;
           }
         } goto __1;
 
@@ -7425,7 +7405,7 @@ private:
           if (!DoRenderPass(filter, "onRenderViewBeforeTranslucentShadow", bReturn))
             AFX_GOTO_ERROR
           if (bReturn)
-            return true;
+            return 0;
         }
           goto __1;
         case EngineMessage::AfterTranslucentShadow: {
@@ -7433,7 +7413,7 @@ private:
           if (!DoRenderPass(filter, "onRenderViewAfterTranslucentShadow", bReturn))
             AFX_GOTO_ERROR
           if (bReturn)
-            return true;
+            return 0;
         }
           goto __1;
         case EngineMessage::BeforeTranslucent: {
@@ -7441,7 +7421,7 @@ private:
           if (!DoRenderPass(filter, "onRenderViewBeforeTranslucent", bReturn))
             AFX_GOTO_ERROR
           if (bReturn)
-            return true;
+            return 0;
         }
           goto __1;
         case EngineMessage::AfterTranslucent: {
@@ -7449,7 +7429,7 @@ private:
           if (!DoRenderPass(filter, "onRenderViewAfterTranslucent", bReturn))
             AFX_GOTO_ERROR
           if (bReturn)
-            return true;
+            return 0;
         }
           goto __1;
 
@@ -7500,10 +7480,17 @@ private:
                           onViewOverride->ExecuteFunction(nullptr, args);
                           m_Context->Exit();
                         }));
-            return true;
+            return 0;
           }
-        } goto __5;
- 
+
+          if (!m_PipeServer->WriteBoolean(false))
+            AFX_GOTO_ERROR
+
+          if (!m_PipeServer->Flush())
+              AFX_GOTO_ERROR  // client is waiting
+
+          goto __1;
+        }
 
         case EngineMessage::GameEvent: {
           bool bReturn = false;
@@ -7511,17 +7498,16 @@ private:
           if (!ReadGameEvent(filter, bReturn))
             AFX_GOTO_ERROR
           if (bReturn) {
-            return true;
+            return 0;
           }
-        }
-          goto __1;
+        } goto __1;
       }
     }
 
     AFX_GOTO_ERROR
 
-        __2: {
-      int len = obj && obj->IsArray() ? obj->GetArraySize() : 0;
+__2: {
+      int len = nullptr != obj && obj->IsArray() ? obj->GetArraySize() : 0;
 
     if (!m_PipeServer->WriteCompressedUInt32((UINT32)(len)))
       AFX_GOTO_ERROR
@@ -7589,9 +7575,9 @@ __4 : {
                   onDone->ExecuteFunction(nullptr, CefV8ValueList());
                   m_Context->Exit();
                 }));
-    return true;
+    return 0;
   }
-  return true;
+  goto __1;
 }
 
 __5 : {
@@ -7667,13 +7653,12 @@ __5 : {
     if (!m_PipeServer->Flush())
         AFX_GOTO_ERROR  // client is waiting
 
-            goto __1;
-  }
+  }   goto __1;
 
   error:
     //AFX_PRINT_ERROR("CEngineInteropImpl::DoPump", errorLine)
     m_PumpResumeAt = 0;
-    return false;
+    return errorLine;
   }
 
 
@@ -7860,7 +7845,7 @@ private:
 
     while (!m_WaitConnectionQuit) {
       try {
-        this->WaitForConnection(strPipeName.c_str(), 512, 512, 500);
+        this->WaitForConnection(strPipeName.c_str(), 4096, 4096, 36000000);
       } catch (...) {
       }
     }
@@ -8584,7 +8569,7 @@ afxObject->AddFunction(
           if (4 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction() && arguments[2]->IsString() &&
               arguments[3]->IsString()) {
-            self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
+            self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
                               fn_reject = arguments[1],
                               argUrl = arguments[2]->GetStringValue(),
                               argStr = arguments[3]->GetStringValue()]() {
@@ -8631,7 +8616,7 @@ afxObject->AddFunction(
       if (4 <= arguments.size() && arguments[0]->IsFunction() &&
           arguments[1]->IsFunction() && arguments[2]->IsString() &&
           arguments[3]->IsString()) {
-        self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
+        self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
                                   fn_reject = arguments[1],
                                   argUrl = arguments[2]->GetStringValue(),
                                   argStr = arguments[3]->GetStringValue()]() {
@@ -8677,7 +8662,7 @@ afxObject->AddFunction("sendMessage", [self](const CefString& name,
   if (4 <= arguments.size() && arguments[0]->IsFunction() &&
       arguments[1]->IsFunction() && arguments[2]->IsInt() &&
       arguments[3]->IsString()) {
-    self->m_PipeQueue.Queue([self, fn_resolve = arguments[0], fn_reject = arguments[1],
+    self->m_InteropQueue.Queue([self, fn_resolve = arguments[0], fn_reject = arguments[1],
                       id = arguments[2]->GetIntValue(),
                       str = arguments[3]->GetStringValue()]() {
           try {
@@ -8722,7 +8707,7 @@ afxObject->AddFunction("sendMessage", [self](const CefString& name,
   if (4 <= arguments.size() && arguments[0]->IsFunction() &&
       arguments[1]->IsFunction() && arguments[2]->IsInt() &&
       arguments[3]->IsInt()) {
-    self->m_PipeQueue.Queue([self, fn_resolve = arguments[0], fn_reject = arguments[1],
+    self->m_InteropQueue.Queue([self, fn_resolve = arguments[0], fn_reject = arguments[1],
                       width = arguments[2]->GetIntValue(),
                       height = arguments[3]->GetIntValue()]() {
           try {
@@ -8766,7 +8751,7 @@ afxObject->AddFunction("sendMessage", [self](const CefString& name,
                       CefString& exceptionoverride) {
           if (2 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction()) {
-            self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
+            self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
                                       fn_reject = arguments[1]]() {
                   self->m_CefFrameRenderedResolves.push(fn_resolve);
                   try {
@@ -8842,7 +8827,6 @@ public:
 
    virtual bool OnProcessMessageReceived(
        CefRefPtr<CefBrowser> browser,
-       CefRefPtr<CefFrame> frame,
        CefProcessId source_process,
        CefRefPtr<CefProcessMessage> message) override {
      return false;
@@ -8854,7 +8838,6 @@ public:
 
   CefRefPtr<CAfxCallback> m_OnMessage;
   CefRefPtr<CAfxCallback> m_OnError;
-  CThreadedQueue m_PipeQueue;
 
 bool m_WaitConnectionQuit = false;
   std::thread m_WaitConnectionThread;
@@ -8867,7 +8850,7 @@ bool m_WaitConnectionQuit = false;
 
     while (!m_WaitConnectionQuit) {
       try {
-        this->WaitForConnection(strPipeName.c_str(), 512, 512, 500);
+        this->WaitForConnection(strPipeName.c_str(), 4096, 4096, 36000000);
       } catch (...) {
       }
     }

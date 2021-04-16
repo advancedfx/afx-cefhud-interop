@@ -42,7 +42,7 @@ void SimpleHandler::WaitConnectionThreadHandler(void) {
 
   while (!m_WaitConnectionQuit) {
     try {
-      this->WaitForConnection(strPipeName.c_str(), 512, 512, 500);
+      this->WaitForConnection(strPipeName.c_str(), 4096, 4096, 36000000);
     } catch (...) {
     }
   }
@@ -173,6 +173,7 @@ void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
   auto it = m_Browsers.find(browser->GetIdentifier());
   if (it != m_Browsers.end()) {
     if (CHostPipeServerConnectionThread* connection = it->second.Connection) {
+      lock.unlock();
       rect.Set(0, 0, connection->GetWidth(), connection->GetHeight());
     }
   }
@@ -189,9 +190,11 @@ void SimpleHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
 }
 
 void SimpleHandler::DoPainted(int do_painted, void* share_handle) {
+  std::unique_lock<std::mutex> lock(m_BrowserMutex);
   auto it = m_Browsers.find(do_painted);
   if (it != m_Browsers.end()) {
     if (CHostPipeServerConnectionThread* connection = it->second.Connection) {
+      lock.unlock();
       try {
         connection->OnPainted(share_handle);
       } catch (...) {
@@ -200,10 +203,8 @@ void SimpleHandler::DoPainted(int do_painted, void* share_handle) {
   }
 }
 
-bool SimpleHandler::OnProcessMessageReceived(
-    CefRefPtr<CefBrowser> browser,
-    CefRefPtr<CefFrame> frame,
-    CefProcessId source_process,
-    CefRefPtr<CefProcessMessage> message) {
+bool SimpleHandler::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                        CefProcessId source_process,
+                                        CefRefPtr<CefProcessMessage> message) {
   return false;
 }

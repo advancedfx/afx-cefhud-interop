@@ -201,7 +201,6 @@ function AfxEngineInterop(interop, args) {
 		},
 		// recommended.
 		"onDone": async function(){		
-			console.log("onDone");
 			await toPromise(self.interop.pump, self.pumpEvents);
 		},
 		// optional.
@@ -298,16 +297,22 @@ function AfxEngineInterop(interop, args) {
 		},*/
 		// optional.
 		"onRenderViewHudEnd": async function(){
-			console.log("onHudEnd: "+self.renderInfo.frameCount);
+
+			console.log("SEND "+self.renderInfo.frameCount+"/"+self.pass);
 
 			await toPromise(self.interop.sendMessage, self.args.drawingInteropId, JSON.stringify({
 				"id": "onHudEnd",
 				"args": [self.renderInfo.frameCount, self.pass]
 			}));
-			
+
+			console.log("SENT "+self.renderInfo.frameCount+"/"+self.pass);
+					
 			self.pass++;
 
 			await toPromise(self.interop.pump, self.pumpEvents);
+
+			console.log("CONTINUE "+self.renderInfo.frameCount+"/"+self.pass);
+
 		},
 		// optional.
 		/*"onRenderViewEnd": aync function() {
@@ -436,11 +441,12 @@ AfxEngineInterop.prototype.disconnect = async function() {
 		pumpEvents[key] = function(...args){
 
 			self.pumpEventsAsync[key].apply(self, args).catch((e) => {
+				logError(e);
 
-				if(e && e.soft)
-					logError(e);
-				else
-					throw(e);
+				if(!(e && e.soft))
+					self.disconnect().catch((e)=>{
+						throw e;
+					});
 			});
 		}
 	});
@@ -456,6 +462,10 @@ document.addEventListener('DOMContentLoaded', function(){
 		new AfxEngineInterop(interop, JSON.parse(message));
 	});
 }, false);
+
+setInterval(function(){
+	console.log("engine alive.");
+}, 250);
 
 </script>
 </body>

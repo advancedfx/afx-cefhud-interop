@@ -1,4 +1,6 @@
-# Short instructions
+03/08/2019 - 3.3626.1895.g7001d56 / Chromium 72.0.3626.121
+
+# Build instructions
 
 This project is still under development, so it's not fully ready yet, esepcially the afx_interop version 7.
 
@@ -39,7 +41,7 @@ https://github.com/advancedfx/afx-cefhud-interop/blob/main/afx-cefhud-interop/ex
 
 The [Chromium Embedded Framework](https://bitbucket.org/chromiumembedded/cef/) (CEF) is a simple framework for embedding Chromium-based browsers in other applications. This repository hosts a sample project called "cef-project" that can be used as the starting point for third-party applications built using CEF.
 
-# Quick Links
+## Quick Links
 
 * Project Page - https://bitbucket.org/chromiumembedded/cef-project
 * Tutorial - https://bitbucket.org/chromiumembedded/cef/wiki/Tutorial

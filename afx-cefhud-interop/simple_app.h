@@ -5,9 +5,10 @@
 #ifndef CEF_TESTS_CEFSIMPLE_SIMPLE_APP_H_
 #define CEF_TESTS_CEFSIMPLE_SIMPLE_APP_H_
 
-#include "include/cef_app.h"
-
 #include "afx-cefhud-interop/AfxInterop.h"
+
+#include <include/cef_app.h>
+#include <include/cef_parser.h>
 
 #include <list>
 
@@ -33,43 +34,59 @@ class SimpleApp : public CefApp,
 
   virtual void OnContextInitialized() OVERRIDE;
 
-
   // CefRenderProcessHandler methods:
-
-  virtual void OnBrowserCreated(CefRefPtr<CefBrowser> browser,
-          CefRefPtr<CefDictionaryValue> extra_info) OVERRIDE {
-
-    m_ExtraInfo = extra_info->Copy(true);
-  }
 
   virtual void OnContextCreated(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefFrame> frame,
                                 CefRefPtr<CefV8Context> context) OVERRIDE {
 
     if (frame->IsMain()) {
-      if(m_ExtraInfo->HasKey("interopType") && m_ExtraInfo->HasKey("argStr") && m_ExtraInfo->HasKey("handlerId")) {
-        if (m_ExtraInfo->GetString("interopType").compare("drawing") == 0) {
+
+      CefString url = frame->GetURL();
+     
+      CefURLParts parts;
+      if(!CefParseURL(url, parts)) return;
+
+      std::string query = CefString(&parts.query).ToString();
+
+      size_t pos = query.find("afx=");
+      if(std::string::npos != pos) query = query.substr(pos + 4);
+      else return;
+
+      pos = query.find("&");
+      if(std::string::npos != pos) query = query.substr(0,pos);
+
+      auto val = CefParseJSON(CefURIDecode(query,false,(cef_uri_unescape_rule_t)(UU_SPACES|UU_PATH_SEPARATORS|UU_URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS|UU_SPOOFING_AND_CONTROL_CHARS)), JSON_PARSER_RFC);   
+
+      if(nullptr == val) return;
+
+      auto extra_info = val->GetDictionary();
+
+      if(nullptr == extra_info) return;
+
+      if(extra_info->HasKey("interopType") && extra_info->HasKey("argStr") && extra_info->HasKey("handlerId")) {
+        if (extra_info->GetString("interopType").compare("drawing") == 0) {
           auto window = context->GetGlobal();
           window->SetValue(
               "afxInterop",
               advancedfx::interop::CreateDrawingInterop(
-                  browser, frame, context, m_ExtraInfo->GetString("argStr"),
-                  m_ExtraInfo->GetInt("handlerId"), &m_Interop),
+                  browser, frame, context, extra_info->GetString("argStr"),
+                  extra_info->GetInt("handlerId"), &m_Interop),
               V8_PROPERTY_ATTRIBUTE_NONE);
         }
-        else if (m_ExtraInfo->GetString("interopType").compare("engine") == 0) {
+        else if (extra_info->GetString("interopType").compare("engine") == 0) {
           auto window = context->GetGlobal();
           window->SetValue("afxInterop",
                            advancedfx::interop::CreateEngineInterop(
-                               browser, frame, context, m_ExtraInfo->GetString("argStr"),
-                  m_ExtraInfo->GetInt("handlerId"), &m_Interop),
+                               browser, frame, context, extra_info->GetString("argStr"),
+                  extra_info->GetInt("handlerId"), &m_Interop),
                                V8_PROPERTY_ATTRIBUTE_NONE);
         }
-        else if (m_ExtraInfo->GetString("interopType").compare("index") == 0) {
+        else if (extra_info->GetString("interopType").compare("index") == 0) {
           auto window = context->GetGlobal();
           window->SetValue("afxInterop",advancedfx::interop::CreateInterop(
-                               browser, frame, context, m_ExtraInfo->GetString("argStr"),
-                  m_ExtraInfo->GetInt("handlerId"), &m_Interop),
+                               browser, frame, context, extra_info->GetString("argStr"),
+                  extra_info->GetInt("handlerId"), &m_Interop),
                                V8_PROPERTY_ATTRIBUTE_NONE);
         }
       }
@@ -88,7 +105,6 @@ class SimpleApp : public CefApp,
 
   virtual bool OnProcessMessageReceived(
       CefRefPtr<CefBrowser> browser,
-      CefRefPtr<CefFrame> frame,
       CefProcessId source_process,
       CefRefPtr<CefProcessMessage> message) OVERRIDE;
 
@@ -138,8 +154,6 @@ class SimpleApp : public CefApp,
   }
 
  private:
-
-  CefRefPtr<CefDictionaryValue> m_ExtraInfo;
   CefRefPtr<advancedfx::interop::CInterop> m_Interop;
 
   // Include the default reference counting implementation.

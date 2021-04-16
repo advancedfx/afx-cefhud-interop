@@ -7,7 +7,7 @@
 </style>
 
 <body>
-<div class="main" style="background: rgba(0,0,0,0.8); color: #fff; padding: 1rem;">
+<div class="main" style="background: rgba(0,0,0,0.5); color: #fff; padding: 1rem;">
 <h1 style="color: #00ff00">Hello World from afx-cefhud-interop</h1>
 <h2>Last game events:</h2>
 <div id="gameEvents" style="border:1px solid #fff"></div>
@@ -586,7 +586,7 @@ function AfxDrawingInterop(interop,args) {
 			this.frameCount = renderInfo.frameCount;
 			this.width = renderInfo.view.width - renderInfo.view.x;
 			this.height = renderInfo.view.height - renderInfo.view.y;
-			
+
 			await toPromise(this.interop.setSize, this.width, this.height);
 		},
 		"onGameEvent": async function(e){
@@ -597,25 +597,23 @@ function AfxDrawingInterop(interop,args) {
 			this.divGameEvents.insertBefore(docP, this.divGameEvents.firstElementChild);
 		},
 		"onHudEnd": async function(frameCount,pass){
+
+			console.log("RECV "+frameCount+"/"+pass);
 		
 			var self = this;
 
-			console.log("PUMP BEGIN: "+frameCount);
-
 			var isInFlow = await toPromise(self.interop.pumpBegin, frameCount, pass);
-
-			console.log("PUMP BEGIN 2: "+frameCount);
 
 			if(!isInFlow)
 			{
+				console.log("OUT OF FLOW "+frameCount+"/"+pass);
 				return;
 			}
 
-			console.log("PUMP BEGIN 3: "+frameCount);
 			try {
-				var cefTextureHandle = await toPromise.apply(self, [self.renderCefFrame]);
-
-				console.log("PUMP BEGIN 4: "+frameCount);
+				console.log("RENDER "+frameCount+"/"+pass);
+				var cefTextureHandle = self.interop.createInvalidHandle(); // await toPromise.apply(self, [self.renderCefFrame]);
+				console.log("RENDERED "+frameCount+"/"+pass);
 
 				if(cefTextureHandle.invalid) throw toSoftError(new Error("cefTextureHandle.invalid"));
 
@@ -671,8 +669,7 @@ function AfxDrawingInterop(interop,args) {
 			}
 
 			await toPromise(self.interop.pumpEnd);
-
-			console.log("PUMP END: "+frameCount);
+			console.log("FINISHED "+frameCount+"/"+pass);
 		}
 	};
 	
@@ -716,6 +713,9 @@ function AfxDrawingInterop(interop,args) {
 	this.vertexBuffers = {
 		"rect": null
 	}
+
+	// render dummy frame to unstuck the queue.
+	self.interop.renderCefFrame((cefTextureHandle) => {},(error) => {});
 
 	toPromise(interop.sendMessage, this.args.indexInteropId, JSON.stringify({
 		"id": "drawingCreated",
@@ -1093,9 +1093,9 @@ AfxDrawingInterop.prototype.renderCefFrame = function(resolve,reject) {
 	function requestRender() {
 		++self.queued;
 
-		if(2 < self.queued) console.log("additional requestRender");
+		if(1 < self.queued) console.log("additional requestRender");
 		
-		if(self.queued >= 1)	
+		if(2 <= self.queued )	
 		{
 			if(interval)
 			{
@@ -1111,6 +1111,7 @@ AfxDrawingInterop.prototype.renderCefFrame = function(resolve,reject) {
 				clearInterval(interval);
 				interval = null;
 			}
+
 			self.queued = 0;
 
 			resolve(cefTextureHandle);
@@ -1127,10 +1128,11 @@ AfxDrawingInterop.prototype.renderCefFrame = function(resolve,reject) {
 			reject(error);
 		});
 	}
-
-	//interval = setInterval(function(){
-	//	requestRender();
-	//}, 40);
+/*
+	interval = setInterval(function(){
+		requestRender();
+	}, 250);*/
+	
 	requestRender();
 }
 
@@ -1143,6 +1145,10 @@ document.addEventListener('DOMContentLoaded', function(){
 		new AfxDrawingInterop(interop, JSON.parse(message));
 	});	
 }, false);
+
+setInterval(function(){
+	console.log("drawing alive.");
+}, 250);
 
 </script>
 </body>
