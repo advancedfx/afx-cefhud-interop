@@ -1,22 +1,6 @@
 function toPromise(interopFn,...args) {
-
-	fallbackError = new Error("undefined");
-
 	return new Promise((resolve,reject) => {
-
-		function fallbackReject(error) {
-			if(undefined === error)
-				reject(fallbackError);
-			else
-				reject(error);
-		}
-
-		try {
-			interopFn.apply(this,[resolve,fallbackReject,...args]);
-		}
-		catch(e) {
-			fallbackReject(e);
-		}
+		interopFn.apply(this,[resolve,reject,...args]);
 	});
 }
 

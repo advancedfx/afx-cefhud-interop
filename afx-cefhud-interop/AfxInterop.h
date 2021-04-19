@@ -14,6 +14,8 @@
 #include <windows.h>
 #include <d3d9types.h>
 
+#define TEN_MINUTES_IN_MILLISECONDS (10*60*60*1000)
+
 namespace advancedfx {
 namespace interop {
 
@@ -271,7 +273,9 @@ public:
 enum class ClientMessage : int {
   Quit = 0,
   Message = 1,
-  TextureHandle = 2
+  TextureHandle = 2,
+  WaitedForGpu = 3,
+  ReleaseTextureHandle = 4
 };
 
 enum class HostMessage : int {
@@ -280,7 +284,10 @@ enum class HostMessage : int {
   RenderFrame = 2,
   CreateDrawing = 3,
   CreateEngine = 4,
-  Message = 5
+  Message = 5,
+  WaitForGpu = 6,
+  GpuOfferShareHandle = 7,
+  GpuRelaseShareHandle = 8
 };
 
 

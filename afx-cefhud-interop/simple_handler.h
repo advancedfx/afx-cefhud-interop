@@ -15,12 +15,15 @@
 
 #include <tchar.h>
 
+#include <set>
 #include <map>
 #include <list>
 
 #include <mutex>
 #include <condition_variable>
 #include <thread>
+
+extern bool AfxWaitForGPU();
 
 class SimpleHandler : public CefClient,
                       public CefDisplayHandler,
@@ -48,10 +51,6 @@ class SimpleHandler : public CefClient,
 
   virtual CefRefPtr<CefLoadHandler> GetLoadHandler() OVERRIDE { return this; }
 
-    virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
-                                        CefProcessId source_process,
-                                        CefRefPtr<CefProcessMessage> message) OVERRIDE;
-
 
   // CefDisplayHandler methods:
 
@@ -64,9 +63,13 @@ class SimpleHandler : public CefClient,
                        const void* buffer,
                        int width,
                        int height) OVERRIDE {
+/*
+    if (PET_VIEW == type) {
+      CefPostTask(TID_IO, base::Bind(&SimpleHandler::DoPainted, this,
+                                   browser->GetIdentifier(), m_ShareHandle));
+    }*/
   }
 
-     // CefRenderHandler methods:
   virtual void OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
                                   PaintElementType type,
                                   const RectList& dirtyRects,
@@ -108,18 +111,25 @@ class SimpleHandler : public CefClient,
     std::unique_lock<std::mutex> lock(m_BrowserMutex);
     auto it = m_Browsers.find(browserId);
     if (it == m_Browsers.end())
-      throw "CHostPipeServerConnectionThread::AddBrowserConnection failed: no browser.";
+    {
+      MessageBoxA(0, "AddBrowserConnection failed: no browser.", "Error in simple_handler.h", MB_OK|MB_ICONERROR);
+      return nullptr;
+    }
 
     it->second.Connection = connection;
 
     return it->second.Browser;
   }
 
+
+
   void RemoveBrowserConnection(int browserId) {
     std::unique_lock<std::mutex> lock(m_BrowserMutex);
     auto it = m_Browsers.find(browserId);
     if (it == m_Browsers.end())
-      throw "CHostPipeServerConnectionThread::RemoveBrowserConnection failed: no browser.";
+    {
+      MessageBoxA(0, "RemoveBrowserConnection failed: no browser.", "Error in simple_handler.h", MB_OK|MB_ICONERROR);
+    }
 
     it->second.Connection = nullptr;
   }
@@ -130,16 +140,52 @@ class SimpleHandler : public CefClient,
   void Message(int senderId, int targetId, const std::string& message) {
     std::unique_lock<std::mutex> lock(m_BrowserMutex);
     auto it = m_Browsers.find(targetId);
-    if (it == m_Browsers.end())
-      throw "CHostPipeServerConnectionThread::Message failed: no target browser.";
+    if (it == m_Browsers.end()) {
+      MessageBoxA(0, "Message failed: no target browser.", "Error in simple_handler.h", MB_OK|MB_ICONERROR);
+      return;
+    }
 
     if (CHostPipeServerConnectionThread* connection = it->second.Connection)
     {
-      lock.unlock();
       it->second.Connection->Message(senderId, message);
     }
-    else
-      throw "CHostPipeServerConnectionThread::Message failed: no target connection.";
+    else {
+      MessageBoxA(0, "Message failed: no target connection.", "Error in simple_handler.h", MB_OK|MB_ICONERROR);
+      return;
+    }
+  }
+
+  bool OfferShareHandle(HANDLE share_handle)
+  {
+    std::unique_lock<std::mutex> lock(m_BrowserMutex);    
+    m_ShareHandle = share_handle;
+    auto it = m_HandleToBrowserId.emplace(share_handle, 0);
+    if(!it.second)
+    {
+      if(it.first->second)
+      {
+        return true;
+      }
+      return false;
+    }
+    return true;
+  }
+
+  
+  void ReleaseShareHandle(HANDLE share_handle)
+  {
+    std::unique_lock<std::mutex> lock(m_BrowserMutex);    
+    m_ShareHandle = share_handle;
+    auto it = m_HandleToBrowserId.emplace(share_handle, 0);
+    if(!it.second)
+    {
+      if(it.first->second)
+      {
+        auto it2 = m_Browsers.find(it.first->second);
+        if(it2 != m_Browsers.end())
+        it2->second.Connection->RelaseShareHandle(share_handle);
+      }
+    }
   }
 
   void DoDrawingResized(CefRefPtr<CefBrowser> browser) {
@@ -271,11 +317,23 @@ class SimpleHandler : public CefClient,
      */
     void OnPainted(void* share_handle) {
       std::unique_lock<std::mutex> lock(m_ClientConnectionMutex);
+      m_ShareHandles.emplace(share_handle);
       m_ClientConnection.WriteInt32(
           (int)advancedfx::interop::ClientMessage::TextureHandle);
-      m_ClientConnection.WriteUInt64((UINT64)share_handle);
+      m_ClientConnection.WriteHandle(share_handle);
       m_ClientConnection.Flush();
     }
+
+    /**
+     * @throws exception
+     */
+    void WaitedForGpu(bool bOk) {
+      std::unique_lock<std::mutex> lock(m_ClientConnectionMutex);
+      m_ClientConnection.WriteInt32(
+          (int)advancedfx::interop::ClientMessage::WaitedForGpu);
+      m_ClientConnection.WriteBoolean(bOk);
+      m_ClientConnection.Flush();
+    }    
 
     /**
      * @throws exception
@@ -289,6 +347,19 @@ class SimpleHandler : public CefClient,
       m_ClientConnection.Flush();
     }
 
+   /**
+     * @throws exception
+     */
+    void RelaseShareHandle(HANDLE share_handle)
+    {
+      std::unique_lock<std::mutex> lock(m_ClientConnectionMutex);
+      m_ClientConnection.WriteInt32(
+          (int)advancedfx::interop::ClientMessage::ReleaseTextureHandle);
+      m_ClientConnection.WriteHandle(share_handle);
+      m_ClientConnection.Flush();
+      m_ShareHandles.erase(share_handle);
+    }
+
     /**
      * @throws exception
      */
@@ -299,26 +370,45 @@ class SimpleHandler : public CefClient,
       processId = ReadUInt32();
       browserId = ReadInt32();
 
-      std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_client_");
-      strPipeName.append(std::to_string(processId));
-      strPipeName.append("_");
-      strPipeName.append(std::to_string(browserId));
+      if(browserId)
+      {
+        std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_client_");
+        strPipeName.append(std::to_string(processId));
+        strPipeName.append("_");
+        strPipeName.append(std::to_string(browserId));
 
-      m_ClientConnection.OpenPipe(strPipeName.c_str(), 3000);
+        while(true)
+        {
+          bool bError = false;
+          try {
+           m_ClientConnection.OpenPipe(strPipeName.c_str(), INFINITE);
+            Sleep(100);
+          }
+          catch(const std::exception&)
+          {
+            bError = true;
+          }
+
+          if(!bError) break;
+        }
+      }
 
       try {
-        m_Browser = m_Host->AddBrowserConnection(browserId, this);
+        m_Browser = browserId ? m_Host->AddBrowserConnection(browserId, this) : nullptr;
 
         while (true) {
           advancedfx::interop::HostMessage message =
               (advancedfx::interop::HostMessage)ReadInt32();
           switch (message) {
             case advancedfx::interop::HostMessage::Quit: {
-              std::unique_lock<std::mutex> lock(m_ClientConnectionMutex);
-              m_ClientConnection.WriteInt32(
-                  (int)advancedfx::interop::ClientMessage::Quit);
-              m_ClientConnection.Flush();
-              m_ClientConnection.ClosePipe();
+              if(browserId)
+              {
+                std::unique_lock<std::mutex> lock(m_ClientConnectionMutex);
+                m_ClientConnection.WriteInt32(
+                    (int)advancedfx::interop::ClientMessage::Quit);
+                m_ClientConnection.Flush();
+                m_ClientConnection.ClosePipe();
+              }
             }
               return;
             case advancedfx::interop::HostMessage::DrawingResized: {
@@ -358,17 +448,43 @@ class SimpleHandler : public CefClient,
               ReadStringUTF8(argMessage);
               m_Host->Message(browserId, targetId, argMessage);
             } break;
+            case advancedfx::interop::HostMessage::WaitForGpu: {
+              CefPostTask(TID_UI, base::Bind(&SimpleHandler::WaitForGpu, m_Host, browserId));
+            } break;
+            case advancedfx::interop::HostMessage::GpuOfferShareHandle: {
+              HANDLE shareHandle= ReadHandle();
+              bool bWaitForGpu = m_Host->OfferShareHandle(shareHandle);
+              WriteBoolean(bWaitForGpu);
+              Flush();
+              if(bWaitForGpu)
+              {
+                ReadBoolean();
+              }
+            } break;
+            case advancedfx::interop::HostMessage::GpuRelaseShareHandle:
+            {
+              HANDLE shareHandle= ReadHandle();
+              m_Host->ReleaseShareHandle(shareHandle);
+            } break;
             default:
               throw "CHostPipeServerConnectionThread::HandleConnection: Unknown message.";
           }
         }
       } catch (const std::exception& e) {
-        //MessageBoxA(0, e.what(), "Error in simple_handler.h", MB_OK|MB_ICONERROR);
-
-        if (m_Browser)
-          m_Host->RemoveBrowserConnection(browserId);
-        throw e;
+        MessageBoxA(0, e.what(), "Error in simple_handler.h", MB_OK|MB_ICONERROR);
       }
+
+      {
+        std::unique_lock<std::mutex> lock(m_Host->m_BrowserMutex);
+        for(auto it = m_ShareHandles.begin(); it != m_ShareHandles.end(); ++it)
+        {
+          m_Host->m_HandleToBrowserId.erase(*it);
+        }
+
+      }
+
+      if (m_Browser)
+        m_Host->RemoveBrowserConnection(browserId);
     }
 
    private:
@@ -378,6 +494,7 @@ class SimpleHandler : public CefClient,
     std::mutex m_ClientConnectionMutex;
     int m_Width = 640;
     int m_Height = 480;
+    std::set<HANDLE> m_ShareHandles;
   };
 
   bool is_closing_;
@@ -395,12 +512,38 @@ class SimpleHandler : public CefClient,
 
   std::mutex m_BrowserMutex;
   std::map<int, BrowserMapElem> m_Browsers;
+  HANDLE m_ShareHandle = INVALID_HANDLE_VALUE;
+  std::map<HANDLE, int> m_HandleToBrowserId;
 
    // Platform-specific implementation.
   void PlatformTitleChange(CefRefPtr<CefBrowser> browser,
                            const CefString& title);
 
-  void DoPainted(int do_painted, void* share_handle);
+  void DoPainted(int browserId, void* share_handle);
+
+    void WaitForGpu(int browserId) {
+      bool bOk = AfxWaitForGPU();
+      CefPostTask(TID_IO, base::Bind(&SimpleHandler::WaitedForGpu, this, browserId, bOk));
+    }
+
+    void WaitedForGpu(int browserId,bool bOk) {
+      std::unique_lock<std::mutex> lock(m_BrowserMutex);
+      auto it = m_Browsers.find(browserId);
+      if (it == m_Browsers.end())
+      {
+        MessageBoxA(0, "CHostPipeServerConnectionThread::WaitedForGpu failed: no target browser.", "ERROR", MB_OK|MB_ICONERROR);
+        return;
+      }
+
+      if (CHostPipeServerConnectionThread* connection = it->second.Connection)
+      {
+        it->second.Connection->WaitedForGpu(bOk);
+      }
+      else {
+        MessageBoxA(0, "CHostPipeServerConnectionThread::WaitedForGpu failed: no target connection.", "ERROR", MB_OK|MB_ICONERROR);
+        return;
+      }
+    }  
 
 // Include the default reference counting implementation.
   IMPLEMENT_REFCOUNTING(SimpleHandler);

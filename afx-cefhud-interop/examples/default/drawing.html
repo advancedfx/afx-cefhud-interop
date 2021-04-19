@@ -1,17 +1,39 @@
 <!DOCTYPE html>
 <html>
 <style>
+html,body,div {
+  margin: 0;
+  padding: 0;
+}
+
 .main {
-	backdrop-filter: blur(5px);
+	margin: 1.5rem;
+	padding: 1.5rem;
+	color: #fff;
+	backdrop-filter: hue-rotate(120deg);	
+}
+.indicator {
+	float: right;
+	width: 3rem;
+	height: 3rem;
+	border: 3px solid red;
+	background: #000;
+}
+.indicator.white {
+	background: #fff;
 }
 </style>
 
 <body>
-<div class="main" style="background: rgba(0,0,0,0.5); color: #fff; padding: 1rem;">
+<div id="indicator" class="indicator"></div>
+<div id="indicator2" class="indicator"></div>
+<div class="main">
 <h1 style="color: #00ff00">Hello World from afx-cefhud-interop</h1>
+<p>Client time: <span id="clientTime"></span></p>
 <h2>Last game events:</h2>
-<div id="gameEvents" style="border:1px solid #fff"></div>
+<div id="gameEvents" style="border:1px solid #fff; font-size: 12px; font-family: monospace"></div>
 </div>
+<div style="clear: both"></div>
 <script type="text/javascript" src="common.js"></script>
 <script>
 
@@ -493,6 +515,137 @@ function decodeUTF16LE(arrayBuffer) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+function AfxDrawingQueue(parent) {
+
+	var self = this;
+
+	self.parent = parent;
+
+	self.messages = [];
+
+	self.messageHandlers = {
+		"onRenderViewBegin": async function(renderInfo){
+
+			self.parent.elIndicator2.classList.toggle("white");
+
+			var width = renderInfo.view.width - renderInfo.view.x;
+			var height = renderInfo.view.height - renderInfo.view.y;
+
+			if(self.parent.width !== width || self.parent.height !== height)
+			{
+				await toPromise(self.parent.interop.setSize, width, height);
+			}
+	
+			self.parent.width = width;
+			self.parent.height = height;
+			self.parent.renderInfo = renderInfo;
+			self.parent.elClientTime.innerText = renderInfo.curTime;
+		},
+		"onGameEvent": async function(e){
+			while(self.parent.divGameEvents.childNodes.length > 10) self.parent.divGameEvents.lastElementChild.remove();
+
+			var docP = document.createElement('p');
+			docP.appendChild(document.createTextNode(JSON.stringify(e)));
+			self.parent.divGameEvents.insertBefore(docP, self.parent.divGameEvents.firstElementChild);
+		},
+		"onHudEnd": async function(frameCount, pass){
+
+			self.parent.elIndicator.classList.toggle("white",(frameCount % 2) == 0);
+
+			async function doRender(cefTextureHandle,frameCount, pass, width, height, renderInfo){
+				var inFlow = await toPromise(self.parent.interop.pumpBegin, frameCount, pass);
+
+				if(!inFlow) {
+					logError("out of flow");
+					return;
+				}
+
+				try {
+					if(cefTextureHandle.invalid) throw toSoftError(new Error("cefTextureHandle.invalid"));
+
+					var cefTexture = self.parent.getCefTexture(cefTextureHandle);
+				
+					if(null === self.parent.shaders["afx_drawtexture_vs20"]) {
+						var refVertexShader = [undefined];
+						var hr = await toPromise(self.parent.interop.d3d9CreateVertexShader, self.parent.shaderData["afx_drawtexture_vs20"], refVertexShader);
+						if(FAILED(hr)) throw toSoftError(failedHResultToError(hr));
+						self.parent.shaders["afx_drawtexture_vs20"] = refVertexShader[0];
+					}
+					
+					if(null === self.parent.shaders["afx_drawtexture_ps20"]) {
+						var refPixelShader = [undefined];
+						var hr = await toPromise(self.parent.interop.d3d9CreatePixelShader, self.parent.shaderData["afx_drawtexture_ps20"], refPixelShader);
+						if(FAILED(hr)) throw toSoftError(failedHResultToError(hr));
+						self.parent.shaders["afx_drawtexture_ps20"] = refPixelShader[0];
+					}
+					
+					if(null === self.parent.vertexDeclarations["pos3_uv2"]) {
+						var refVertexDeclaration = [undefined];
+						var hr = await toPromise(self.parent.interop.d3d9CreateVertexDeclaration, self.parent.vertexElements["pos3_uv2"], refVertexDeclaration);
+						if(FAILED(hr)) throw toSoftError(failedHResultToError(hr));
+						self.parent.vertexDeclarations["pos3_uv2"] = refVertexDeclaration[0];
+					}
+
+					if(!cefTexture) {
+						var refTexture = [undefined];
+						const D3DFMT_A8R8G8B8 = 21;
+						var hr = await toPromise(self.parent.interop.d3d9CreateTexture, width, height, 1, D3DUSAGE.D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL.D3DPOOL_DEFAULT, refTexture, [cefTextureHandle]);
+						if(FAILED(hr)) throw toSoftError(failedHResultToError(hr, "CreateTexture failed for cefTextureHandle: ("+cefTextureHandle.hi+", "+cefTextureHandle.lo+")"));
+
+						cefTexture = refTexture[0];
+
+						console.log("New texture for cefTextureHandle: ("+cefTextureHandle.hi+", "+cefTextureHandle.lo+")");
+						self.parent.setCefTexture(cefTextureHandle, cefTexture);
+					}
+
+					await self.parent.drawRect2d(cefTexture, renderInfo.view.x, renderInfo.view.y, renderInfo.view.width, renderInfo.view.height, 0, 0, 1, 1);
+					await toPromise(self.parent.interop.waitForClientGpu);
+				}
+				catch(error) {
+					if(error && error.soft)
+					{
+						logError(error);
+					}
+					else throw error;					
+				}
+
+				await toPromise(self.parent.interop.pumpEnd);
+			}
+
+			self.parent.renderPromises.push(new Promise((resolve,reject)=>{
+				self.parent.renderQueue.push(function(cefTextureHandle){
+					doRender(cefTextureHandle, frameCount, pass, self.parent.width, self.parent.height, self.parent.renderInfo).then(()=>{
+						resolve();
+					}).catch((e)=>{
+						reject(e);
+					});
+				})
+			}));
+
+			if(self.parent.firstRender)
+			{
+				self.parent.firstRender = false;
+				toPromise(self.parent.interop.sendExternalBeginFrame).then();
+			}
+			toPromise(self.parent.interop.sendExternalBeginFrame).then();
+
+			if(0 < self.parent.renderPromises) await self.parent.renderPromises.shift();
+		}
+	};
+}
+
+AfxDrawingQueue.prototype.onMessage = function(id,...args) {
+	this.messages.push([id,args])
+}
+
+AfxDrawingQueue.prototype.processMessages = async function() {
+	while(0 < this.messages.length)
+	{
+		var message = this.messages.shift();
+		await this.messageHandlers[message[0]].apply(this,message[1]);
+	}
+}
+
 function AfxDrawingInterop(interop,args) {
 	
 	var self = this;
@@ -502,19 +655,22 @@ function AfxDrawingInterop(interop,args) {
 	this.interop = interop;
 	this.args = args;
 	
-	this.width = null;
-	this.height = null;
-	this.frameCount = null;
-	this.renderInfo = null;
 	this.cefTextureHandle = null;
-	this.cefTexture = null;
+	this.cefTextures =  {};
+	this.elIndicator = document.getElementById('indicator');
+	this.elIndicator2 = document.getElementById('indicator2');
 	this.divGameEvents = document.getElementById('gameEvents');
+	this.elClientTime = document.getElementById('clientTime');
 	
 	this.engineInteropId = null;
 
-	this.queued = 0;
 	this.connected = false;
 	this.messages = [];
+
+	this.renderQueue = [];
+	this.renderPromises =  [];
+	this.firstRender = true;
+	this.queue = new AfxDrawingQueue(this);
 
 	this.shaderData = {
 		"afx_drawtexture_vs20": this.compileShader(this.stringToAfxData(`
@@ -571,6 +727,12 @@ function AfxDrawingInterop(interop,args) {
 	};
 	
 	this.messageHandlers = {
+		"white": async function() {
+			this.queue.onMessage("white");
+		},
+		"black": async function() {
+			this.queue.onMessage("black");
+		},
 		"connect": async function(senderId) {
 			this.engineInteropId = senderId;
 			await this.connect(senderId);
@@ -580,96 +742,17 @@ function AfxDrawingInterop(interop,args) {
 			this.engineInteropId = null;
 		},
 		"onRenderViewBegin": async function(renderInfo){
-
-			this.renderInfo = renderInfo;
-		
-			this.frameCount = renderInfo.frameCount;
-			this.width = renderInfo.view.width - renderInfo.view.x;
-			this.height = renderInfo.view.height - renderInfo.view.y;
-
-			await toPromise(this.interop.setSize, this.width, this.height);
+			this.queue.onMessage("onRenderViewBegin", renderInfo);	
 		},
 		"onGameEvent": async function(e){
-			while(this.divGameEvents.childNodes.length > 10) this.divGameEvents.lastElementChild.remove();
-
-			var docP = document.createElement('p');
-			docP.appendChild(document.createTextNode(JSON.stringify(e)));
-			this.divGameEvents.insertBefore(docP, this.divGameEvents.firstElementChild);
+			this.queue.onMessage("onGameEvent", e);	
 		},
-		"onHudEnd": async function(frameCount,pass){
-
-			console.log("RECV "+frameCount+"/"+pass);
-		
-			var self = this;
-
-			var isInFlow = await toPromise(self.interop.pumpBegin, frameCount, pass);
-
-			if(!isInFlow)
-			{
-				console.log("OUT OF FLOW "+frameCount+"/"+pass);
-				return;
-			}
-
-			try {
-				console.log("RENDER "+frameCount+"/"+pass);
-				var cefTextureHandle = self.interop.createInvalidHandle(); // await toPromise.apply(self, [self.renderCefFrame]);
-				console.log("RENDERED "+frameCount+"/"+pass);
-
-				if(cefTextureHandle.invalid) throw toSoftError(new Error("cefTextureHandle.invalid"));
-
-				if(null === self.cefTextureHandle || self.cefTextureHandle.lo != cefTextureHandle.lo || self.cefTextureHandle.hi != cefTextureHandle.hi)
-				{
-					self.cefTextureHandle = cefTextureHandle;
-					
-					if(self.cefTexture) {
-						var hr = await toPromise(self.cefTexture.release);
-						if(FAILED(hr)) throw toSoftError(failedHResultToError(hr));
-						self.cefTexture = null;
-					}
-				}
-				
-				if(null === self.shaders["afx_drawtexture_vs20"]) {
-					var refVertexShader = [undefined];
-					var hr = await toPromise(self.interop.d3d9CreateVertexShader, self.shaderData["afx_drawtexture_vs20"], refVertexShader);
-					if(FAILED(hr)) throw toSoftError(failedHResultToError(hr));
-					self.shaders["afx_drawtexture_vs20"] = refVertexShader[0];
-				}
-				
-				if(null === self.shaders["afx_drawtexture_ps20"]) {
-					var refPixelShader = [undefined];
-					var hr = await toPromise(self.interop.d3d9CreatePixelShader, self.shaderData["afx_drawtexture_ps20"], refPixelShader);
-					if(FAILED(hr)) throw toSoftError(failedHResultToError(hr));
-					self.shaders["afx_drawtexture_ps20"] = refPixelShader[0];
-				}
-				
-				if(null === self.vertexDeclarations["pos3_uv2"]) {
-					var refVertexDeclaration = [undefined];
-					var hr = await toPromise(self.interop.d3d9CreateVertexDeclaration, self.vertexElements["pos3_uv2"], refVertexDeclaration);
-					if(FAILED(hr)) throw toSoftError(failedHResultToError(hr));
-					self.vertexDeclarations["pos3_uv2"] = refVertexDeclaration[0];
-				}
-
-				if(null === self.cefTexture) {
-					var refTexture = [undefined];
-					var hr = await toPromise(self.interop.d3d9CreateTexture, self.width, self.height, 1, D3DUSAGE.D3DUSAGE_RENDERTARGET, 21 /* D3DFMT_A8R8G8B8 */, D3DPOOL.D3DPOOL_DEFAULT, refTexture, [self.cefTextureHandle]);
-					if(FAILED(hr)) throw toSoftError(failedHResultToError(hr));
-					self.cefTexture = refTexture[0];
-				}
-
-				await self.drawRect2d(self.cefTexture, self.renderInfo.view.x, self.renderInfo.view.y, self.renderInfo.view.width, self.renderInfo.view.height, 0, 0, 1, 1);
-
-				await toPromise(self.interop.waitForClientGpu);
-			}
-			catch(e) {
-				if(e && e.soft)
-				{
-					logError(e);
-				}
-				else throw e;
-			}
-
-			await toPromise(self.interop.pumpEnd);
-			console.log("FINISHED "+frameCount+"/"+pass);
+		"onHudEnd": async function(frameCount, pass){
+			this.queue.onMessage("onHudEnd", frameCount, pass);	
+		},
+		"onDone": async function(){
+			await this.queue.processMessages();
+			this.queue = new AfxDrawingQueue(this);
 		}
 	};
 	
@@ -687,6 +770,43 @@ function AfxDrawingInterop(interop,args) {
 				return self.disconnect();
 		});
 	};
+
+	interop.onAcceleratedPaint = function(cefTextureHandle){
+		if(0 < self.renderQueue.length)
+			self.renderQueue.shift()(cefTextureHandle);
+	}
+
+	interop.onReleaseShareHandle = function(cefTextureHandle){
+		console.log(cefTextureHandle);
+
+		async function release(cefTextureHandle)
+		{
+			var cefTexture = self.getCefTexture(cefTextureHandle);
+			if(cefTexture)
+			{
+				if(this.connected)
+				{
+					try {
+						var hr = await toPromise(cefTexture.release);
+						if(FAILED(hr)) throw failedHResultToError(hr);
+					}
+					catch(e)
+					{
+						logError(e);
+					}
+				}
+
+				self.removeCefTexture(cefTextureHandle);
+			}
+		}
+
+		release(cefTextureHandle).catch((e)=>{
+			logError(e);
+			if(!(e && e.soft))
+				return self.disconnect();
+		});
+	}
+
 	this.vertexElements = {
 		"pos3_uv2": this.buildD3d9VertexElements([
 			{
@@ -712,10 +832,7 @@ function AfxDrawingInterop(interop,args) {
 
 	this.vertexBuffers = {
 		"rect": null
-	}
-
-	// render dummy frame to unstuck the queue.
-	self.interop.renderCefFrame((cefTextureHandle) => {},(error) => {});
+	}	
 
 	toPromise(interop.sendMessage, this.args.indexInteropId, JSON.stringify({
 		"id": "drawingCreated",
@@ -750,34 +867,41 @@ AfxDrawingInterop.prototype.onMessage = async function(senderId, message) {
 
 AfxDrawingInterop.prototype.onDeviceReset = async function() {
 	
-	var self = this;
-	
 	// We currently re-create all resources, even non-pooled ones.
 	// TODO: change the above.
+
+	while(0 < this.cefTextures.length)
+	{
+		var hiKey = Object.keys(this.cefTextures)[0];
+		var loKey = Object.keys(this.cefTextures[hiKey])[0];
+
+		var cefTextureHandle = this.interop.createHandleFromLoHi(loKey,hiKey);
+
+		var cefTexture = this.getCefTexture(cefTextureHandle);
+		
+		var hr = await toPromise(cefTexture.release);
+		if(FAILED(hr)) throw failedHResultToError(hr);
+
+		this.removeCefTexture(cefTextureHandle);
+	}
 	
-	if(self.cefTexture)
+	if(this.shaders["afx_drawtexture_vs20"])
 	{
-		var hr = await toPromise(self.cefTexture.release);
+		var hr = await toPromise(this.shaders["afx_drawtexture_vs20"].release);
 		if(FAILED(hr)) throw failedHResultToError(hr);
-		self.cefTexture = null;
+		this.shaders["afx_drawtexture_vs20"] = null;
 	}
-	if(self.shaders["afx_drawtexture_vs20"])
+	if(this.shaders["afx_drawtexture_ps20"])
 	{
-		var hr = await toPromise(self.shaders["afx_drawtexture_vs20"].release);
+		var hr = await toPromise(this.shaders["afx_drawtexture_ps20"].release);
 		if(FAILED(hr)) throw failedHResultToError(hr);
-		self.shaders["afx_drawtexture_vs20"] = null;
+		this.shaders["afx_drawtexture_ps20"] = null;
 	}
-	if(self.shaders["afx_drawtexture_ps20"])
+	if(this.vertexDeclarations["pos3_uv2"])
 	{
-		var hr = await toPromise(self.shaders["afx_drawtexture_ps20"].release);
+		var hr = await toPromise(this.vertexDeclarations["pos3_uv2"].release);
 		if(FAILED(hr)) throw failedHResultToError(hr);
-		self.shaders["afx_drawtexture_ps20"] = null;
-	}
-	if(self.vertexDeclarations["pos3_uv2"])
-	{
-		var hr = await toPromise(self.vertexDeclarations["pos3_uv2"].release);
-		if(FAILED(hr)) throw failedHResultToError(hr);
-		self.vertexDeclarations["pos3_uv2"] = null;
+		this.vertexDeclarations["pos3_uv2"] = null;
 	}
 }
 
@@ -834,7 +958,7 @@ AfxDrawingInterop.prototype.compileShader = function(srcData,sourceName,defines,
 }
 
 AfxDrawingInterop.prototype.drawRect2d = async function(texture,x,y,width,height,x0,y0,x1,y1) {
-	
+
 	var self = this;
 	
 	// Orthographic projection matrix:
@@ -856,7 +980,7 @@ AfxDrawingInterop.prototype.drawRect2d = async function(texture,x,y,width,height
 	];
 	
 	//
-	var vertexStreamZeroData = self.interop.createDrawingData(4 * ((3+2)*4));
+	var vertexStreamZeroData = this.interop.createDrawingData(4 * ((3+2)*4));
 	{
 		var dv = new DataView(vertexStreamZeroData.buffer);
 		
@@ -897,12 +1021,12 @@ AfxDrawingInterop.prototype.drawRect2d = async function(texture,x,y,width,height
 	
 	//
 
-	await toPromise(self.interop.beginCleanState);
+	await toPromise(this.interop.beginCleanState);
 	
-	var hr = await toPromise(self.interop.d3d9SetVertexDeclaration, self.vertexDeclarations["pos3_uv2"]);
+	var hr = await toPromise(this.interop.d3d9SetVertexDeclaration, this.vertexDeclarations["pos3_uv2"]);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetViewport, {
+	var hr = await toPromise(this.interop.d3d9SetViewport, {
 				"x": x,
 				"y": y,
 				"width": width,	
@@ -912,91 +1036,91 @@ AfxDrawingInterop.prototype.drawRect2d = async function(texture,x,y,width,height
 	});
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_SRGBWRITEENABLE, BOOL.FALSE);
+	var hr = await toPromise(this.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_SRGBWRITEENABLE, BOOL.FALSE);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_COLORWRITEENABLE, D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_ALPHA | D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_BLUE | D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_GREEN | D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_RED);
+	var hr = await toPromise(this.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_COLORWRITEENABLE, D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_ALPHA | D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_BLUE | D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_GREEN | D3DRS_COLORWRITEENABLE.D3DCOLORWRITEENABLE_RED);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_SEPARATEALPHABLENDENABLE, BOOL.FALSE);
+	var hr = await toPromise(this.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_SEPARATEALPHABLENDENABLE, BOOL.FALSE);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetVertexShader, null);
+	var hr = await toPromise(this.interop.d3d9SetVertexShader, null);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetPixelShader, self.shaders["afx_drawtexture_ps20"]);
+	var hr = await toPromise(this.interop.d3d9SetPixelShader, this.shaders["afx_drawtexture_ps20"]);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_CULLMODE, D3DCULL.D3DCULL_NONE);
+	var hr = await toPromise(this.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_CULLMODE, D3DCULL.D3DCULL_NONE);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_ZWRITEENABLE, BOOL.FALSE);
+	var hr = await toPromise(this.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_ZWRITEENABLE, BOOL.FALSE);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_ZFUNC, D3DCMPFUNC.D3DCMP_ALWAYS);
+	var hr = await toPromise(this.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_ZFUNC, D3DCMPFUNC.D3DCMP_ALWAYS);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_ZENABLE, D3DZBUFFERTYPE.D3DZB_FALSE);
+	var hr = await toPromise(this.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_ZENABLE, D3DZBUFFERTYPE.D3DZB_FALSE);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_ALPHABLENDENABLE, BOOL.TRUE);
+	var hr = await toPromise(this.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_ALPHABLENDENABLE, BOOL.TRUE);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_ALPHATESTENABLE, BOOL.FALSE);
+	var hr = await toPromise(this.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_ALPHATESTENABLE, BOOL.FALSE);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_MULTISAMPLEANTIALIAS, BOOL.FALSE);
+	var hr = await toPromise(this.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_MULTISAMPLEANTIALIAS, BOOL.FALSE);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 
-	var hr = await toPromise(self.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_LIGHTING, BOOL.FALSE);
+	var hr = await toPromise(this.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_LIGHTING, BOOL.FALSE);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_SRCBLEND, D3DBLEND.D3DBLEND_SRCALPHA);
+	var hr = await toPromise(this.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_SRCBLEND, D3DBLEND.D3DBLEND_SRCALPHA);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_DESTBLEND, D3DBLEND.D3DBLEND_INVSRCALPHA);
+	var hr = await toPromise(this.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_DESTBLEND, D3DBLEND.D3DBLEND_INVSRCALPHA);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_FILLMODE, D3DFILLMODE.D3DFILL_SOLID);
+	var hr = await toPromise(this.interop.d3d9SetRenderState, D3DRENDERSTATETYPE.D3DRS_FILLMODE, D3DFILLMODE.D3DFILL_SOLID);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetTextureStageState, 0, D3DTEXTURESTAGESTATETYPE.D3DTSS_COLOROP, D3DTEXTUREOP.D3DTOP_SELECTARG1);
+	var hr = await toPromise(this.interop.d3d9SetTextureStageState, 0, D3DTEXTURESTAGESTATETYPE.D3DTSS_COLOROP, D3DTEXTUREOP.D3DTOP_SELECTARG1);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetTextureStageState, 0, D3DTEXTURESTAGESTATETYPE.D3DTSS_COLORARG1, D3DTEXTUREARG.D3DTA_TEXTURE);
+	var hr = await toPromise(this.interop.d3d9SetTextureStageState, 0, D3DTEXTURESTAGESTATETYPE.D3DTSS_COLORARG1, D3DTEXTUREARG.D3DTA_TEXTURE);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetTextureStageState, 0, D3DTEXTURESTAGESTATETYPE.D3DTSS_ALPHAOP, D3DTEXTUREOP.D3DTOP_SELECTARG1);
+	var hr = await toPromise(this.interop.d3d9SetTextureStageState, 0, D3DTEXTURESTAGESTATETYPE.D3DTSS_ALPHAOP, D3DTEXTUREOP.D3DTOP_SELECTARG1);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 
-	var hr = await toPromise(self.interop.d3d9SetTextureStageState, 0, D3DTEXTURESTAGESTATETYPE.D3DTSS_ALPHAARG1, D3DTEXTUREARG.D3DTA_TEXTURE);
+	var hr = await toPromise(this.interop.d3d9SetTextureStageState, 0, D3DTEXTURESTAGESTATETYPE.D3DTSS_ALPHAARG1, D3DTEXTUREARG.D3DTA_TEXTURE);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetSamplerState, 0, D3DSAMPLERSTATETYPE.D3DSAMP_MINFILTER, D3DTEXTUREFILTERTYPE.D3DTEXF_LINEAR);
+	var hr = await toPromise(this.interop.d3d9SetSamplerState, 0, D3DSAMPLERSTATETYPE.D3DSAMP_MINFILTER, D3DTEXTUREFILTERTYPE.D3DTEXF_LINEAR);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetSamplerState, 0, D3DSAMPLERSTATETYPE.D3DSAMP_MAGFILTER, D3DTEXTUREFILTERTYPE.D3DTEXF_LINEAR);
+	var hr = await toPromise(this.interop.d3d9SetSamplerState, 0, D3DSAMPLERSTATETYPE.D3DSAMP_MAGFILTER, D3DTEXTUREFILTERTYPE.D3DTEXF_LINEAR);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetSamplerState, 0, D3DSAMPLERSTATETYPE.D3DSAMP_SRGBTEXTURE, BOOL.FALSE);
+	var hr = await toPromise(this.interop.d3d9SetSamplerState, 0, D3DSAMPLERSTATETYPE.D3DSAMP_SRGBTEXTURE, BOOL.FALSE);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetTexture, 0, texture);
+	var hr = await toPromise(this.interop.d3d9SetTexture, 0, texture);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 
-	var hr = await toPromise(self.interop.d3d9SetTransform, D3DTRANSFORMSTATETYPE.D3DTS_WORLD, mat_identity);
+	var hr = await toPromise(this.interop.d3d9SetTransform, D3DTRANSFORMSTATETYPE.D3DTS_WORLD, mat_identity);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetTransform, D3DTRANSFORMSTATETYPE.D3DTS_VIEW, mat_identity);
+	var hr = await toPromise(this.interop.d3d9SetTransform, D3DTRANSFORMSTATETYPE.D3DTS_VIEW, mat_identity);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9SetTransform, D3DTRANSFORMSTATETYPE.D3DTS_PROJECTION, mat_projection);
+	var hr = await toPromise(this.interop.d3d9SetTransform, D3DTRANSFORMSTATETYPE.D3DTS_PROJECTION, mat_projection);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	var hr = await toPromise(self.interop.d3d9DrawPrimitiveUP, D3DPRIMITIVETYPE.D3DPT_TRIANGLESTRIP, 2, vertexStreamZeroData, 5*4);
+	var hr = await toPromise(this.interop.d3d9DrawPrimitiveUP, D3DPRIMITIVETYPE.D3DPT_TRIANGLESTRIP, 2, vertexStreamZeroData, 5*4);
 	if(FAILED(hr)) throw await toSoftError(failedHResultToError(hr));
 	
-	await toPromise(self.interop.endCleanState);
+	await toPromise(this.interop.endCleanState);
 }
 
 
@@ -1029,113 +1153,76 @@ AfxDrawingInterop.prototype.buildD3d9VertexElements = function(definitions) {
 
 AfxDrawingInterop.prototype.connect = async function() {
 
-	var self = this;
-	
-	var connected = await toPromise(self.interop.connect);
+	await toPromise(this.interop.connect);
 		
-	if(connected) {
-		self.connected = true;
-		await toPromise(self.interop.sendMessage, self.args.indexInteropId, JSON.stringify({
-			"id": "drawingConnected",
-			"args": [self.interop.id]
-		}));
-		await toPromise(self.interop.sendMessage, self.engineInteropId, JSON.stringify({
-			"id": "drawingConnected",
-			"args": [self.interop.id]
-		}));
-	}
-	else {
-		await toPromise(self.interop.sendMessage, self.engineInteropId, JSON.stringify({
-			"id": "drawingConnecting",
-			"args": [self.interop.id]
-		}));
-	}
+	this.connected = true;
+
+	await toPromise(this.interop.sendMessage, this.args.indexInteropId, JSON.stringify({
+		"id": "drawingConnected",
+		"args": [this.interop.id]
+	}));
+	await toPromise(this.interop.sendMessage, this.engineInteropId, JSON.stringify({
+		"id": "drawingConnected",
+		"args": [this.interop.id]
+	}));
 }
 
 AfxDrawingInterop.prototype.disconnect = async function() {
-	
-	var self = this;
 
 	try {
-		await toPromise(self.interop.close)
+		await toPromise(this.interop.close)
 	}
 	catch(e)
 	{
 		logError(e);
 	}
-
-	self.connected = false;
-
-	self.cefTextureHandle = null;
-	self.cefTexture = null;
-	self.shaders["afx_drawtexture_vs20"] = null;
-	self.shaders["afx_drawtexture_ps20"] = null;
-	self.vertexDeclarations["pos3_uv2"] = null;	
-
-	this.messages = []; // drop all messages, they are useless now.
-	
-	await toPromise(self.interop.sendMessage, self.args.indexInteropId, JSON.stringify({
-		"id": "drawingDisconnected",
-		"args": [self.interop.id]
-	}));
-	await toPromise(self.interop.sendMessage, self.engineInteropId, JSON.stringify({
-		"id": "drawingDisconnected",
-		"args": [self.interop.id]
-	}));
-}
-
-AfxDrawingInterop.prototype.renderCefFrame = function(resolve,reject) {
-
-	var self = this;
-
-	var interval = null;
-
-	function requestRender() {
-		++self.queued;
-
-		if(1 < self.queued) console.log("additional requestRender");
-		
-		if(2 <= self.queued )	
-		{
-			if(interval)
-			{
-				clearInterval(interval);
-				interval = null;
-			}
-		}
-
-		self.interop.renderCefFrame((cefTextureHandle) => {
-
-			if(interval)
-			{
-				clearInterval(interval);
-				interval = null;
-			}
-
-			self.queued = 0;
-
-			resolve(cefTextureHandle);
-
-		}, (error) => {
-
-			if(interval)
-			{
-				clearInterval(interval);
-				interval = null;
-			}
-			self.queued = 0;
-
-			reject(error);
-		});
+	finally {
+		// drop all messages, they are useless now.
+		this.messages = [];
+		this.queue = new AfxDrawingQueue(this);
 	}
-/*
-	interval = setInterval(function(){
-		requestRender();
-	}, 250);*/
-	
-	requestRender();
+
+	this.connected = false;
+	this.cefTextures = {};
+
+	this.shaders["afx_drawtexture_vs20"] = null;
+	this.shaders["afx_drawtexture_ps20"] = null;
+	this.vertexDeclarations["pos3_uv2"] = null;	
+
+	await toPromise(this.interop.sendMessage, this.args.indexInteropId, JSON.stringify({
+		"id": "drawingDisconnected",
+		"args": [this.interop.id]
+	}));
+	await toPromise(this.interop.sendMessage, this.engineInteropId, JSON.stringify({
+		"id": "drawingDisconnected",
+		"args": [this.interop.id]
+	}));
 }
 
+AfxDrawingInterop.prototype.setCefTexture = function(cefTextureHandle, cefTexture) {
+    if(!this.cefTextures[cefTextureHandle.hi]){
+        this.cefTextures[cefTextureHandle.hi] = {};
+    }
+    this.cefTextures[cefTextureHandle.hi][cefTextureHandle.lo] = cefTexture;
+}
+
+AfxDrawingInterop.prototype.getCefTexture = function(cefTextureHandle) {
+	var loSet = this.cefTextures[cefTextureHandle.hi];
+	if(loSet) {
+		return loSet[cefTextureHandle.lo];
+	}
+}
+
+AfxDrawingInterop.prototype.removeCefTexture = function(cefTextureHandle) {
+	var loSet = this.cefTextures[cefTextureHandle.hi];
+	if(loSet) {
+		delete loSet[cefTextureHandle.lo];
+	}
+	if(0 == loSet.length)
+	{
+		delete this.cefTextures[cefTextureHandle.hi];
+	}
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -1145,10 +1232,6 @@ document.addEventListener('DOMContentLoaded', function(){
 		new AfxDrawingInterop(interop, JSON.parse(message));
 	});	
 }, false);
-
-setInterval(function(){
-	console.log("drawing alive.");
-}, 250);
 
 </script>
 </body>

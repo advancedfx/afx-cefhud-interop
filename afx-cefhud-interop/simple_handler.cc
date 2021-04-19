@@ -19,6 +19,8 @@
 #include <include/base/cef_bind.h>
 #include <include/wrapper/cef_closure_task.h>
 
+#include <d3d11.h>
+
 namespace {
 
  // Returns a data: URI with the specified contents.
@@ -40,9 +42,11 @@ void SimpleHandler::WaitConnectionThreadHandler(void) {
   std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_handler_");
   strPipeName.append(std::to_string(GetCurrentProcessId()));
 
+  //MessageBoxA(0, strPipeName.c_str(), "SERVER", MB_OK);
+
   while (!m_WaitConnectionQuit) {
     try {
-      this->WaitForConnection(strPipeName.c_str(), 4096, 4096, 36000000);
+      this->WaitForConnection(strPipeName.c_str(), 4096, 4096, TEN_MINUTES_IN_MILLISECONDS);
     } catch (...) {
     }
   }
@@ -173,7 +177,6 @@ void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
   auto it = m_Browsers.find(browser->GetIdentifier());
   if (it != m_Browsers.end()) {
     if (CHostPipeServerConnectionThread* connection = it->second.Connection) {
-      lock.unlock();
       rect.Set(0, 0, connection->GetWidth(), connection->GetHeight());
     }
   }
@@ -183,28 +186,26 @@ void SimpleHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
                                        PaintElementType type,
                                        const RectList& dirtyRects,
                                        void* share_handle) {
+
   if (PET_VIEW == type) {
+
     CefPostTask(TID_IO, base::Bind(&SimpleHandler::DoPainted, this,
                                    browser->GetIdentifier(), share_handle));
   }
 }
+  extern ID3D11Texture2D * g_ActiveTexture;
 
-void SimpleHandler::DoPainted(int do_painted, void* share_handle) {
+void SimpleHandler::DoPainted(int browserId, void* share_handle) {
   std::unique_lock<std::mutex> lock(m_BrowserMutex);
-  auto it = m_Browsers.find(do_painted);
+  auto it = m_Browsers.find(browserId);
   if (it != m_Browsers.end()) {
     if (CHostPipeServerConnectionThread* connection = it->second.Connection) {
-      lock.unlock();
       try {
+        m_HandleToBrowserId[share_handle] = browserId;
         connection->OnPainted(share_handle);
-      } catch (...) {
+      } catch (const std::exception e) {
+        MessageBoxA(0, e.what(), "Error in simple_handler.cc", MB_OK|MB_ICONERROR);
       }
     }
   }
-}
-
-bool SimpleHandler::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
-                                        CefProcessId source_process,
-                                        CefRefPtr<CefProcessMessage> message) {
-  return false;
 }

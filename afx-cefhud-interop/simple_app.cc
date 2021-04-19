@@ -121,15 +121,21 @@ void SimpleApp::OnContextInitialized() {
 #if defined(OS_WIN)
     // On Windows we need to specify certain flags that will be passed to
     // CreateWindowEx().
-    window_info.SetAsPopup(NULL, "cefsimple");
+
+    bool bWindow = !command_line->HasSwitch("afx-no-window");
+
+    if(bWindow)
+      window_info.SetAsPopup(NULL, "cefsimple");
+    else
+      window_info.SetAsWindowless(NULL);
     window_info.width = 405;
     window_info.height = 720;
     window_info.shared_texture_enabled =  false;
-    window_info.external_begin_frame_enabled = false;
+    window_info.external_begin_frame_enabled = bWindow ? false : true; // No need to draw what one can't see.
 #endif
 
-    CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
-    extra_info->SetString("interopType", "index");
+    CefRefPtr<CefDictionaryValue> _extra_info = CefDictionaryValue::Create();
+    _extra_info->SetString("interopType", "index");
 
     auto argStr = CefValue::Create();
     auto argCmd = CefDictionaryValue::Create();
@@ -137,11 +143,12 @@ void SimpleApp::OnContextInitialized() {
                       command_line->GetCommandLineString());
     argStr->SetDictionary(argCmd);
 
-    extra_info->SetString("argStr", CefWriteJSON(argStr, JSON_WRITER_DEFAULT));
-    extra_info->SetInt("handlerId", GetCurrentProcessId());
+    _extra_info->SetString("argStr", CefWriteJSON(argStr, JSON_WRITER_DEFAULT));
+    _extra_info->SetInt("handlerId", GetCurrentProcessId());
+
 
     auto val = CefValue::Create();
-    val->SetDictionary(extra_info);
+    val->SetDictionary(_extra_info);
 
     std::string prefix;
     std::string query;
@@ -156,7 +163,6 @@ void SimpleApp::OnContextInitialized() {
     else {
       prefix = argUrl;
     }
-
     size_t pos_query = prefix.find("?");
 
     if(std::string::npos != pos_query)
@@ -174,16 +180,4 @@ void SimpleApp::OnContextInitialized() {
     CefBrowserHost::CreateBrowser(window_info, handler, url, browser_settings,
                                   nullptr);
   }
-}
-
-bool SimpleApp::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
-                                         CefProcessId source_process,
-                                         CefRefPtr<CefProcessMessage> message) {
-
-  if (nullptr != m_Interop) {
-    return m_Interop->OnProcessMessageReceived(browser, source_process,
-                                        message);
-  }
-
-  return false;
 }

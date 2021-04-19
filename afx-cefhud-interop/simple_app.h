@@ -33,6 +33,10 @@ class SimpleApp : public CefApp,
   // CefBrowserProcessHandler methods:
 
   virtual void OnContextInitialized() OVERRIDE;
+/*
+  virtual void OnBrowserCreated( CefRefPtr< CefBrowser > browser, CefRefPtr< CefDictionaryValue > _extra_info ) OVERRIDE {
+    extra_info = _extra_info->Copy(false);
+  }*/
 
   // CefRenderProcessHandler methods:
 
@@ -75,6 +79,7 @@ class SimpleApp : public CefApp,
               V8_PROPERTY_ATTRIBUTE_NONE);
         }
         else if (extra_info->GetString("interopType").compare("engine") == 0) {
+          
           auto window = context->GetGlobal();
           window->SetValue("afxInterop",
                            advancedfx::interop::CreateEngineInterop(
@@ -103,11 +108,6 @@ class SimpleApp : public CefApp,
       }
   }
 
-  virtual bool OnProcessMessageReceived(
-      CefRefPtr<CefBrowser> browser,
-      CefProcessId source_process,
-      CefRefPtr<CefProcessMessage> message) OVERRIDE;
-
   // CefApp methods:
   virtual void OnBeforeCommandLineProcessing(
       const CefString& process_type,
@@ -115,12 +115,12 @@ class SimpleApp : public CefApp,
     // disable creation of a GPUCache/ folder on disk
     command_line->AppendSwitch("disable-gpu-shader-disk-cache");
 
-    //command_line->AppendSwitch("disable-accelerated-video-decode");
+    command_line->AppendSwitch("disable-accelerated-video-decode");
 
     // un-comment to show the built-in Chromium fps meter
     //command_line->AppendSwitch("show-fps-counter");
 
-    //command_line->AppendSwitch("disable-gpu-vsync");
+    command_line->AppendSwitch("disable-gpu-vsync");
 
     // Most systems would not need to use this switch - but on older hardware,
     // Chromium may still choose to disable D3D11 for gpu workarounds.
@@ -137,24 +137,29 @@ class SimpleApp : public CefApp,
                                         "no-user-gesture-required");
 
     //
+
+    command_line->AppendSwitch("no-sandbox");
+    command_line->AppendSwitch("disable-gpu-watchdog");
+    command_line->AppendSwitch("disable-hang-monitor");
+    command_line->AppendSwitch("enable-prune-gpu-command-buffers");
+
+    //command_line->AppendSwitch("disable-gpu");
+    //command_line->AppendSwitch("disable-gpu-compositing");
     //command_line->AppendSwitch("gpu-sandbox-failures-fatal");
     //command_line->AppendSwitch("disable-gpu-early-init");
-    //command_line->AppendSwitch("disable-gpu-watchdog");
     //command_line->AppendSwitch("d3d11");
-    //command_line->AppendSwitch("no-sandbox");
-    //command_line->AppendSwitch("off-screen-rendering-enabled");
-    //command_line->AppendSwitchWithValue("off-screen-frame-rate", "60");
     //command_line->AppendSwitch("enable-gpu");
-    //command_line->AppendSwitch("enable-begin-frame-scheduling");
-    //command_line->AppendSwitch("disable-hang-monitor");
     //command_line->AppendSwitch("disable-threaded-compositing");
     //command_line->AppendSwitch("cc-layer-tree-test-no-timeout");
     //command_line->AppendSwitch("skip-gpu-data-loading");
     //command_line->AppendSwitch("disable-mojo-renderer");
+    //enable-prune-gpu-command-buffers
+
   }
 
  private:
   CefRefPtr<advancedfx::interop::CInterop> m_Interop;
+  //CefRefPtr< CefDictionaryValue > extra_info;
 
   // Include the default reference counting implementation.
   IMPLEMENT_REFCOUNTING(SimpleApp);
