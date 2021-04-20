@@ -422,25 +422,10 @@ void CThreadedQueue::Abort() {
 
 void CThreadedQueue::Queue(const fp_t& op) {
 
-  OutputDebugStringA("[1]\n");
-
   std::unique_lock<std::mutex> lock(m_Lock);
   m_Queue.push(op);
 
-  lock.unlock();
   m_Cv.notify_one();
-
-  OutputDebugStringA("[2]\n");
-}
-
-static inline int64_t GetTicks()
-{
-    LARGE_INTEGER ticks;
-    if (!QueryPerformanceCounter(&ticks))
-    {
-        return 0;
-    }
-    return ticks.QuadPart;
 }
 
 void CThreadedQueue::Queue(fp_t&& op) {
@@ -448,7 +433,6 @@ void CThreadedQueue::Queue(fp_t&& op) {
   std::unique_lock<std::mutex> lock(m_Lock);
   m_Queue.push(std::move(op));
 
-  lock.unlock();
   m_Cv.notify_one();
 }
 
@@ -588,6 +572,7 @@ void CPipeWriter::WriteBytes(const LPVOID bytes, DWORD offset, DWORD length) {
 }
 
 void CPipeWriter::Flush() {
+
   if (!FlushFileBuffers(m_Handle))
     throw CPipeException(GetLastError());
 }
@@ -688,10 +673,7 @@ void CPipeClient::ClosePipe() {
 
 // CPipeServer /////////////////////////////////////////////////////////////////
 
-void CPipeServer::WaitForConnection(const char* pipeName,
-                        unsigned int outBufSize,
-                        unsigned int inBufSize,
-                        int timeOut) {
+void CPipeServer::WaitForConnection(const char* pipeName, int timeOut) {
 
   // https://docs.microsoft.com/en-us/windows/win32/ipc/multithreaded-pipe-server
 
@@ -702,7 +684,7 @@ void CPipeServer::WaitForConnection(const char* pipeName,
  hPipe = CreateNamedPipeA(pipeName, PIPE_ACCESS_DUPLEX,
                            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
                                PIPE_REJECT_REMOTE_CLIENTS,
-                           PIPE_UNLIMITED_INSTANCES, outBufSize, inBufSize,
+                           PIPE_UNLIMITED_INSTANCES, 0, 0,
                            timeOut, NULL);
 
     if (hPipe == INVALID_HANDLE_VALUE) {
@@ -771,9 +753,6 @@ class CNamedPipeServer {
  private:
   HANDLE m_PipeHandle;
 
-  const DWORD m_ReadBufferSize = 4096;
-  const DWORD m_WriteBufferSize = 4096;
-
   DWORD m_ReadTimeoutMs;
   DWORD m_WriteTimeoutMs;
 
@@ -788,10 +767,10 @@ class CNamedPipeServer {
 
     m_PipeHandle = CreateNamedPipeA(
         strPipeName.c_str(),
-        PIPE_ACCESS_INBOUND | PIPE_ACCESS_OUTBOUND,
+        PIPE_ACCESS_DUPLEX,
         PIPE_READMODE_BYTE | PIPE_TYPE_BYTE | PIPE_WAIT |
             PIPE_REJECT_REMOTE_CLIENTS,
-        1, m_ReadBufferSize, m_WriteBufferSize, TEN_MINUTES_IN_MILLISECONDS, NULL);
+        1, 0, 0, TEN_MINUTES_IN_MILLISECONDS, NULL);
   }
 
   ~CNamedPipeServer() {
@@ -907,6 +886,7 @@ class CNamedPipeServer {
   }
 
   bool Flush() {
+
     if (!FlushFileBuffers(m_PipeHandle))
       return false;
 
@@ -2395,7 +2375,7 @@ afxObject->AddFunction(
           int errorLine = __LINE__;
 
           if (self->GetConnected() && 0 == (errorLine = self->DoPumpBegin(frameCount, pass))) {
-            bool inFlow = self->m_InFlow;;
+            bool inFlow = self->m_InFlow;
             CefPostTask(TID_RENDERER,
                         new CAfxTask([ctx = self->m_Context, fn_resolve,
                                       result = inFlow]() {
@@ -5053,7 +5033,7 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
     Close();
 
     try {
-      this->WriteInt32((int)advancedfx::interop::ClientMessage::Quit);
+      this->WriteUInt32((int)advancedfx::interop::ClientMessage::Quit);
       this->Flush();
     } catch (const std::exception &) {
     }
@@ -6179,7 +6159,7 @@ private:
 
     while (!m_WaitConnectionQuit) {
       try {
-        this->WaitForConnection(strPipeName.c_str(), 4096, 4096, INFINITE);
+        this->WaitForConnection(strPipeName.c_str(), INFINITE);
       } catch (...) {
       }
     }
@@ -6189,8 +6169,8 @@ private:
        m_InFlow = false;
 
     while (true) {
-      INT32 drawingMessage;
-      if (!m_PipeServer->ReadInt32(drawingMessage))
+      UINT32 drawingMessage;
+      if (!m_PipeServer->ReadUInt32(drawingMessage))
         return __LINE__;
 
       bool bContinue = false;
@@ -6243,7 +6223,7 @@ private:
         // Error: client is ahead, otherwise we would have correct
         // data by now.
 
-        if (!m_PipeServer->WriteInt32((INT32)DrawingReply::Retry))
+        if (!m_PipeServer->WriteUInt32((INT32)DrawingReply::Retry))
           return __LINE__;
 
         if(!m_PipeServer->Flush())
@@ -6260,7 +6240,7 @@ private:
       } else if (frameDiff > 0) {
         // client is behind.
 
-        if (!m_PipeServer->WriteInt32((INT32)DrawingReply::Skip))
+        if (!m_PipeServer->WriteUInt32((INT32)DrawingReply::Skip))
           return __LINE__;
 
         if(!m_PipeServer->Flush())
@@ -6934,7 +6914,7 @@ private:
   CEngineInteropImpl(int browserId)
       : CAfxInterop("advancedfxInterop"),
         m_BrowserId(browserId),
-        m_ServerVersion(8, 0, 0, 0) {
+        m_ServerVersion(7, 0, 0, 0) {
     m_WaitConnectionThread =
         std::thread(&CEngineInteropImpl::WaitConnectionThreadHandler, this);
   }
@@ -7070,7 +7050,7 @@ private:
       m_ClientVersion.Set(clientVersion[0], clientVersion[1], clientVersion[2],
                           clientVersion[3]);
 
-      if (m_ClientVersion < CVersion(8,0,0,0)) {
+      if (m_ClientVersion < CVersion(7,0,0,0)) {
         if (!m_PipeServer->WriteBoolean(false))
           AFX_GOTO_ERROR
 
@@ -7772,7 +7752,7 @@ private:
 
     while (!m_WaitConnectionQuit) {
       try {
-        this->WaitForConnection(strPipeName.c_str(), 4096, 4096, INFINITE);
+        this->WaitForConnection(strPipeName.c_str(), INFINITE);
       } catch (...) {
       }
     }
@@ -8709,7 +8689,7 @@ bool m_WaitConnectionQuit = false;
 
     while (!m_WaitConnectionQuit) {
       try {
-        this->WaitForConnection(strPipeName.c_str(), 4096, 4096, INFINITE);
+        this->WaitForConnection(strPipeName.c_str(), INFINITE);
       } catch (...) {
       }
     }

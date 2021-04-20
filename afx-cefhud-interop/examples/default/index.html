@@ -43,7 +43,7 @@ function AfxInterop(interop, args) {
 	this.drawingInteropId = null;
 	this.engineInteropId = null;
 
-	this.messages = [];
+	this.messagePromise = Promise.resolve();
 
 	this.reconnects = 0;
 
@@ -94,13 +94,20 @@ function AfxInterop(interop, args) {
 	};
 	
 	interop.onMessage = function(senderId, message){
-		self.onMessage(senderId, message).catch((e)=>{
+
+		const jMessage = JSON.parse(message);
+
+		var newPromise = self.messagePromise
+		.then(()=>self.messageHandlers[jMessage.id].apply(self, jMessage.args))
+		.catch((e)=>{
 			logError(e);
 			if(!(e && e.soft))
-				return self.reconnect();
+				return self.disconnect();
 		});
+
+		self.messagePromise = newPromise;
 	};
-	
+
 	interop.onError = function(senderId, message){
 		self.onError(senderId, message);
 	};
@@ -112,31 +119,6 @@ function AfxInterop(interop, args) {
 			"pipeName": "advancedfxInterop_drawing"
 		})
 	);
-}
-
-AfxInterop.prototype.onMessage = async function(senderId, message) {
-	this.messages.push([senderId,message]);
-
-	if(1 < this.messages.length)
-		return;
-
-	while(0 < this.messages.length)
-	{
-		var curMessage = this.messages[0];
-
-		const args = JSON.parse(curMessage[1]);
-
-		try {
-			await this.messageHandlers[args.id].apply(this, args.args);
-		}
-		catch(e) {
-			if(e && e.soft)
-				logError(e);
-			else
-				throw(e);
-		}
-		this.messages.shift();
-	}
 }
 
 AfxInterop.prototype.onError = function(senderId, message) {

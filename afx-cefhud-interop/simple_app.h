@@ -141,7 +141,7 @@ class SimpleApp : public CefApp,
     command_line->AppendSwitch("no-sandbox");
     command_line->AppendSwitch("disable-gpu-watchdog");
     command_line->AppendSwitch("disable-hang-monitor");
-    command_line->AppendSwitch("enable-prune-gpu-command-buffers");
+    //command_line->AppendSwitch("enable-prune-gpu-command-buffers");
 
     //command_line->AppendSwitch("disable-gpu");
     //command_line->AppendSwitch("disable-gpu-compositing");

@@ -1,6 +1,11 @@
 function toPromise(interopFn,...args) {
+
+	if(undefined == interopFn)
+		console.log(new Error("interopFn undefined"));
+
+	var self = this;
 	return new Promise((resolve,reject) => {
-		interopFn.apply(this,[resolve,reject,...args]);
+		interopFn.apply(self,[resolve,reject,...args]);
 	});
 }
 

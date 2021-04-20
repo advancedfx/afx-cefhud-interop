@@ -46,7 +46,7 @@ void SimpleHandler::WaitConnectionThreadHandler(void) {
 
   while (!m_WaitConnectionQuit) {
     try {
-      this->WaitForConnection(strPipeName.c_str(), 4096, 4096, TEN_MINUTES_IN_MILLISECONDS);
+      this->WaitForConnection(strPipeName.c_str(), INFINITE);
     } catch (...) {
     }
   }

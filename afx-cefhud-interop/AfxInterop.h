@@ -235,10 +235,7 @@ public:
   /**
    * @throws exception
    */
- void WaitForConnection(const char* pipeName,
-                        unsigned int outBufSize,
-                        unsigned int inBufSize,
-                        int timeOut);
+ void WaitForConnection(const char* pipeName, int timeOut);
 
 protected:
   virtual CPipeServerConnectionThread* OnNewConnection(HANDLE handle) = 0;

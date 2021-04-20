@@ -41,9 +41,9 @@ function AfxEngineInterop(interop, args) {
 	this.interop = interop;
 	this.args = args;
 	this.newConnection = true;
-	this.messages = [];
 	this.connected = false;
 	this.drawingConnected = false;
+	this.messagePromise = Promise.resolve();
 	
 	this.messageHandlers = {
 		"connect": async function(senderId) {
@@ -63,16 +63,22 @@ function AfxEngineInterop(interop, args) {
 		"drawingDisconnected": async function(senderId) {
 			console.log("drawingDisconnected: "+senderId);
 			this.drawingConnected = false;
-			await self.disconnect();
+			await this.disconnect();
 		}
 	};
-	
 	interop.onMessage = function(senderId, message){
-		self.onMessage(senderId, message).catch((e)=>{
+
+		const jMessage = JSON.parse(message);
+
+		var newPromise = self.messagePromise
+		.then(()=>self.messageHandlers[jMessage.id].apply(self, jMessage.args))
+		.catch((e)=>{
 			logError(e);
 			if(!(e && e.soft))
 				return self.disconnect();
 		});
+
+		self.messagePromise = newPromise;
 	};
 	
 	// GameEvents:
@@ -195,10 +201,6 @@ function AfxEngineInterop(interop, args) {
 		},
 		// recommended.
 		"onDone": async function(){
-			await toPromise(self.interop.sendMessage, self.args.drawingInteropId, JSON.stringify({
-				"id": "onDone",
-				"args": []
-			}));
 			await toPromise(self.interop.pump, self.pumpEvents);
 		},
 		// optional.
@@ -287,15 +289,8 @@ function AfxEngineInterop(interop, args) {
 			//TODO: schedule for drawing.
 			await toPromise(self.interop.pump, self.pumpEvents);
 		},*/
-		/*
 		// optional.
-		"onRenderViewHudBegin" : async function() {
-			//TODO: schedule for drawing.
-			await toPromise(self.interop.pump, self.pumpEvents);
-		},*/
-		// optional.
-		"onRenderViewHudEnd": async function(){
-
+		"onRenderViewHudBegin": async function(){
 			await toPromise(self.interop.sendMessage, self.args.drawingInteropId, JSON.stringify({
 				"id": "onHudEnd",
 				"args": [self.renderInfo.frameCount, self.pass]
@@ -305,6 +300,12 @@ function AfxEngineInterop(interop, args) {
 
 			await toPromise(self.interop.pump, self.pumpEvents);
 		},
+		/*
+		// optional.
+		"onRenderViewHudEnd" : async function() {
+			//TODO: schedule for drawing.
+			await toPromise(self.interop.pump, self.pumpEvents);
+		},*/		
 		// optional.
 		/*"onRenderViewEnd": aync function() {
 			//TODO: schedule for drawing.
@@ -327,35 +328,10 @@ function AfxEngineInterop(interop, args) {
 
 	this.pumpEvents = this.makePumpEvents();
 	
-	toPromise(self.interop.sendMessage, this.args.indexInteropId, JSON.stringify({
+	toPromise(this.interop.sendMessage, this.args.indexInteropId, JSON.stringify({
 		"id": "engineCreated",
 		"args": [self.interop.id]
 	}));
-}
-
-AfxEngineInterop.prototype.onMessage = async function(senderId, message) {
-	this.messages.push([senderId,message]);
-
-	if(1 < this.messages.length)
-		return;
-
-	while(0 < this.messages.length)
-	{
-		var curMessage = this.messages[0];
-
-		const args = JSON.parse(curMessage[1]);
-
-		try {
-			await this.messageHandlers[args.id].apply(this, args.args);
-		}
-		catch(e) {
-			if(e && e.soft)
-				logError(e);
-			else
-				throw(e);
-		}
-		this.messages.shift();
-	}
 }
 
 AfxEngineInterop.prototype.connect = async function() {
