@@ -149,10 +149,10 @@ AfxInterop.prototype.reconnect = async function(senderId, message) {
 //window.open("http://google.com");
 
 document.addEventListener('DOMContentLoaded', function(){
-	window.afxInterop.init(function(interop, message){
-		console.log(message);
-		new AfxInterop(interop, JSON.parse(message));
-	});
+
+	console.log(window.afxInterop.args);
+	new AfxInterop(window.afxInterop, JSON.parse(window.afxInterop.args))
+	
 }, false);
 
 </script>

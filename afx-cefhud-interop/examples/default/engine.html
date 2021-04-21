@@ -416,10 +416,10 @@ AfxEngineInterop.prototype.disconnect = async function() {
 ////////////////////////////////////////////////////////////////////////////////
 
 document.addEventListener('DOMContentLoaded', function(){
-	window.afxInterop.init(function(interop, message){
-		console.log("new AfxEngineInterop: "+message); 
-		new AfxEngineInterop(interop, JSON.parse(message));
-	});
+
+	console.log(window.afxInterop.args);
+	new AfxEngineInterop(window.afxInterop, JSON.parse(window.afxInterop.args))
+	
 }, false);
 
 </script>

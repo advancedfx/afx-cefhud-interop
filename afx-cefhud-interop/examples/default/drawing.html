@@ -689,29 +689,31 @@ function AfxDrawingInterop(interop,args) {
 					{
 						logError(error);
 					}
-					else throw error;					
+					else throw error;
 				}
 
 				await toPromise(self.interop.pumpEnd);
 			}
 
 			await new Promise((resolve,reject)=>{
-				var interval = null;
 				self.renderQueue.push(function(cefTextureHandle){
 					doRender(cefTextureHandle, frameCount, pass, self.width, self.height, self.renderInfo).then(()=>{
-						if(interval) clearInterval(interval);
 						resolve();
 					}).catch((e)=>{
 						reject(e);
 					});
 				});
+				
+				async function render() {
+					await toPromise(self.interop.sendExternalBeginFrame);
+					if(self.firstRender) {
+						// This is utterly neccessary to unstuck the CEF rendering queue initially:
+						self.firstRender = false;
+						for(var i=0; i < 25; ++i) await toPromise(self.interop.sendExternalBeginFrame);
+					}
+				}
 
-				toPromise(self.interop.sendExternalBeginFrame).then(()=>{});
-
-				interval = setInterval(function(){
-					console.log("DOOR STUCK, attempting to un-stuck ...")
-					toPromise(self.interop.sendExternalBeginFrame).then(()=>{});
-				}, 250);
+				render().then(()=>{});
 			});
 		}
 	};
@@ -1164,10 +1166,10 @@ AfxDrawingInterop.prototype.removeCefTexture = function(cefTextureHandle) {
 ////////////////////////////////////////////////////////////////////////////////
 
 document.addEventListener('DOMContentLoaded', function(){
-	window.afxInterop.init(function(interop,message){
-		console.log("new AfxDrawingInterop: "+message); 
-		new AfxDrawingInterop(interop, JSON.parse(message));
-	});	
+
+	console.log(window.afxInterop.args);
+	new AfxDrawingInterop(window.afxInterop, JSON.parse(window.afxInterop.args))
+
 }, false);
 
 </script>

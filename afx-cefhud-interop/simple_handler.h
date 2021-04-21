@@ -23,8 +23,6 @@
 #include <condition_variable>
 #include <thread>
 
-extern bool AfxWaitForGPU();
-
 class SimpleHandler : public CefClient,
                       public CefDisplayHandler,
                       public CefRenderHandler,
@@ -65,7 +63,7 @@ class SimpleHandler : public CefClient,
                        int height) OVERRIDE {
 /*
     if (PET_VIEW == type) {
-      CefPostTask(TID_IO, base::Bind(&SimpleHandler::DoPainted, this,
+      CefPostTask(TID_FILE_USER_BLOCKING, base::Bind(&SimpleHandler::DoPainted, this,
                                    browser->GetIdentifier(), m_ShareHandle));
     }*/
   }
@@ -415,11 +413,11 @@ class SimpleHandler : public CefClient,
               m_Width = ReadInt32();
               m_Height = ReadInt32();
 
-              CefPostTask(TID_IO, base::Bind(&SimpleHandler::DoDrawingResized,
+              CefPostTask(TID_UI, base::Bind(&SimpleHandler::DoDrawingResized,
                                              m_Host, m_Browser));
             } break;
             case advancedfx::interop::HostMessage::RenderFrame: {
-              CefPostTask(TID_IO, base::Bind(&SimpleHandler::DoRenderFrame,
+              CefPostTask(TID_UI, base::Bind(&SimpleHandler::DoRenderFrame,
                                              m_Host, m_Browser));
             } break;
             case advancedfx::interop::HostMessage::CreateDrawing: {
@@ -429,7 +427,8 @@ class SimpleHandler : public CefClient,
               std::string argStr;
               ReadStringUTF8(argStr);
 
-              CefPostTask(TID_IO, base::Bind(&SimpleHandler::DoCreateDrawing,
+              CefPostTask(TID_PROCESS_LAUNCHER,
+                          base::Bind(&SimpleHandler::DoCreateDrawing,
                                              m_Host, argStr, argUrl));
             } break;
             case advancedfx::interop::HostMessage::CreateEngine: {
@@ -439,7 +438,8 @@ class SimpleHandler : public CefClient,
               std::string argStr;
               ReadStringUTF8(argStr);
 
-              CefPostTask(TID_IO, base::Bind(&SimpleHandler::DoCreateEngine,
+              CefPostTask(TID_PROCESS_LAUNCHER,
+                          base::Bind(&SimpleHandler::DoCreateEngine,
                                              m_Host, argStr, argUrl));
             } break;
             case advancedfx::interop::HostMessage::Message: {
@@ -447,9 +447,6 @@ class SimpleHandler : public CefClient,
               std::string argMessage;
               ReadStringUTF8(argMessage);
               m_Host->Message(browserId, targetId, argMessage);
-            } break;
-            case advancedfx::interop::HostMessage::WaitForGpu: {
-              CefPostTask(TID_UI, base::Bind(&SimpleHandler::WaitForGpu, m_Host, browserId));
             } break;
             case advancedfx::interop::HostMessage::GpuOfferShareHandle: {
               HANDLE shareHandle= ReadHandle();
@@ -520,30 +517,6 @@ class SimpleHandler : public CefClient,
                            const CefString& title);
 
   void DoPainted(int browserId, void* share_handle);
-
-    void WaitForGpu(int browserId) {
-      bool bOk = AfxWaitForGPU();
-      CefPostTask(TID_IO, base::Bind(&SimpleHandler::WaitedForGpu, this, browserId, bOk));
-    }
-
-    void WaitedForGpu(int browserId,bool bOk) {
-      std::unique_lock<std::mutex> lock(m_BrowserMutex);
-      auto it = m_Browsers.find(browserId);
-      if (it == m_Browsers.end())
-      {
-        MessageBoxA(0, "CHostPipeServerConnectionThread::WaitedForGpu failed: no target browser.", "ERROR", MB_OK|MB_ICONERROR);
-        return;
-      }
-
-      if (CHostPipeServerConnectionThread* connection = it->second.Connection)
-      {
-        it->second.Connection->WaitedForGpu(bOk);
-      }
-      else {
-        MessageBoxA(0, "CHostPipeServerConnectionThread::WaitedForGpu failed: no target connection.", "ERROR", MB_OK|MB_ICONERROR);
-        return;
-      }
-    }  
 
 // Include the default reference counting implementation.
   IMPLEMENT_REFCOUNTING(SimpleHandler);

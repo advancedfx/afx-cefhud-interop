@@ -1,5 +1,31 @@
 #pragma once
 
+// TODO:
+// d3d9CreateVertexBuffer
+// d3d9CreateIndexbuffer
+// d3d9UpdatTexture
+// d3d9SetIndices
+// d3d9SetStreamSource
+// d3d9SetStreamSourceFreq
+// d3d9SetVertexShaderConstantB
+// d3d9SetVertexShaderConstantF
+// d3d9SetVertexShaderConstantI
+// d3d9SetPixelShaderConstantB
+// d3d9SetPixelShaderConstantF
+// d3d9SetPixelShaderConstantI
+// d3d9DrawPrimitive
+// d3d9DrawIndexedPrimitive
+// CAfxD3d9IndexBuffer functions
+// CAfxD3d9VertexBuffer functions
+// CAfxD3d9Texture functions (updates)
+// calcs
+// addCalcHandle
+// addCalcVecAng
+// addCalcCam
+// addCalcFov
+// addCalcBool
+// addCalcInt
+
 #include <include/cef_base.h>
 #include <include/cef_v8.h>
 
@@ -282,21 +308,13 @@ enum class HostMessage : int {
   CreateDrawing = 3,
   CreateEngine = 4,
   Message = 5,
-  WaitForGpu = 6,
   GpuOfferShareHandle = 7,
   GpuRelaseShareHandle = 8
 };
 
-
 class CInterop : public CefBaseRefCounted {
   public:
     virtual void CloseInterop() = 0;
-
-    // Must be called on TID_RENDERER.
-    virtual bool OnProcessMessageReceived(
-        CefRefPtr<CefBrowser> browser,
-        CefProcessId source_process,
-        CefRefPtr<CefProcessMessage> message) = 0;
 
   protected:
     CThreadedQueue m_InteropQueue;

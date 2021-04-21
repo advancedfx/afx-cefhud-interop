@@ -189,7 +189,8 @@ void SimpleHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
 
   if (PET_VIEW == type) {
 
-    CefPostTask(TID_IO, base::Bind(&SimpleHandler::DoPainted, this,
+    CefPostTask(TID_FILE_USER_BLOCKING,
+                base::Bind(&SimpleHandler::DoPainted, this,
                                    browser->GetIdentifier(), share_handle));
   }
 }
