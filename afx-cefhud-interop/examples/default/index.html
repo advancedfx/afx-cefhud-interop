@@ -57,7 +57,7 @@ function AfxInterop(interop, args) {
 
 			this.drawingInteropId = drawingInteropId;
 			
-			await toPromise(this.interop.createEngineInterop,
+			await toPromise(self.interop, "createEngineInterop",
 				new URL("engine.html", window.location).toString(),
 				JSON.stringify({
 					"indexInteropId": this.interop.id,
@@ -112,7 +112,7 @@ function AfxInterop(interop, args) {
 		self.onError(senderId, message);
 	};
 	
-	toPromise(this.interop.createDrawingInterop,
+	toPromise(this.interop, "createDrawingInterop",
 		new URL("drawing.html", window.location).toString(),
 		JSON.stringify({
 			"indexInteropId": this.interop.id,
@@ -138,7 +138,7 @@ AfxInterop.prototype.reconnect = async function(senderId, message) {
 	++this.reconnects;
 	this.elReconnects.innerText = this.reconnects;
 	
-	await toPromise(this.interop.sendMessage, this.engineInteropId, JSON.stringify({
+	await toPromise(this.interop, "sendMessage", this.engineInteropId, JSON.stringify({
 		"id": "connect",
 		"args": [this.interop.id]
 	}));
@@ -148,7 +148,7 @@ AfxInterop.prototype.reconnect = async function(senderId, message) {
 
 //window.open("http://google.com");
 
-document.addEventListener('DOMContentLoaded', function(){
+window.addEventListener('load', function(){
 
 	console.log(window.afxInterop.args);
 	new AfxInterop(window.afxInterop, JSON.parse(window.afxInterop.args))

@@ -1,11 +1,18 @@
-function toPromise(interopFn,...args) {
+function toPromise(object,fn,...args) {
 
-	if(undefined == interopFn)
-		console.log(new Error("interopFn undefined"));
+	if(undefined === object)
+		console.log(new Error("object undefined"));
+	
+	if(object === null)
+		return new Promise((resolve,reject) => {
+			fn(resolve,reject,...args);
+		});
+		
+	if(undefined === object[fn])
+		console.log(new Error("object[\""+fn+"\"] undefined"));
 
-	var self = this;
 	return new Promise((resolve,reject) => {
-		interopFn.apply(self,[resolve,reject,...args]);
+		object[fn].apply(object,[resolve,reject,...args]);
 	});
 }
 

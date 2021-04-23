@@ -44,6 +44,7 @@ const char* g_szOutOfFlow = "Out of flow.";
 const char* g_szConnectionError = "Connection error.";
 const char* g_szInvalidArguments = "Invalid arguments.";
 const char* g_szMemoryAllocationFailed = "Memory allocation failed.";
+const char* g_szInvalidThis = "Invalid this object.";
 
 class CVersion {
  public:
@@ -224,7 +225,8 @@ enum class DrawingReply : unsigned int {
   DrawPrimitiveUP = 44
 };
 
-enum class AfxUserDataType : int {
+enum class AfxObjectType : int {
+  AfxObject,
   AfxHandle,
   AfxData,
   AfxD3d9VertexDeclaration,
@@ -233,8 +235,10 @@ enum class AfxUserDataType : int {
   AfxD3d9Texture,
   AfxD3d9PixelShader,
   AfxD3d9VertexShader,
-  AfxD3d9Viewport
-  //AfxPromise
+  AfxD3d9Viewport,
+  DrawingInteropImpl,
+  EngineInteropImpl,
+  InteropImpl
 };
 
 struct Matrix4x4_s {
@@ -1355,72 +1359,101 @@ class CAfxCallback : public CefBaseRefCounted {
 };
 
 
-class CAfxUserData : public CefBaseRefCounted {
+class CAfxObject : public CefBaseRefCounted {
  public:
-  CAfxUserData(AfxUserDataType userDataType) : m_UserDataType(userDataType) {}
+  AfxExecuteMap_t m_ExecuteMap;
+  AfxSetMap_t m_SetMap;
+  AfxGetMap_t m_GetMap;
 
-  AfxUserDataType GetUserDataType() const { return m_UserDataType; }
+  CAfxObject(AfxObjectType obectType) : m_ObjectType(obectType) {}
+
+  AfxObjectType GetObjectType() const { return m_ObjectType; }
 
   UINT64 GetIndex() const { return (UINT64)this; }
 
  private:
-  AfxUserDataType m_UserDataType;
+  AfxObjectType m_ObjectType;
 };
 
-template <AfxUserDataType type, class T>
-T* GetAfxUserData(CefRefPtr<CefV8Value> value) {
+CefRefPtr<CAfxObject> GetAfxObjectBase(CefRefPtr<CefV8Value> value) {
   if (nullptr == value || !value->IsObject())
     return nullptr;
   CefRefPtr<CefBaseRefCounted> user_data = value->GetUserData();
   if (nullptr == user_data)
     return nullptr;
-  if (type != static_cast<CAfxUserData*>(user_data.get())->GetUserDataType())
-    return nullptr;
-  return static_cast<T*>(static_cast<CAfxUserData*>(user_data.get()));
+  return static_cast<CAfxObject*>(user_data.get());
 }
 
-class CAfxObject : public CefV8Handler, public CefV8Accessor {
+template <AfxObjectType type, class T>
+CefRefPtr<T> GetAfxObject(CefRefPtr<CefV8Value> value) {
+  if (nullptr == value || !value->IsObject())
+    return nullptr;
+  CefRefPtr<CefBaseRefCounted> user_data = value->GetUserData();
+  if (nullptr == user_data)
+    return nullptr;
+  if (type != static_cast<CAfxObject*>(user_data.get())->GetObjectType())
+    return nullptr;
+  return static_cast<T*>(static_cast<CAfxObject*>(user_data.get()));
+}
+
+class CAfxObjectHandler : public CefV8Handler, public CefV8Accessor {
  public:
      
 
-  static CefRefPtr<CefV8Value> Create(CefRefPtr<CAfxObject>* out) {
-    auto val = new CAfxObject();
-    auto self = CefV8Value::CreateObject(val, nullptr);
+  static CefRefPtr<CefV8Value> Create(CefRefPtr<CAfxObject> self,
+                                      CefRefPtr<CAfxObjectHandler>* out) {
+    auto val = new CAfxObjectHandler();
+    auto obj = CefV8Value::CreateObject(val, nullptr);
+    obj->SetUserData(self);
     
     if (out)
       *out = val;
 
-    return self;
+    return obj;
   }
 
-  void AddFunction(CefRefPtr<CefV8Value> self,
+  void AddFunction(CefRefPtr<CefV8Value> object,
                    const char* name,
                    AfxExecute_t execute) {
-    m_ExecuteMap.emplace(name, execute);
+
+    auto self = GetAfxObjectBase(object);
+    if (self == nullptr)
+      return;
+
+    self->m_ExecuteMap.emplace(name, execute);
     CefRefPtr<CefV8Value> func = CefV8Value::CreateFunction(name, this);
-    self->SetValue(name, func, V8_PROPERTY_ATTRIBUTE_NONE);
-    m_GetMap.emplace(
+    object->SetValue(name, func, V8_PROPERTY_ATTRIBUTE_NONE);
+    self->m_GetMap.emplace(
         name, [func](const CefString& name, const CefRefPtr<CefV8Value> object,
                      CefRefPtr<CefV8Value>& retval,
                      CefString& exception) { return func; });
   }
 
-  void AddGetter(CefRefPtr<CefV8Value> self, const char* name, AfxGet_t get) {
-    m_GetMap.emplace(name, get);
-    self->SetValue(name, V8_ACCESS_CONTROL_DEFAULT, V8_PROPERTY_ATTRIBUTE_NONE);
+  void AddGetter(CefRefPtr<CefV8Value> object, const char* name, AfxGet_t get) {
+    auto self = GetAfxObjectBase(object);
+    if (self == nullptr)
+      return;
+
+    self->m_GetMap.emplace(name, get);
+    object->SetValue(name, V8_ACCESS_CONTROL_DEFAULT, V8_PROPERTY_ATTRIBUTE_NONE);
   }
 
-  void AddSetter(CefRefPtr<CefV8Value> self, const char* name, AfxSet_t set) {
-    m_SetMap.emplace(name, set);
-    self->SetValue(name, V8_ACCESS_CONTROL_DEFAULT, V8_PROPERTY_ATTRIBUTE_NONE);
+  void AddSetter(CefRefPtr<CefV8Value> object, const char* name, AfxSet_t set) {
+    auto self = GetAfxObjectBase(object);
+    if (self == nullptr)
+      return;
+
+    self->m_SetMap.emplace(name, set);
+    object->SetValue(name, V8_ACCESS_CONTROL_DEFAULT, V8_PROPERTY_ATTRIBUTE_NONE);
   }
 
-  CefRefPtr<CAfxCallback> AddCallback(CefRefPtr<CefV8Value> self,
+  CefRefPtr<CAfxCallback> AddCallback(CefRefPtr<CefV8Value> object,
                                       const char* name) {
     {
       CefRefPtr<CAfxCallback> callback = new CAfxCallback();
 
-      m_SetMap.emplace(
+      AddSetter(
+        object,
           name,
           [callback](const CefString& name, const CefRefPtr<CefV8Value> object,
                      const CefRefPtr<CefV8Value> value, CefString& exception) {
@@ -1438,7 +1471,8 @@ class CAfxObject : public CefV8Handler, public CefV8Accessor {
             return true;
           });
 
-      m_GetMap.emplace(
+      AddGetter(
+        object,
           name,
           [callback](const CefString& name, const CefRefPtr<CefV8Value> object,
                      CefRefPtr<CefV8Value>& retval, CefString& exception) {
@@ -1451,7 +1485,7 @@ class CAfxObject : public CefV8Handler, public CefV8Accessor {
             return true;
           });
 
-      self->SetValue(name, V8_ACCESS_CONTROL_DEFAULT,
+      object->SetValue(name, V8_ACCESS_CONTROL_DEFAULT,
                      V8_PROPERTY_ATTRIBUTE_NONE);
 
       return callback;
@@ -1464,9 +1498,15 @@ class CAfxObject : public CefV8Handler, public CefV8Accessor {
                        CefRefPtr<CefV8Value>& retval,
                        CefString& exception) OVERRIDE {
 
-    auto it = m_ExecuteMap.find(name);
+    auto self = GetAfxObjectBase(object);
+    if (self == nullptr) {
+      exception = g_szInvalidThis;
+      return true;
+    }
 
-    if (it != m_ExecuteMap.end())
+    auto it = self->m_ExecuteMap.find(name);
+
+    if (it != self->m_ExecuteMap.end())
       return it->second(name, object, arguments, retval, exception);
 
     return false;
@@ -1477,9 +1517,15 @@ class CAfxObject : public CefV8Handler, public CefV8Accessor {
                    CefRefPtr<CefV8Value>& retval,
                    CefString& exception) OVERRIDE {
 
-      auto it = m_GetMap.find(name);
+    auto self = GetAfxObjectBase(object);
+    if (self == nullptr) {
+      exception = g_szInvalidThis;
+      return true;
+    }
 
-    if (it != m_GetMap.end())
+    auto it = self->m_GetMap.find(name);
+
+    if (it != self->m_GetMap.end())
       return it->second(name, object, retval, exception);
 
     return false;
@@ -1490,9 +1536,15 @@ class CAfxObject : public CefV8Handler, public CefV8Accessor {
                    const CefRefPtr<CefV8Value> value,
                    CefString& exception) OVERRIDE {
 
-    auto it = m_SetMap.find(name);
+    auto self = GetAfxObjectBase(object);
+    if (self == nullptr) {
+      exception = g_szInvalidThis;
+      return true;
+    }
 
-    if (it != m_SetMap.end())
+    auto it = self->m_SetMap.find(name);
+
+    if (it != self->m_SetMap.end())
       return it->second(name, object, value, exception);
 
     return false;
@@ -1500,62 +1552,79 @@ class CAfxObject : public CefV8Handler, public CefV8Accessor {
 
 
    private:
-  AfxExecuteMap_t m_ExecuteMap;
-  AfxSetMap_t m_SetMap;
-  AfxGetMap_t m_GetMap;
 
-    IMPLEMENT_REFCOUNTING(CAfxObject);
+  IMPLEMENT_REFCOUNTING(CAfxObjectHandler);
 };
 
 
-class CAfxHandle : public CAfxUserData {
-  IMPLEMENT_REFCOUNTING(CAfxHandle);
-
+class CAfxHandle : public CAfxObject {
   public:
       static HANDLE ToHandle(unsigned int lo, unsigned int hi) {
     return (void*)((unsigned __int64)lo | ((unsigned __int64)hi << 32));
   }
 
-  static CefRefPtr<CefV8Value> Create(HANDLE handle, CefRefPtr<CAfxHandle>* out = nullptr) {
-    CefRefPtr<CAfxHandle> self = new CAfxHandle(handle);
-    CefRefPtr<CAfxObject> afxObject;
-    auto obj = CAfxObject::Create(&afxObject);
+  static CefRefPtr<CefV8Value> Create(HANDLE handle,
+                                      CefRefPtr<CAfxHandle>* out = nullptr) {
+    CefRefPtr<CAfxObjectHandler> afxObject;
+    auto obj = CAfxObjectHandler::Create(new CAfxHandle(handle), &afxObject);
     afxObject->AddGetter(
         obj, "lo",
-        [self](const CefString& name, const CefRefPtr<CefV8Value> object,
-                    CefRefPtr<CefV8Value>& retval, CefString& exception) {
+        [](const CefString& name, const CefRefPtr<CefV8Value> object,
+           CefRefPtr<CefV8Value>& retval, CefString& exception) {
+          auto self =
+              GetAfxObject<AfxObjectType::AfxHandle, CAfxHandle>(
+                  object);
+          if (self == nullptr) {
+            exception = g_szInvalidThis;
+            return true;
+          }
+
           retval = CefV8Value::CreateUInt(self->GetLo());
-              return true;
+          return true;
         });
     afxObject->AddGetter(
         obj, "hi",
-        [self](const CefString& name, const CefRefPtr<CefV8Value> object,
-                    CefRefPtr<CefV8Value>& retval, CefString& exception) {
+        [](const CefString& name, const CefRefPtr<CefV8Value> object,
+               CefRefPtr<CefV8Value>& retval, CefString& exception) {
+          auto self =
+              GetAfxObject<AfxObjectType::AfxHandle, CAfxHandle>(object);
+          if (self == nullptr) {
+            exception = g_szInvalidThis;
+            return true;
+          }
+
           retval = CefV8Value::CreateUInt(self->GetHi());
           return true;
         });
     afxObject->AddGetter(
         obj, "invalid",
-        [self](const CefString& name, const CefRefPtr<CefV8Value> object,
-                    CefRefPtr<CefV8Value>& retval, CefString& exception) {
+        [](const CefString& name, const CefRefPtr<CefV8Value> object,
+               CefRefPtr<CefV8Value>& retval, CefString& exception) {
+          auto self =
+              GetAfxObject<AfxObjectType::AfxHandle, CAfxHandle>(object);
+          if (self == nullptr) {
+            exception = g_szInvalidThis;
+            return true;
+          }
+
           retval =
-              CefV8Value::CreateBool(self->GetHandle() ==
-                                          INVALID_HANDLE_VALUE);
+              CefV8Value::CreateBool(self->GetHandle() == INVALID_HANDLE_VALUE);
           return true;
         });
 
     if (out)
-      *out = self;
+      *out = GetAfxObject<AfxObjectType::AfxHandle,  CAfxHandle>(obj);
 
-    obj->SetUserData(self);
     return obj;
   }
 
-  CAfxHandle() : CAfxUserData(AfxUserDataType::AfxHandle) ,m_Handle(INVALID_HANDLE_VALUE) {     
+  CAfxHandle()
+      : CAfxObject(AfxObjectType::AfxHandle),
+        m_Handle(INVALID_HANDLE_VALUE) {     
   }
 
   CAfxHandle(HANDLE value)
-      : CAfxUserData(AfxUserDataType::AfxHandle), m_Handle(value) {}
+      : CAfxObject(AfxObjectType::AfxHandle), m_Handle(value) {}
 
   HANDLE GetHandle() { return m_Handle;
   }
@@ -1574,63 +1643,27 @@ class CAfxHandle : public CAfxUserData {
 
   private:
       HANDLE m_Handle;
+
+  IMPLEMENT_REFCOUNTING(CAfxHandle);
 };
 
- class CAfxReleaseCallback : public CefV8ArrayBufferReleaseCallback {
- public:
-  static CefRefPtr<CefV8ArrayBufferReleaseCallback> GetOrCreateInstance() {
-    if (nullptr == m_Instance)
-      m_Instance = new CAfxReleaseCallback();
-
-    return m_Instance;
-  }
-
-  virtual void ReleaseBuffer(void* buffer) override { free(buffer); }
-
- private:
-  static CefRefPtr<CAfxReleaseCallback> m_Instance;
-
-  CAfxReleaseCallback() {
-    if (nullptr != m_Instance)
-      throw "Singelton pattern void";
-
-    m_Instance = this;
-  }
-
-  ~CAfxReleaseCallback() { m_Instance = nullptr; }
-
-  IMPLEMENT_REFCOUNTING(CAfxReleaseCallback);
- };
-
- CefRefPtr<CAfxReleaseCallback> CAfxReleaseCallback::m_Instance;
-
- class CAfxData : public CAfxUserData {
+ class CAfxData : public CAfxObject,
+                  public CefV8ArrayBufferReleaseCallback {
   public:
   static CefRefPtr<CefV8Value> Create(unsigned int size,
                                       void* data,
                                       CefRefPtr<CAfxData> *out = nullptr) {
-     CefRefPtr<CefV8Value> buffer = CefV8Value::CreateArrayBuffer(
-        data, size, CAfxReleaseCallback::GetOrCreateInstance());
+    CefRefPtr<CAfxObjectHandler> afxObject;
 
-     CefRefPtr<CAfxData> self = new CAfxData(size, data, buffer);
+    CefRefPtr<CAfxData> dataObj = new CAfxData(size, data);
 
-    CefRefPtr<CAfxObject> afxObject;
-
-    auto obj = CAfxObject::Create(&afxObject);
-    afxObject->AddGetter(
-        obj,
-        "buffer",
-        [buffer](const CefString& name, const CefRefPtr<CefV8Value> object,
-                  CefRefPtr<CefV8Value>& retval, CefString& exception) {
-          retval = buffer;
-          return true;
-        });
+    auto buffer = CefV8Value::CreateArrayBuffer(
+        data, size, dataObj);
 
     if (out)
-      *out = self;
+      *out = dataObj;
 
-    obj->SetUserData(static_cast<CAfxUserData *>(self.get()));
-    return obj;
+    return buffer;
   }
 
   size_t GetSize() { return m_Size; }
@@ -1639,16 +1672,16 @@ class CAfxHandle : public CAfxUserData {
 
 
   private:
-   CAfxData(unsigned int size, void* data, CefRefPtr<CefV8Value> buffer)
-       : CAfxUserData(AfxUserDataType::AfxData),
+   CAfxData(unsigned int size, void* data)
+       : CAfxObject(AfxObjectType::AfxData),
         m_Size(size),
-        m_Data(data),
-  m_Buffer(buffer) {
+        m_Data(data) {
   }
 
   size_t m_Size;
   void* m_Data;
-  CefRefPtr<CefV8Value> m_Buffer;
+
+  virtual void ReleaseBuffer(void* buffer) override { free(buffer); }
 
   IMPLEMENT_REFCOUNTING(CAfxData);
 };
@@ -2048,123 +2081,8 @@ class CAfxInterop {
   }
 };
 
-/*
- class CAfxPromise : public CefBaseRefCounted {
-  IMPLEMENT_REFCOUNTING(CAfxPromise);
- public:
-  CAfxPromise(CefRefPtr<CefV8Value> fnResolve,
-              CefRefPtr<CefV8Value> fnReject)
-      : m_FnResolve(fnResolve), m_FnReject(fnReject) {}
-
-  unsigned int GetLo() {
-    return (unsigned int)((unsigned __int64)this & 0xffffffff);
-  }
-
-  unsigned int GetHi() {
-    return (unsigned int)(((unsigned __int64)this >> 32) & 0xffffffff);
-  }
-
-  CefRefPtr<CefV8Value> m_FnResolve;
-  CefRefPtr<CefV8Value> m_FnReject;
-
-  void DoResolve(const CefV8ValueList& arguments) {
-    // TODO: Handle exceptions and promises being returned.
-    if (nullptr != m_FnResolve && m_FnResolve->IsFunction())
-      m_FnResolve->ExecuteFunctionWithContext(CefV8Context::GetCurrentContext(), NULL, arguments);
-  }
-
-  void DoReject(const CefV8ValueList& arguments) {
-    // TODO: Handle exceptions and promises being returned.
-    if (nullptr != m_FnReject && m_FnReject->IsFunction())
-      m_FnReject->ExecuteFunctionWithContext(CefV8Context::GetCurrentContext(), NULL, arguments);
-  }
-};
-
-class CAfxPromises : public CefBaseRefCounted {
-  IMPLEMENT_REFCOUNTING(CAfxPromises);
- public:
-  void FreeAll() {
-    while (!m_Promises.empty()) {
-      auto it = m_Promises.begin();
-      (*it)->Release();
-      m_Promises.erase(it);
-    }
-  }
-
-  CefRefPtr<CefV8Value> Create(CefRefPtr<CefV8Value> fnResolve,
-              CefRefPtr<CefV8Value> fnReject, CefRefPtr<CefFrame> frame, CefRefPtr<CAfxPromise> * out = nullptr) {
-    CefRefPtr<CAfxPromise> val =
-        new CAfxPromise(fnResolve, fnReject);
-    val->AddRef();
-    m_Promises.insert(val);
-
-    CefRefPtr<CAfxObject> afxObject = new CAfxObject();
-    afxObject->AddFunction(
-        "cancel", [val,frame](
-                      const CefString& name, CefRefPtr<CefV8Value> object,
-                      const CefV8ValueList& arguments,
-                      CefRefPtr<CefV8Value>& retval, CefString& exception) {
-
-
-          auto message = CefProcessMessage::Create("afx-cancel");
-          auto args = message->GetArgumentList();
-          args->SetSize(2);
-          args->SetInt(0, (int)val->GetLo());
-          args->SetInt(1, (int)val->GetHi());
-
-          frame->SendProcessMessage(PID_BROWSER, message);
-          return true;          
-
-          return true;
-        });
-
-
-    if (out)
-      *out = val;
-
-    afxObject->SetUserData(
-        new CAfxUserData(AfxUserDataType::AfxPromise, val));
-    return afxObject->GetObj();
-  }
-
-  void Resolve(unsigned int lo, unsigned int hi, const CefV8ValueList & arguments) {
-    CAfxPromise* val =
-        (CAfxPromise*)((unsigned __int64)lo | ((unsigned __int64)hi << 32));
-
-    auto it = m_Promises.find(val);
-    if (it != m_Promises.end()) {
-      m_Promises.erase(it);
-      val->DoResolve(arguments);
-      val->Release();
-    }
-  }
-
-  void Reject(unsigned int lo,
-                     unsigned int hi,
-              const CefV8ValueList& arguments) {
-    CAfxPromise* val =
-        (CAfxPromise*)((unsigned __int64)lo | ((unsigned __int64)hi << 32));
-
-    auto it = m_Promises.find(val);
-    if (it != m_Promises.end()) {
-      m_Promises.erase(it);
-      val->DoReject(arguments);
-      val->Release();
-    }
-  }
-
-  protected:
-    ~CAfxPromises() {
-        FreeAll();
-    }
-
- private:
-
-  std::set<CAfxPromise*> m_Promises;
-};
-*/
-
-class CDrawingInteropImpl : public CInterop,
+class CDrawingInteropImpl : public CAfxObject,
+                            public CInterop,
                             public CAfxInterop,
                             public CPipeServer,
                             public CPipeClient {
@@ -2208,8 +2126,8 @@ class CDrawingInteropImpl : public CInterop,
       return CefV8Value::CreateNull();
     }
 
-    CefRefPtr<CAfxObject> afxObject;
-    auto obj = CAfxObject::Create(&afxObject);
+    CefRefPtr<CAfxObjectHandler> afxObject;
+    auto obj = CAfxObjectHandler::Create(self, &afxObject);
 
     //
 
@@ -2218,9 +2136,18 @@ class CDrawingInteropImpl : public CInterop,
     afxObject->AddGetter(
         obj,
         "id",
-        [browser](const CefString& name, const CefRefPtr<CefV8Value> object,
+        [](const CefString& name, const CefRefPtr<CefV8Value> object,
                   CefRefPtr<CefV8Value>& retval, CefString& exception) {
-          retval = CefV8Value::CreateInt(browser->GetIdentifier());
+
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                       CDrawingInteropImpl>(
+                  object);
+          if (self == nullptr) {
+            exception = g_szInvalidThis;
+            return true;
+          }
+
+          retval = CefV8Value::CreateInt(self->m_BrowserId);
           return true;
         });
 
@@ -2236,9 +2163,16 @@ class CDrawingInteropImpl : public CInterop,
 afxObject->AddFunction(
         obj,
         "sendMessage",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+
           if (4 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction() && arguments[2]->IsInt() &&
               arguments[3]->IsString()) {
@@ -2253,8 +2187,7 @@ afxObject->AddFunction(
                     self->Flush();
 
                     CefPostTask(
-                        TID_RENDERER,
-                        new CAfxTask([self, fn_resolve]() {
+                        TID_RENDERER, new CAfxTask([self, fn_resolve]() {
                           self->m_Context->Enter();
                           fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
                           self->m_Context->Exit();
@@ -2292,12 +2225,19 @@ afxObject->AddFunction(
  
     afxObject->AddFunction(
         obj, "setPipeName",
-        [self](const CefString& name,
+        [](const CefString& name,
                                               CefRefPtr<CefV8Value> object,
                                               const CefV8ValueList& arguments,
                                               CefRefPtr<CefV8Value>& retval,
                                               CefString& exceptionoverride) {
-      if (1 <= arguments.size() && arguments[0]->IsString()) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+
+        if (1 <= arguments.size() && arguments[0]->IsString()) {
         self->m_InteropQueue.Queue(
             [self, pipeName = arguments[0]->GetStringValue().ToString()]() {
               self->SetPipeName(pipeName.c_str());
@@ -2315,26 +2255,31 @@ afxObject->AddFunction(
 
     afxObject->AddFunction(
         obj, "connect",
-        [self](const CefString& name,
+        [](const CefString& name,
                                              CefRefPtr<CefV8Value> object,
                                              const CefV8ValueList& arguments,
                                              CefRefPtr<CefV8Value>& retval,
                                              CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+
       if (2 <= arguments.size() && arguments[0]->IsFunction() &&
           arguments[1]->IsFunction()) {
         self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
                                  fn_reject = arguments[1]]() {
           if (self->Connection()) {
 
-            CefPostTask(TID_RENDERER,
-                        new CAfxTask([self, fn_resolve]() {
+            CefPostTask(TID_RENDERER, new CAfxTask([self, fn_resolve]() {
                           self->m_Context->Enter();
                           fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
                           self->m_Context->Exit();
                         }));
           } else {
-            CefPostTask(TID_RENDERER,
-                        new CAfxTask([self, fn_reject]() {
+            CefPostTask(TID_RENDERER, new CAfxTask([self, fn_reject]() {
                           self->m_Context->Enter();
                           fn_reject->ExecuteFunction(NULL, CefV8ValueList());
                           self->m_Context->Exit();
@@ -2349,9 +2294,16 @@ afxObject->AddFunction(
 
     afxObject->AddFunction(
         obj, "close",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+
           if (2 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction()) {
             self->m_InteropQueue.Queue([self, fn_resolve = arguments[0]]() {
@@ -2370,11 +2322,18 @@ afxObject->AddFunction(
         });
     afxObject->AddFunction(
         obj, "pumpBegin",
-        [self](const CefString& name,
+        [](const CefString& name,
                                                CefRefPtr<CefV8Value> object,
                                                const CefV8ValueList& arguments,
                                                CefRefPtr<CefV8Value>& retval,
-                                               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+
       if (4 <= arguments.size() && arguments[0]->IsFunction() &&
           arguments[1]->IsFunction() && arguments[2]->IsInt() &&
           arguments[3]->IsUInt()) {
@@ -2416,17 +2375,23 @@ afxObject->AddFunction(
 
     afxObject->AddFunction(
         obj, "pumpEnd",
-        [self](const CefString& name,
+        [](const CefString& name,
                                              CefRefPtr<CefV8Value> object,
                                              const CefV8ValueList& arguments,
                                              CefRefPtr<CefV8Value>& retval,
                                              CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
 
      if (2 <= arguments.size() && arguments[0]->IsFunction() &&
           arguments[1]->IsFunction()) {
-        self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
+            self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
                                  fn_reject = arguments[1]]() {
-            if (!self->m_InFlow)
+         if (!self->m_InFlow)
               goto error;
 
             if (!self->m_PipeServer->WriteUInt32(
@@ -2437,8 +2402,7 @@ afxObject->AddFunction(
               goto error;
 
 
-            CefPostTask(TID_RENDERER,
-                        new CAfxTask([self, fn_resolve]() {
+            CefPostTask(TID_RENDERER, new CAfxTask([self, fn_resolve]() {
                           self->m_Context->Enter();
                           fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
                           self->m_Context->Exit();
@@ -2446,13 +2410,12 @@ afxObject->AddFunction(
             return;
 
           error:
-            self->Close();
+          self->Close();
 
-            CefPostTask(TID_RENDERER,
-                     new CAfxTask([self, fn_reject]() {
-                       self->m_Context->Enter();
+            CefPostTask(TID_RENDERER, new CAfxTask([self, fn_reject]() {
+                        self->m_Context->Enter();
                        fn_reject->ExecuteFunction(NULL, CefV8ValueList());
-                       self->m_Context->Exit();
+                        self->m_Context->Exit();
                      }));
         });
 
@@ -2465,14 +2428,21 @@ afxObject->AddFunction(
 
     afxObject->AddFunction(
         obj, "d3d9CreateVertexDeclaration",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
           if (4 <= arguments.size() && arguments[0]->IsFunction() &&
-              arguments[1]->IsFunction() && arguments[3]->IsArray() &&
+              arguments[1]->IsFunction() && (arguments[2]->IsArrayBuffer() || arguments[2]->IsNull()) && arguments[3]->IsArray() &&
               1 <= arguments[3]->GetArrayLength()) {
-            auto data = GetAfxUserData<AfxUserDataType::AfxData, CAfxData>(
-                arguments[2]);
+            CefRefPtr<CAfxData> data =
+                arguments[2]->IsNull() ? nullptr: static_cast<CAfxData*>(
+                arguments[2]->GetArrayBufferReleaseCallback().get());
 
             if (nullptr != data) {
               CefRefPtr<CAfxD3d9VertexDeclaration> val;
@@ -2576,7 +2546,7 @@ afxObject->AddFunction(
               arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
               arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
             auto drawingHandle =
-                GetAfxUserData<AfxUserDataType::AfxData, CAfxHandle>(
+                GetAfxUserData<AfxObjectDataType::AfxData, CAfxHandle>(
                     arguments[4]);
 
             CefRefPtr<CAfxD3d9IndexBuffer> val;
@@ -2649,7 +2619,7 @@ afxObject->AddFunction(
               arguments[0]->IsUInt() && arguments[1]->IsUInt() &&
               arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
             auto drawingHandle =
-                GetAfxUserData<AfxUserDataType::AfxHandle, CAfxHandle>(
+                GetAfxUserData<AfxObjectDataType::AfxHandle, CAfxHandle>(
                     arguments[4]);
 
             CefRefPtr<CAfxD3d9VertexBuffer> val;
@@ -2713,9 +2683,15 @@ afxObject->AddFunction(
     afxObject->AddFunction(
         obj, 
         "d3d9CreateTexture",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
       if (10 <= arguments.size() && arguments[0]->IsFunction() &&
           arguments[1]->IsFunction() && arguments[2]->IsUInt() &&
           arguments[3]->IsUInt() && arguments[4]->IsUInt() &&
@@ -2727,7 +2703,7 @@ afxObject->AddFunction(
         auto retobj = CAfxD3d9Texture::Create(self, &val);
 
         CefRefPtr<CAfxHandle> drawingHandle =
-            GetAfxUserData<AfxUserDataType::AfxHandle, CAfxHandle>(
+            GetAfxObject<AfxObjectType::AfxHandle, CAfxHandle>(
                 arguments[9]->GetValue(0)); 
 
         self->m_PipeQueue.Queue(
@@ -2853,14 +2829,23 @@ afxObject->AddFunction(
     afxObject->AddFunction(
         obj, 
         "d3d9CreateVertexShader",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
           if (4 <= arguments.size() && arguments[0]->IsFunction() &&
-              arguments[1]->IsFunction() && arguments[3]->IsArray() &&
+              arguments[1]->IsFunction() && (arguments[2]->IsArrayBuffer() || arguments[2]->IsNull()) && arguments[3]->IsArray() &&
               1 <= arguments[3]->GetArrayLength()) {
-            auto data = GetAfxUserData<AfxUserDataType::AfxData, CAfxData>(
-                arguments[2]);
+            auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                     CDrawingInteropImpl>(object);
+            if (self == nullptr) {
+              exceptionoverride = g_szInvalidThis;
+              return true;
+            }
+            CefRefPtr<CAfxData> data =
+                arguments[2]->IsNull()
+                    ? nullptr
+                    : static_cast<CAfxData*>(
+                arguments[2]->GetArrayBufferReleaseCallback().get());
 
             if (nullptr != data) {
               CefRefPtr<CAfxD3d9VertexShader> val;
@@ -2956,14 +2941,23 @@ afxObject->AddFunction(
     afxObject->AddFunction(
         obj, 
         "d3d9CreatePixelShader",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
           if (4 <= arguments.size() && arguments[0]->IsFunction() &&
-              arguments[1]->IsFunction() && arguments[3]->IsArray() &&
+              arguments[1]->IsFunction() && (arguments[2]->IsArrayBuffer() || arguments[2]->IsNull()) && arguments[3]->IsArray() &&
               1 <= arguments[3]->GetArrayLength()) {
-            auto data = GetAfxUserData<AfxUserDataType::AfxData, CAfxData>(
-                arguments[2]);
+            CefRefPtr<CAfxData> data =
+                arguments[2]->IsNull()
+                    ? nullptr
+                    : static_cast<CAfxData*>(
+                arguments[2]->GetArrayBufferReleaseCallback().get());
 
             if (nullptr != data) {
               CefRefPtr<CAfxD3d9PixelShader> val;
@@ -3068,10 +3062,10 @@ afxObject->AddFunction(
 
           if (2 <= arguments.size()) {
             CefRefPtr<CAfxD3d9Texture> val =
-                GetAfxUserData<AfxUserDataType::AfxD3d9Texture,
+                GetAfxUserData<AfxObjectDataType::AfxD3d9Texture,
                                CAfxD3d9Texture>(arguments[0]);
             CefRefPtr<CAfxD3d9Texture> val2 =
-                GetAfxUserData<AfxUserDataType::AfxD3d9Texture,
+                GetAfxUserData<AfxObjectDataType::AfxD3d9Texture,
                                CAfxD3d9Texture>(arguments[1]);
 
             if (!self->m_PipeServer->WriteUInt32(
@@ -3101,13 +3095,19 @@ afxObject->AddFunction(
     afxObject->AddFunction(
         obj, 
         "d3d9SetVertexDeclaration",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
           if (3 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction()) {
             CefRefPtr<CAfxD3d9VertexDeclaration> val =
-                GetAfxUserData<AfxUserDataType::AfxD3d9VertexDeclaration,
+                GetAfxObject<AfxObjectType::AfxD3d9VertexDeclaration,
                                CAfxD3d9VertexDeclaration>(arguments[2]);
 
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
@@ -3183,9 +3183,15 @@ afxObject->AddFunction(
     afxObject->AddFunction(
         obj, 
         "d3d9SetViewport",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
           if (2 == arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction()) {
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
@@ -3362,9 +3368,15 @@ afxObject->AddFunction(
     afxObject->AddFunction(
         obj, 
         "d3d9SetRenderState",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
           if (4 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction() && arguments[2]->IsUInt() &&
               arguments[3]->IsUInt()) {
@@ -3449,9 +3461,15 @@ afxObject->AddFunction(
     afxObject->AddFunction(
         obj, 
         "d3d9SetSamplerState",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
           if (5 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction() && arguments[2]->IsUInt() &&
               arguments[3]->IsUInt() && arguments[4]->IsUInt()) {
@@ -3539,13 +3557,19 @@ afxObject->AddFunction(
  afxObject->AddFunction(
         obj, 
         "d3d9SetTexture",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
           if (4 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction() && arguments[2]->IsUInt()) {
             CefRefPtr<CAfxD3d9Texture> val =
-                GetAfxUserData<AfxUserDataType::AfxD3d9Texture,
+                GetAfxObject<AfxObjectType::AfxD3d9Texture,
                                CAfxD3d9Texture>(arguments[3]);
 
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
@@ -3626,9 +3650,16 @@ afxObject->AddFunction(
     afxObject->AddFunction(
      obj, 
         "d3d9SetTextureStageState",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+        CefString& exceptionoverride) {
+       auto self =
+           GetAfxObject<AfxObjectType::DrawingInteropImpl, CDrawingInteropImpl>(
+               object);
+       if (self == nullptr) {
+         exceptionoverride = g_szInvalidThis;
+         return true;
+       }
           if (5 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction() && arguments[2]->IsUInt() &&
               arguments[3]->IsUInt() && arguments[4]->IsUInt()) {
@@ -3715,9 +3746,15 @@ afxObject->AddFunction(
 afxObject->AddFunction(
         obj, 
         "d3d9SetTransform",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
       if (4 <= arguments.size() && arguments[0]->IsFunction() &&
           arguments[1]->IsFunction() && arguments[2]->IsUInt()) {
         if (arguments[3]->IsArray() && arguments[3]->GetArrayLength() == 16) {
@@ -3830,7 +3867,7 @@ afxObject->AddFunction(
 
           if (1 == arguments.size()) {
             CefRefPtr<CAfxD3d9IndexBuffer> val =
-                GetAfxUserData<AfxUserDataType::AfxD3d9IndexBuffer,
+                GetAfxUserData<AfxObjectDataType::AfxD3d9IndexBuffer,
                                CAfxD3d9IndexBuffer>(arguments[0]);
 
             if (!self->m_PipeServer->WriteUInt32(
@@ -3864,7 +3901,7 @@ afxObject->AddFunction(
           if (4 == arguments.size() && arguments[0]->IsUInt() &&
               arguments[2]->IsUInt() && arguments[3]->IsUInt()) {
             CefRefPtr<CAfxD3d9VertexBuffer> val =
-                GetAfxUserData<AfxUserDataType::AfxD3d9VertexBuffer,
+                GetAfxUserData<AfxObjectDataType::AfxD3d9VertexBuffer,
                                CAfxD3d9VertexBuffer>(arguments[1]);
 
             if (!self->m_PipeServer->WriteUInt32(
@@ -3936,13 +3973,19 @@ afxObject->AddFunction(
     ->AddFunction(
         obj, 
         "d3d9SetVertexShader",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
           if (3 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction()) {
             CefRefPtr<CAfxD3d9VertexShader> val =
-                GetAfxUserData<AfxUserDataType::AfxD3d9VertexShader,
+                GetAfxObject<AfxObjectType::AfxD3d9VertexShader,
                                CAfxD3d9VertexShader>(arguments[2]);
 
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
@@ -4018,13 +4061,19 @@ afxObject->AddFunction(
     afxObject->AddFunction(
         obj, 
         "d3d9SetPixelShader",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
           if (3 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction()) {
             CefRefPtr<CAfxD3d9PixelShader> val =
-                GetAfxUserData<AfxUserDataType::AfxD3d9PixelShader,
+                GetAfxObject<AfxObjectType::AfxD3d9PixelShader,
                                CAfxD3d9PixelShader>(arguments[2]);
 
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
@@ -4499,11 +4548,16 @@ afxObject->AddFunction(
         */
     afxObject->AddFunction(
         obj, "waitForClientGpu",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
                CefString& exceptionoverride) {
-
-if (2 <= arguments.size() && arguments[0]->IsFunction() &&
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+          if (2 <= arguments.size() && arguments[0]->IsFunction() &&
     arguments[1]->IsFunction()) {
 
     self->m_PipeQueue.Queue(
@@ -4550,16 +4604,24 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
     afxObject->AddFunction(
         obj, 
         "d3d9DrawPrimitiveUP",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
           if (6 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction() && arguments[2]->IsUInt() &&
-              arguments[3]->IsUInt() && arguments[5]->IsUInt()) {
+              arguments[3]->IsUInt() && (arguments[4]->IsArrayBuffer() || arguments[4]->IsNull()) && arguments[5]->IsUInt()) {
 
-            auto vertexStreamZeroData =
-                GetAfxUserData<AfxUserDataType::AfxData, CAfxData>(
-                arguments[4]);
+            CefRefPtr<CAfxData> vertexStreamZeroData =
+                arguments[4]->IsNull()
+                    ? nullptr
+                    : static_cast<CAfxData*>(
+                arguments[4]->GetArrayBufferReleaseCallback().get());
 
               self->m_PipeQueue.Queue(
                 [self, fn_resolve = arguments[0], fn_reject = arguments[1], primitiveType = arguments[2]->GetUIntValue(), primitiveCount = arguments[3]->GetUIntValue(), vertexStreamZeroData,
@@ -4662,9 +4724,15 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
  afxObject->AddFunction(
         obj, 
         "beginCleanState",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
           if (2 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction()) {
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
@@ -4705,9 +4773,16 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
     afxObject->AddFunction(
      obj, 
         "endCleanState",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+        CefString& exceptionoverride) {
+       auto self =
+           GetAfxObject<AfxObjectType::DrawingInteropImpl, CDrawingInteropImpl>(
+               object);
+       if (self == nullptr) {
+         exceptionoverride = g_szInvalidThis;
+         return true;
+       }
           if (2 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction()) {
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
@@ -4769,10 +4844,16 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
     afxObject->AddFunction(
         obj, 
         "setSize",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                       const CefV8ValueList& arguments,
                       CefRefPtr<CefV8Value>& retval,
-                      CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
           if (4 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction() && arguments[2]->IsInt() &&
               arguments[3]->IsInt()) {
@@ -4818,10 +4899,16 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
     afxObject->AddFunction(
         obj, 
         "sendExternalBeginFrame",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                       const CefV8ValueList& arguments,
                       CefRefPtr<CefV8Value>& retval,
-                      CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
           if (2 <= arguments.size() && arguments[0]->IsFunction() &&
             arguments[1]->IsFunction()) {
             self->m_InteropQueue.Queue(
@@ -4865,21 +4952,30 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
         [](const CefString& name, CefRefPtr<CefV8Value> object,
            const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
            CefString& exceptionoverride) {
-          if (10 == arguments.size() && (arguments[1]->IsNull() || arguments[1]->IsString()) &&
+          if (10 == arguments.size() && (arguments[0]->IsArrayBuffer() || arguments[0]->IsNull()) && (arguments[1]->IsNull() || arguments[1]->IsString()) &&
+              (arguments[2]->IsArrayBuffer() || arguments[2]->IsNull()) &&
               arguments[3]->IsNull() && (arguments[4]->IsNull() || arguments[4]->IsString()) &&
               arguments[5]->IsString() && arguments[6]->IsUInt() &&
-              arguments[7]->IsUInt() && arguments[8]->IsUInt()) {
+              arguments[7]->IsUInt() && arguments[8]->IsUInt() &&
+              (arguments[9]->IsArrayBuffer() || arguments[9]->IsNull())) {
 
-            auto srcData = GetAfxUserData<AfxUserDataType::AfxData, CAfxData>(arguments[0]);
-            auto defines = GetAfxUserData<AfxUserDataType::AfxData, CAfxData>(
-                arguments[2]);
+            CefRefPtr<CAfxData> srcData =
+                arguments[0]->IsNull() ? nullptr : static_cast<CAfxData*>(
+                arguments[0]->GetArrayBufferReleaseCallback().get());
+            CefRefPtr<CAfxData> defines =
+                arguments[2]->IsNull()
+                    ? nullptr
+                    : static_cast<CAfxData*>(
+                arguments[2]->GetArrayBufferReleaseCallback().get());
             auto target = arguments[5]->GetStringValue();
             auto flags1 = arguments[6]->GetUIntValue();
             auto flags2 = arguments[7]->GetUIntValue();
             auto secondaryDataFlags = arguments[8]->GetUIntValue();
             auto secondaryData =
-                GetAfxUserData<AfxUserDataType::AfxData, CAfxData>(
-                    arguments[9]);
+                arguments[9]->IsNull()
+                    ? nullptr
+                    : static_cast<CAfxData*>(
+                          arguments[9]->GetArrayBufferReleaseCallback().get());
 
             ID3DBlob* pCode = nullptr;
             ID3DBlob* pErrorMsgs = nullptr;
@@ -4953,7 +5049,7 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
     afxObject->AddFunction(
         obj, 
         "createNullHandle",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                       const CefV8ValueList& arguments,
                       CefRefPtr<CefV8Value>& retval,
                       CefString& exceptionoverride) {
@@ -4963,7 +5059,7 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
     afxObject->AddFunction(
         obj, 
         "createInvalidHandle",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                       const CefV8ValueList& arguments,
                       CefRefPtr<CefV8Value>& retval,
                       CefString& exceptionoverride) {
@@ -4973,7 +5069,7 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
     afxObject->AddFunction(
         obj, 
         "createHandleFromLoHi",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                       const CefV8ValueList& arguments,
                       CefRefPtr<CefV8Value>& retval,
                       CefString& exceptionoverride) {
@@ -4991,7 +5087,6 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
     if (out)
       *out = self;
     
-    obj->SetUserData(self);
     return obj;
   }
 
@@ -5032,8 +5127,9 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
 
  protected:
   CDrawingInteropImpl(int browserId)
-      : CAfxInterop("advancedfxInterop_drawing"),
-        m_BrowserId(browserId) {
+      : CAfxObject(AfxObjectType::DrawingInteropImpl)
+      , CAfxInterop("advancedfxInterop_drawing")
+      , m_BrowserId(browserId) {
     m_WaitConnectionThread =
         std::thread(&CDrawingInteropImpl::WaitConnectionThreadHandler, this);
   }
@@ -5171,59 +5267,63 @@ if (2 <= arguments.size() && arguments[0]->IsFunction() &&
 
 private:
 
-  class CAfxD3d9VertexDeclaration : public CAfxUserData {
-    IMPLEMENT_REFCOUNTING(CAfxD3d9VertexDeclaration);
+  class CAfxD3d9VertexDeclaration : public CAfxObject {
 
    public:
     static CefRefPtr<CefV8Value> Create(
-        CefRefPtr<CDrawingInteropImpl> drawingInteropImpl,
+        CefRefPtr<CDrawingInteropImpl> interop,
         CefRefPtr<CAfxD3d9VertexDeclaration>* out = nullptr) {
-      CefRefPtr<CAfxD3d9VertexDeclaration> val =
-          new CAfxD3d9VertexDeclaration();
 
-      CefRefPtr<CAfxObject> afxObject;
-      auto obj = CAfxObject::Create(&afxObject);
-      afxObject->AddFunction(obj, "release", [val, drawingInteropImpl](
+      CefRefPtr<CAfxObjectHandler> afxObject;
+      auto obj = CAfxObjectHandler::Create(
+          new CAfxD3d9VertexDeclaration(interop), &afxObject);
+      afxObject->AddFunction(obj, "release", [](
                                             const CefString& name,
                                             CefRefPtr<CefV8Value> object,
                                             const CefV8ValueList& arguments,
                                             CefRefPtr<CefV8Value>& retval,
                                             CefString& exception) {
+            auto self =
+                GetAfxObject<AfxObjectType::AfxD3d9VertexDeclaration, CAfxD3d9VertexDeclaration>(object);
+            if (self == nullptr) {
+              exception = g_szInvalidThis;
+              return true;
+            }
+
         if (2 <= arguments.size() && arguments[0]->IsFunction() &&
             arguments[1]->IsFunction()) {
-          if (val->m_DoReleased) {
+          if (self->m_DoReleased) {
             exception = g_szAlreadyReleased;
             return true;
           }
 
-          drawingInteropImpl->m_PipeQueue.Queue([drawingInteropImpl,
+          self->m_Interop->m_PipeQueue.Queue([self,
                                                  fn_resolve = arguments[0],
-                                                 fn_reject = arguments[1],
-                                                 index = val->GetIndex(), val]() {
-            if (!drawingInteropImpl->m_InFlow)
+                                                 fn_reject = arguments[1]]() {
+            if (!self->m_Interop->m_InFlow)
               goto __error;
 
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+            if (!self->m_Interop->m_PipeServer->WriteUInt32(
                     (UINT32)DrawingReply::ReleaseD3d9VertexDeclaration))
               goto __error;
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt64((UINT64)index))
+            if (!self->m_Interop->m_PipeServer->WriteUInt64((UINT64)self->GetIndex()))
               goto __error;
 
-            if (!drawingInteropImpl->m_PipeServer->Flush())
+            if (!self->m_Interop->m_PipeServer->Flush())
               goto __error;
 
             int hr;
-            if (!drawingInteropImpl->m_PipeServer->ReadInt32(hr))
+            if (!self->m_Interop->m_PipeServer->ReadInt32(hr))
               goto __error;
 
             if (FAILED(hr)) {
               unsigned int lastError;
-              if (!drawingInteropImpl->m_PipeServer->ReadUInt32(lastError))
+              if (!self->m_Interop->m_PipeServer->ReadUInt32(lastError))
                 goto __error;
               CefPostTask(TID_RENDERER,
-                          new CAfxTask([drawingInteropImpl,
+                          new CAfxTask([self,
                                         fn_resolve, hr, lastError]() {
-                            drawingInteropImpl->m_Context->Enter();
+                            self->m_Interop->m_Context->Enter();
 
                             CefRefPtr<CefV8Value> result =
                                 CefV8Value::CreateObject(nullptr, nullptr);
@@ -5236,36 +5336,36 @@ private:
                             CefV8ValueList args;
                             args.push_back(result);
                             fn_resolve->ExecuteFunction(NULL, args);
-                            drawingInteropImpl->m_Context->Exit();
+                            self->m_Interop->m_Context->Exit();
                           }));
               return;
             }
 
             CefPostTask(TID_RENDERER,
-                        new CAfxTask([drawingInteropImpl,
-                                      fn_resolve, hr, val]() {
-                          drawingInteropImpl->m_Context->Enter();
+                        new CAfxTask([self,
+                                      fn_resolve, hr]() {
+                          self->m_Interop->m_Context->Enter();
 
-                          val->m_DoReleased = true;
+                          self->m_DoReleased = true;
 
                           CefV8ValueList args;
                           args.push_back(CefV8Value::CreateInt(hr));
 
                           fn_resolve->ExecuteFunction(NULL, args);
 
-                          drawingInteropImpl->m_Context->Exit();
+                          self->m_Interop->m_Context->Exit();
                         }));
             return;
 
           __error:
-            drawingInteropImpl->Close();
+            self->m_Interop->Close();
 
             CefPostTask(TID_RENDERER,
-                        new CAfxTask([drawingInteropImpl,
+                        new CAfxTask([self,
                                       fn_reject]() {
-                          drawingInteropImpl->m_Context->Enter();
+                          self->m_Interop->m_Context->Enter();
                           fn_reject->ExecuteFunction(NULL, CefV8ValueList());
-                          drawingInteropImpl->m_Context->Exit();
+                          self->m_Interop->m_Context->Exit();
                         }));
           });
         }
@@ -5274,75 +5374,84 @@ private:
       });
 
       if (out)
-        *out = val;
+        *out = GetAfxObject<AfxObjectType::AfxD3d9VertexDeclaration, CAfxD3d9VertexDeclaration>(obj);
 
-      obj->SetUserData(val);
       return obj;
     }
 
-    CAfxD3d9VertexDeclaration()
-        : CAfxUserData(AfxUserDataType::AfxD3d9VertexDeclaration) {
+    CAfxD3d9VertexDeclaration(CefRefPtr<CDrawingInteropImpl> interop)
+        : CAfxObject(AfxObjectType::AfxD3d9VertexDeclaration), m_Interop(interop) {
     }
 
   private:
     bool m_DoReleased = false;
+   CefRefPtr<CDrawingInteropImpl> m_Interop;
+
+     IMPLEMENT_REFCOUNTING(CAfxD3d9VertexDeclaration);
+
   };
 
-  class CAfxD3d9IndexBuffer : public CAfxUserData {
-    IMPLEMENT_REFCOUNTING(CAfxD3d9IndexBuffer);
+  class CAfxD3d9IndexBuffer : public CAfxObject {
 
    public:
     static CefRefPtr<CefV8Value> Create(
-        CefRefPtr<CDrawingInteropImpl> drawingInteropImpl,
+        CefRefPtr<CDrawingInteropImpl> interop,
         CefRefPtr<CAfxD3d9IndexBuffer>* out = nullptr) {
-      CefRefPtr<CAfxD3d9IndexBuffer> val = new CAfxD3d9IndexBuffer();
 
-      CefRefPtr<CAfxObject> afxObject;
-      auto obj = CAfxObject::Create(&afxObject);
+      CefRefPtr<CAfxObjectHandler> afxObject;
+      auto obj = CAfxObjectHandler::Create(
+          new CAfxD3d9IndexBuffer(interop), &afxObject);
 
       afxObject->AddFunction(
           obj, "release",
-          [val, drawingInteropImpl](
+          [](
                                             const CefString& name,
                                             CefRefPtr<CefV8Value> object,
                                             const CefV8ValueList& arguments,
                                             CefRefPtr<CefV8Value>& retval,
                                             CefString& exception) {
+
+          auto self =
+                GetAfxObject<AfxObjectType::AfxD3d9IndexBuffer, CAfxD3d9IndexBuffer>(object);
+            if (self == nullptr) {
+              exception = g_szInvalidThis;
+              return true;
+            }
+
         if (2 <= arguments.size() && arguments[0]->IsFunction() &&
             arguments[1]->IsFunction()) {
-          if (val->m_DoReleased) {
+          if (self->m_DoReleased) {
             exception = g_szAlreadyReleased;
             return true;
           }
 
-          drawingInteropImpl->m_PipeQueue.Queue([drawingInteropImpl,
+          self->m_Interop->m_PipeQueue.Queue([self,
                                                  fn_resolve = arguments[0],
-                                                 fn_reject = arguments[1],
-                                                 index = val->GetIndex(), val]() {
-            if (!drawingInteropImpl->m_InFlow)
+                                                 fn_reject = arguments[1]]() {
+            if (!self->m_Interop->m_InFlow)
               goto __error;
 
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+            if (!self->m_Interop->m_PipeServer->WriteUInt32(
                     (UINT32)DrawingReply::ReleaseD3d9IndexBuffer))
               goto __error;
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt64((UINT64)index))
+            if (!self->m_Interop->m_PipeServer->WriteUInt64((UINT64)self->GetIndex()))
               goto __error;
 
-            if (!drawingInteropImpl->m_PipeServer->Flush())
+            if (!self->m_Interop->m_PipeServer->Flush())
               goto __error;
 
             int hr;
-            if (!drawingInteropImpl->m_PipeServer->ReadInt32(hr))
+            if (!self->m_Interop->m_PipeServer->ReadInt32(hr))
               goto __error;
 
             if (FAILED(hr)) {
               unsigned int lastError;
-              if (!drawingInteropImpl->m_PipeServer->ReadUInt32(lastError))
+              if (!self->m_Interop->m_PipeServer->ReadUInt32(lastError))
                 goto __error;
               CefPostTask(TID_RENDERER,
-                          new CAfxTask([drawingInteropImpl,
+                          new CAfxTask([self,
                                         fn_resolve, hr, lastError]() {
-                            drawingInteropImpl->m_Context->Enter();
+                            self->m_Interop->m_Context->Enter();
 
                             CefRefPtr<CefV8Value> result =
                                 CefV8Value::CreateObject(nullptr, nullptr);
@@ -5355,84 +5464,92 @@ private:
                             CefV8ValueList args;
                             args.push_back(result);
                             fn_resolve->ExecuteFunction(NULL, args);
-                            drawingInteropImpl->m_Context->Exit();
+                            self->m_Interop->m_Context->Exit();
                           }));
               return;
             }
 
             CefPostTask(TID_RENDERER,
-                        new CAfxTask([drawingInteropImpl,
-                                      fn_resolve, hr, val]() {
-                          drawingInteropImpl->m_Context->Enter();
+                        new CAfxTask([self,
+                                      fn_resolve, hr]() {
+                          self->m_Interop->m_Context->Enter();
 
-                          val->m_DoReleased = true;
+                          self->m_DoReleased = true;
 
                           CefV8ValueList args;
                           args.push_back(CefV8Value::CreateInt(hr));
 
                           fn_resolve->ExecuteFunction(NULL, args);
 
-                          drawingInteropImpl->m_Context->Exit();
+                          self->m_Interop->m_Context->Exit();
                         }));
             return;
 
           __error:
-            drawingInteropImpl->Close();
+            self->m_Interop->Close();
 
             CefPostTask(TID_RENDERER,
-                        new CAfxTask([drawingInteropImpl,
+                        new CAfxTask([self,
                                       fn_reject]() {
-                          drawingInteropImpl->m_Context->Enter();
+                          self->m_Interop->m_Context->Enter();
                           fn_reject->ExecuteFunction(NULL, CefV8ValueList());
-                          drawingInteropImpl->m_Context->Exit();
+                          self->m_Interop->m_Context->Exit();
                         }));
           });
         }
         exception = g_szInvalidArguments;
         return true;
       });
-
+      /*
       afxObject->AddFunction(
           obj, "update",
-          [val, drawingInteropImpl](
+          [](
                                             const CefString& name,
                                             CefRefPtr<CefV8Value> object,
                                             const CefV8ValueList& arguments,
                                             CefRefPtr<CefV8Value>& retval,
                                             CefString& exception) {
-        if (val->m_DoReleased) {
+            auto self = GetAfxObject<AfxObjectType::AfxD3d9IndexBuffer,
+                                     CAfxD3d9IndexBuffer>(object);
+            if (self == nullptr) {
+              exception = g_szInvalidThis;
+              return true;
+            }
+
+
+        if (self->m_DoReleased) {
           exception = g_szAlreadyReleased;
           return true;
         }
 
-        if (!drawingInteropImpl->m_InFlow) {
+        if (!self->m_Interop->m_InFlow) {
           exception = g_szOutOfFlow;
           return true;
         }
       
           if (3 == arguments.size() &&
             arguments[1]->IsUInt() && arguments[2]->IsUInt()) {
-          auto data = GetAfxUserData<AfxUserDataType::AfxData, CAfxData>(arguments[0]);
+          auto data = GetAfxObject<AfxObjectType::AfxData, CAfxData>(arguments[0]);
 
           if (nullptr != data) {
             size_t offsetToLock = (int)arguments[1]->GetUIntValue();
             size_t sizeToLock = (int)arguments[2]->GetUIntValue();
 
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+            if (!self->m_Interop->m_PipeServer->WriteUInt32(
                     (UINT32)DrawingReply::UpdateD3d9IndexBuffer))
               goto error_2;
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt64(
-                    (UINT64)val->GetIndex()))
+            if (!self->m_Interop->m_PipeServer->WriteUInt64(
+                    (UINT64)self->GetIndex()))
               goto error_2;
             // offsetToLock
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+            if (!self->m_Interop->m_PipeServer->WriteUInt32(
                     (UINT32)offsetToLock))
               goto error_2;
             // sizeToLock
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+            if (!self->m_Interop->m_PipeServer->WriteUInt32(
                     (UINT32)sizeToLock))
               goto error_2;
-            if (!drawingInteropImpl->m_PipeServer->WriteBytes(
+            if (!self->m_Interop->m_PipeServer->WriteBytes(
                     (unsigned char*)data->GetData() + offsetToLock,
                     (DWORD)offsetToLock, (DWORD)sizeToLock))
               goto error_2;
@@ -5440,7 +5557,7 @@ private:
             return true;
 
         error_2:
-            drawingInteropImpl->Close();
+            self->m_Interop->Close();
             exception = g_szConnectionError;
             return true;
           }
@@ -5449,76 +5566,84 @@ private:
           exception = g_szInvalidArguments;
           return true;
       });
+    */
 
       if (out)
-        *out = val;
+        *out = GetAfxObject<AfxObjectType::AfxD3d9IndexBuffer,
+                            CAfxD3d9IndexBuffer>(obj);
 
-      obj->SetUserData(val);
       return obj;
     }
 
-    CAfxD3d9IndexBuffer()
-        :CAfxUserData(AfxUserDataType::AfxD3d9IndexBuffer) {
+    CAfxD3d9IndexBuffer(CefRefPtr<CDrawingInteropImpl> interop)
+        : CAfxObject(AfxObjectType::AfxD3d9IndexBuffer), m_Interop(interop) {
     }
       
    private:
     bool m_DoReleased = false;
+    CefRefPtr<CDrawingInteropImpl> m_Interop;
+    IMPLEMENT_REFCOUNTING(CAfxD3d9IndexBuffer);
   };
 
-  class CAfxD3d9VertexBuffer : public CAfxUserData {
-    IMPLEMENT_REFCOUNTING(CAfxD3d9VertexBuffer);
+  class CAfxD3d9VertexBuffer : public CAfxObject {
 
    public:
     static CefRefPtr<CefV8Value> Create(
-        CefRefPtr<CDrawingInteropImpl> drawingInteropImpl,
+        CefRefPtr<CDrawingInteropImpl> interop,
         CefRefPtr<CAfxD3d9VertexBuffer>* out = nullptr) {
-      CefRefPtr<CAfxD3d9VertexBuffer> val = new CAfxD3d9VertexBuffer();
-
-      CefRefPtr<CAfxObject> afxObject;
-      auto obj = CAfxObject::Create(&afxObject);
+      
+      CefRefPtr<CAfxObjectHandler> afxObject;
+      auto obj =
+          CAfxObjectHandler::Create(new CAfxD3d9VertexBuffer(interop), &afxObject);
       afxObject->AddFunction(
           obj, "release",
-          [val, drawingInteropImpl](
+          [](
                                             const CefString& name,
                                             CefRefPtr<CefV8Value> object,
                                             const CefV8ValueList& arguments,
                                             CefRefPtr<CefV8Value>& retval,
-                                            CefString& exception) {
+             CefString& exception) {
+            auto self = GetAfxObject<AfxObjectType::AfxD3d9VertexBuffer,
+                                     CAfxD3d9VertexBuffer>(object);
+            if (self == nullptr) {
+              exception = g_szInvalidThis;
+              return true;
+            }
+
         if (2 <= arguments.size() && arguments[0]->IsFunction() &&
             arguments[1]->IsFunction()) {
-          if (val->m_DoReleased) {
+          if (self->m_DoReleased) {
             exception = g_szAlreadyReleased;
             return true;
           }
 
-          drawingInteropImpl->m_PipeQueue.Queue([drawingInteropImpl,
+          self->m_Interop->m_PipeQueue.Queue([self,
                                                  fn_resolve = arguments[0],
-                                                 fn_reject = arguments[1],
-                                                 index = val->GetIndex(), val]() {
-            if (!drawingInteropImpl->m_InFlow)
+                                                 fn_reject = arguments[1]]() {
+            if (!self->m_Interop->m_InFlow)
               goto __error;
 
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+            if (!self->m_Interop->m_PipeServer->WriteUInt32(
                     (UINT32)DrawingReply::ReleaseD3d9VertexBuffer))
               goto __error;
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt64((UINT64)index))
+            if (!self->m_Interop->m_PipeServer->WriteUInt64((UINT64)self->GetIndex()))
               goto __error;
 
-            if (!drawingInteropImpl->m_PipeServer->Flush())
+            if (!self->m_Interop->m_PipeServer->Flush())
               goto __error;
 
             int hr;
-            if (!drawingInteropImpl->m_PipeServer->ReadInt32(hr))
+            if (!self->m_Interop->m_PipeServer->ReadInt32(hr))
               goto __error;
 
             if (FAILED(hr)) {
               unsigned int lastError;
-              if (!drawingInteropImpl->m_PipeServer->ReadUInt32(lastError))
+              if (!self->m_Interop->m_PipeServer->ReadUInt32(lastError))
                 goto __error;
               CefPostTask(TID_RENDERER,
-                          new CAfxTask([drawingInteropImpl,
+                          new CAfxTask([self,
                                         fn_resolve, hr, lastError]() {
-                            drawingInteropImpl->m_Context->Enter();
+                            self->m_Interop->m_Context->Enter();
 
                             CefRefPtr<CefV8Value> result =
                                 CefV8Value::CreateObject(nullptr, nullptr);
@@ -5531,83 +5656,90 @@ private:
                             CefV8ValueList args;
                             args.push_back(result);
                             fn_resolve->ExecuteFunction(NULL, args);
-                            drawingInteropImpl->m_Context->Exit();
+                            self->m_Interop->m_Context->Exit();
                           }));
               return;
             }
 
             CefPostTask(TID_RENDERER,
-                        new CAfxTask([drawingInteropImpl,
-                                      fn_resolve, hr, val]() {
-                          drawingInteropImpl->m_Context->Enter();
+                        new CAfxTask([self,
+                                      fn_resolve, hr]() {
+                          self->m_Interop->m_Context->Enter();
 
-                          val->m_DoReleased = true;
+                          self->m_DoReleased = true;
 
                           CefV8ValueList args;
                           args.push_back(CefV8Value::CreateInt(hr));
 
                           fn_resolve->ExecuteFunction(NULL, args);
 
-                          drawingInteropImpl->m_Context->Exit();
+                          self->m_Interop->m_Context->Exit();
                         }));
             return;
 
           __error:
-            drawingInteropImpl->Close();
+            self->m_Interop->Close();
 
             CefPostTask(TID_RENDERER,
-                        new CAfxTask([drawingInteropImpl,
+                        new CAfxTask([self,
                                       fn_reject]() {
-                          drawingInteropImpl->m_Context->Enter();
+                          self->m_Interop->m_Context->Enter();
                           fn_reject->ExecuteFunction(NULL, CefV8ValueList());
-                          drawingInteropImpl->m_Context->Exit();
+                          self->m_Interop->m_Context->Exit();
                         }));
           });
         }
         exception = g_szInvalidArguments;
         return true;
       });
-
+      /*
       afxObject->AddFunction(
           obj, 
-          "update", [val, drawingInteropImpl](
+          "update", [](
                         const CefString& name, CefRefPtr<CefV8Value> object,
                         const CefV8ValueList& arguments,
                         CefRefPtr<CefV8Value>& retval, CefString& exception) {
-            if (val->m_DoReleased) {
+            auto self = GetAfxObject<AfxObjectType::AfxD3d9VertexBuffer,
+                                     CAfxD3d9VertexBuffer>(object);
+            if (self == nullptr) {
+              exception = g_szInvalidThis;
+              return true;
+            }
+
+            if (self->m_DoReleased) {
               exception = g_szAlreadyReleased;
               return true;
             }
 
-            if (!drawingInteropImpl->m_InFlow) {
+            if (!self->m_Interop->m_InFlow) {
               exception = g_szOutOfFlow;
               return true;
             }
 
             if (3 == arguments.size() &&
                 arguments[1]->IsUInt() && arguments[2]->IsUInt()) {
-              auto data = GetAfxUserData<AfxUserDataType::AfxData, CAfxData>(
+              auto data = GetAfxObject<AfxObjectType::AfxData, CAfxData>(
                   arguments[0]);
 
               if (nullptr != data) {
                 size_t offsetToLock = (int)arguments[1]->GetUIntValue();
                 size_t sizeToLock = (int)arguments[2]->GetUIntValue();
 
-                if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+                if (!self->m_Interop->m_PipeServer->WriteUInt32(
                         (UINT32)DrawingReply::UpdateD3d9VertexBuffer))
                   goto error_2;
-                if (!drawingInteropImpl->m_PipeServer->WriteUInt64(
+                if (!self->m_Interop->m_PipeServer->WriteUInt64(
                         (UINT64)val->GetIndex()))
                   goto error_2;
                 // offsetToLock
-                if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+                if (!self->m_Interop->m_PipeServer->WriteUInt32(
                         (UINT32)offsetToLock))
                   goto error_2;
                 // sizeToLock
-                if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+                if (!self->m_Interop->m_PipeServer->WriteUInt32(
                         (UINT32)sizeToLock))
                   goto error_2;
-                if (!drawingInteropImpl->m_PipeServer->WriteBytes(
+                if (!self->m_Interop->m_PipeServer->WriteBytes(
                         (unsigned char*)data->GetData() + offsetToLock,
                         (DWORD)offsetToLock, (DWORD)sizeToLock))
                   goto error_2;
@@ -5615,7 +5747,7 @@ private:
                 return true;
 
               error_2:
-                drawingInteropImpl->Close();
+                self->m_Interop->Close();
                 exception = g_szConnectionError;
                 return true;
               }
@@ -5624,78 +5756,87 @@ private:
             exception = g_szInvalidArguments;
             return true;
           });
-
+      */
       if (out)
-        *out = val;
+        *out = GetAfxObject<AfxObjectType::AfxD3d9VertexBuffer,
+                            CAfxD3d9VertexBuffer>(obj);
 
-      obj->SetUserData(val);
       return obj;
     }
 
-    CAfxD3d9VertexBuffer()
-        : CAfxUserData(AfxUserDataType::AfxD3d9VertexBuffer) {
+    CAfxD3d9VertexBuffer(CefRefPtr<CDrawingInteropImpl> interop)
+        : CAfxObject(AfxObjectType::AfxD3d9VertexBuffer), m_Interop(interop) {
     }
 
 
    private:
     bool m_DoReleased = false;
+    CefRefPtr<CDrawingInteropImpl> m_Interop;
+
+        IMPLEMENT_REFCOUNTING(CAfxD3d9VertexBuffer);
   };
 
-  class CAfxD3d9Texture : public CAfxUserData {
-    IMPLEMENT_REFCOUNTING(CAfxD3d9Texture);
+  class CAfxD3d9Texture : public CAfxObject {
+
 
    public:
     static CefRefPtr<CefV8Value> Create(
-        CefRefPtr<CDrawingInteropImpl> drawingInteropImpl,
+        CefRefPtr<CDrawingInteropImpl> interop,
         CefRefPtr<CAfxD3d9Texture>* out = nullptr) {
-      CefRefPtr<CAfxD3d9Texture> val = new CAfxD3d9Texture();
 
-      CefRefPtr<CAfxObject> afxObject;
-      auto obj = CAfxObject::Create(&afxObject);
+      CefRefPtr<CAfxObjectHandler> afxObject;
+      auto obj =
+          CAfxObjectHandler::Create(new CAfxD3d9Texture(interop), &afxObject);
 
       afxObject->AddFunction(
           obj, "release",
-          [val, drawingInteropImpl](
+          [](
                          const CefString& name, CefRefPtr<CefV8Value> object,
-                         const CefV8ValueList& arguments,
-                         CefRefPtr<CefV8Value>& retval, CefString& exception) {
+                         const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+             CefString& exception) {
+            auto self = GetAfxObject<AfxObjectType::AfxD3d9Texture, CAfxD3d9Texture>(
+                    object);
+            if (self == nullptr) {
+              exception = g_szInvalidThis;
+              return true;
+            }
+
             if (2 <= arguments.size() && arguments[0]->IsFunction() &&
                 arguments[1]->IsFunction()) {
-              if (val->m_DoReleased) {
+              if (self->m_DoReleased) {
                 exception = g_szAlreadyReleased;
                 return true;
               }
 
-              drawingInteropImpl->m_PipeQueue.Queue([drawingInteropImpl,
+              self->m_Interop->m_PipeQueue.Queue([self,
                                                      fn_resolve = arguments[0],
-                                                     fn_reject = arguments[1],
-                                                     val]() {
-                if (!drawingInteropImpl->m_InFlow)
+                                                     fn_reject = arguments[1]]() {
+            if (!self->m_Interop->m_InFlow)
                   goto __error;
 
-                if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+                if (!self->m_Interop->m_PipeServer->WriteUInt32(
                         (UINT32)DrawingReply::ReleaseD3d9Texture))
                   goto __error;
-                if (!drawingInteropImpl->m_PipeServer->WriteUInt64(
-                        (UINT64)val->GetIndex()))
+                if (!self->m_Interop->m_PipeServer->WriteUInt64(
+                        (UINT64)self->GetIndex()))
                   goto __error;
 
-                if (!drawingInteropImpl->m_PipeServer->Flush())
+                if (!self->m_Interop->m_PipeServer->Flush())
                   goto __error;
 
                 int hr;
-                if (!drawingInteropImpl->m_PipeServer->ReadInt32(hr))
+                if (!self->m_Interop->m_PipeServer->ReadInt32(hr))
                   goto __error;
 
                if (FAILED(hr)) {
                   unsigned int lastError;
-                 if (!drawingInteropImpl->m_PipeServer->ReadUInt32(lastError))
+                 if (!self->m_Interop->m_PipeServer->ReadUInt32(lastError))
                     goto __error;
                   CefPostTask(
                      TID_RENDERER,
-                     new CAfxTask([drawingInteropImpl,
+                     new CAfxTask([self,
                                                   fn_resolve, hr, lastError]() {
-                        drawingInteropImpl->m_Context->Enter();
+                               self->m_Interop->m_Context->Enter();
 
                         CefRefPtr<CefV8Value> result =
                             CefV8Value::CreateObject(nullptr, nullptr);
@@ -5708,37 +5849,37 @@ private:
                         CefV8ValueList args;
                         args.push_back(result);
                         fn_resolve->ExecuteFunction(NULL, args);
-                        drawingInteropImpl->m_Context->Exit();
+                               self->m_Interop->m_Context->Exit();
                       }));
                   return;
                 }
 
                 CefPostTask(TID_RENDERER,
-                            new CAfxTask([drawingInteropImpl,
-                                          fn_resolve, hr, val]() {
-                              drawingInteropImpl->m_Context->Enter();
+                            new CAfxTask([self,
+                                          fn_resolve, hr]() {
+                              self->m_Interop->m_Context->Enter();
 
-                              val->m_DoReleased = true;
+                              self->m_DoReleased = true;
 
                               CefV8ValueList args;
                               args.push_back(CefV8Value::CreateInt(hr));
 
                               fn_resolve->ExecuteFunction(NULL, args);
 
-                              drawingInteropImpl->m_Context->Exit();
+                              self->m_Interop->m_Context->Exit();
                             }));
                 return;
 
               __error:
-                drawingInteropImpl->Close();
+            self->m_Interop->Close();
 
                 CefPostTask(
                     TID_RENDERER,
                     new CAfxTask(
-                        [drawingInteropImpl, fn_reject]() {
-                          drawingInteropImpl->m_Context->Enter();
+                        [self, fn_reject]() {
+                          self->m_Interop->m_Context->Enter();
                           fn_reject->ExecuteFunction(NULL, CefV8ValueList());
-                          drawingInteropImpl->m_Context->Exit();
+                          self->m_Interop->m_Context->Exit();
                         }));
               });
             }
@@ -5747,16 +5888,23 @@ private:
           });
       /*
       afxObject->AddFunction(
-          "update", [val, drawingInteropImpl](
+          "update", [](
                         const CefString& name, CefRefPtr<CefV8Value> object,
-                        const CefV8ValueList& arguments,
-                        CefRefPtr<CefV8Value>& retval, CefString& exception) {
-            if (val->m_DoReleased) {
+                        const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+             CefString& exception) {
+            auto self =
+                GetAfxObject<AfxObjectType::AfxD3d9Texture, CAfxD3d9Texture>(
+                    object);
+            if (self == nullptr) {
+              exception = g_szInvalidThis;
+              return true;
+            }
+            if (self->m_DoReleased) {
               exception = g_szAlreadyReleased;
               return true;
             }
 
-            if (!drawingInteropImpl->m_InFlow) {
+            if (!self->m_Interop->m_InFlow) {
               exception = g_szOutOfFlow;
               return true;
             }
@@ -5766,7 +5914,7 @@ private:
             arguments[3]->IsUInt() && arguments[4]->IsUInt() &&
             arguments[5]->IsUInt() && arguments[6]->IsUInt() &&
             arguments[7]->IsUInt()) {
-              auto data = GetAfxUserData<AfxUserDataType::AfxData, CAfxData>(
+              auto data = GetAfxObject<AfxObjectType::AfxData, CAfxData>(
                   arguments[2]);
 
           auto rectLeft = arguments[1]->GetValue("left");
@@ -5780,47 +5928,47 @@ private:
           UINT32 totalBytesPerRow = arguments[6]->GetUIntValue();
           UINT32 numRows = arguments[7]->GetUIntValue();
 
-          if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+          if (!self->m_Interop->m_PipeServer->WriteUInt32(
                   (UINT32)DrawingReply::UpdateD3d9Texture))
             goto error_2;
-          if (!drawingInteropImpl->m_PipeServer->WriteUInt64(
+          if (!self->m_Interop->m_PipeServer->WriteUInt64(
                   (UINT64)val->GetIndex()))
             goto error_2;
-          if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+          if (!self->m_Interop->m_PipeServer->WriteUInt32(
                   (UINT32)arguments[0]->GetUIntValue()))
             goto error_2;
           if (nullptr != rectLeft && nullptr != rectTop &&
               nullptr != rectRight && nullptr != rectBottom &&
               rectLeft->IsInt() && rectTop->IsInt() && rectRight->IsInt() &&
               rectBottom->IsInt()) {
-            if (!drawingInteropImpl->m_PipeServer->WriteBoolean(true))
+            if (!self->m_Interop->m_PipeServer->WriteBoolean(true))
               goto error_2;
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+            if (!self->m_Interop->m_PipeServer->WriteUInt32(
                     (INT32)rectLeft->GetIntValue()))
               goto error_2;
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+            if (!self->m_Interop->m_PipeServer->WriteUInt32(
                     (INT32)rectTop->GetIntValue()))
               goto error_2;
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+            if (!self->m_Interop->m_PipeServer->WriteUInt32(
                     (INT32)rectRight->GetIntValue()))
               goto error_2;
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+            if (!self->m_Interop->m_PipeServer->WriteUInt32(
                     (INT32)rectBottom->GetIntValue()))
               goto error_2;
           } else {
-            if (!drawingInteropImpl->m_PipeServer->WriteBoolean(false))
+            if (!self->m_Interop->m_PipeServer->WriteBoolean(false))
               goto error_2;
           }
-          if (!drawingInteropImpl->m_PipeServer->WriteUInt32((UINT32)numRows))
+          if (!self->m_Interop->m_PipeServer->WriteUInt32((UINT32)numRows))
             goto error_2;
-          if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+          if (!self->m_Interop->m_PipeServer->WriteUInt32(
                   (UINT32)(dataBytesPerRow - columnOffsetBytes)))
             goto error_2;
 
           void* pData = (unsigned char*)data->GetData() + rowOffsetBytes;
 
           for (unsigned int i = 0; i < numRows; ++i) {
-            if (!drawingInteropImpl->m_PipeServer->WriteBytes(
+            if (!self->m_Interop->m_PipeServer->WriteBytes(
                     (unsigned char*)pData + columnOffsetBytes, 0,
                     dataBytesPerRow - columnOffsetBytes))
               goto error_2;
@@ -5833,85 +5981,92 @@ private:
       error_2:
               AFX_PRINT_ERROR("CAfxD3d9Texture.update", __LINE__)
 
-              drawingInteropImpl->Close();
+              self->m_Interop->Close();
           exception = g_szConnectionError;
           return true;
         }
 
         exception = g_szInvalidArguments;
         return true;
-          })
-          */
+      });*/
+   
 
       if (out)
-        *out = val;
-
-      obj->SetUserData(val);
+        *out =
+            GetAfxObject<AfxObjectType::AfxD3d9Texture,
+                            CAfxD3d9Texture>(obj);
       return obj;
     }
 
 
-    CAfxD3d9Texture()
-        : CAfxUserData(AfxUserDataType::AfxD3d9Texture) {
+    CAfxD3d9Texture(CefRefPtr<CDrawingInteropImpl> interop)
+        : CAfxObject(AfxObjectType::AfxD3d9Texture), m_Interop(interop) {
     }
 
    private:
     bool m_DoReleased = false;
+    CefRefPtr<CDrawingInteropImpl> m_Interop;
+
+    IMPLEMENT_REFCOUNTING(CAfxD3d9Texture);
   };
 
-  class CAfxD3d9PixelShader : public CAfxUserData {
+  class CAfxD3d9PixelShader : public CAfxObject {
    public:
     static CefRefPtr<CefV8Value> Create(
-        CefRefPtr<CDrawingInteropImpl> drawingInteropImpl,
+        CefRefPtr<CDrawingInteropImpl> interop,
         CefRefPtr<CAfxD3d9PixelShader>* out = nullptr) {
-      CefRefPtr<CAfxD3d9PixelShader> val = new CAfxD3d9PixelShader();
 
-      CefRefPtr<CAfxObject> afxObject;
-      auto obj = CAfxObject::Create(&afxObject);
+      CefRefPtr<CAfxObjectHandler> afxObject;
+      auto obj = CAfxObjectHandler::Create(new CAfxD3d9PixelShader(interop), &afxObject);
       afxObject->AddFunction(
           obj, "release",
-          [val, drawingInteropImpl](
+          [](
                                             const CefString& name,
                                             CefRefPtr<CefV8Value> object,
                                             const CefV8ValueList& arguments,
                                             CefRefPtr<CefV8Value>& retval,
                                             CefString& exception) {
+            auto self =
+                GetAfxObject<AfxObjectType::AfxD3d9PixelShader, CAfxD3d9PixelShader>(
+                    object);
+            if (self == nullptr) {
+              exception = g_szInvalidThis;
+              return true;
+            }
         if (2 <= arguments.size() && arguments[0]->IsFunction() &&
             arguments[1]->IsFunction()) {
-          if (val->m_DoReleased) {
+              if (self->m_DoReleased) {
             exception = g_szAlreadyReleased;
             return true;
           }
 
-          drawingInteropImpl->m_PipeQueue.Queue([drawingInteropImpl,
+          self->m_Interop->m_PipeQueue.Queue([self,
                                                  fn_resolve = arguments[0],
-                                                 fn_reject = arguments[1],
-                                                 index = val->GetIndex(),
-                                                 val]() {
-            if (!drawingInteropImpl->m_InFlow)
+                                                 fn_reject = arguments[1]]() {
+            if (!self->m_Interop->m_InFlow)
               goto __error;
 
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
+            if (!self->m_Interop->m_PipeServer->WriteUInt32(
                     (UINT32)DrawingReply::ReleaseD3d9PixelShader))
               goto __error;
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt64((UINT64)index))
+            if (!self->m_Interop->m_PipeServer->WriteUInt64((UINT64)self->GetIndex()))
               goto __error;
 
-            if (!drawingInteropImpl->m_PipeServer->Flush())
+            if (!self->m_Interop->m_PipeServer->Flush())
               goto __error;
 
             int hr;
-            if (!drawingInteropImpl->m_PipeServer->ReadInt32(hr))
+            if (!self->m_Interop->m_PipeServer->ReadInt32(hr))
               goto __error;
 
             if (FAILED(hr)) {
               unsigned int lastError;
-              if (!drawingInteropImpl->m_PipeServer->ReadUInt32(lastError))
+              if (!self->m_Interop->m_PipeServer->ReadUInt32(lastError))
                 goto __error;
               CefPostTask(TID_RENDERER,
-                          new CAfxTask([drawingInteropImpl,
+                          new CAfxTask([self,
                                         fn_resolve, hr, lastError]() {
-                            drawingInteropImpl->m_Context->Enter();
+                            self->m_Interop->m_Context->Enter();
 
                             CefRefPtr<CefV8Value> result =
                                 CefV8Value::CreateObject(nullptr, nullptr);
@@ -5924,36 +6079,36 @@ private:
                             CefV8ValueList args;
                             args.push_back(result);
                             fn_resolve->ExecuteFunction(NULL, args);
-                            drawingInteropImpl->m_Context->Exit();
+                            self->m_Interop->m_Context->Exit();
                           }));
               return;
             }
 
             CefPostTask(TID_RENDERER,
-                        new CAfxTask([drawingInteropImpl,
-                                      fn_resolve, hr, val]() {
-                          drawingInteropImpl->m_Context->Enter();
+                        new CAfxTask([self,
+                                      fn_resolve, hr]() {
+                          self->m_Interop->m_Context->Enter();
 
-                          val->m_DoReleased = true;
+                          self->m_DoReleased = true;
 
                           CefV8ValueList args;
                           args.push_back(CefV8Value::CreateInt(hr));
 
                           fn_resolve->ExecuteFunction(NULL, args);
 
-                          drawingInteropImpl->m_Context->Exit();
+                          self->m_Interop->m_Context->Exit();
                         }));
             return;
 
           __error:
-            drawingInteropImpl->Close();
+            self->m_Interop->Close();
 
             CefPostTask(TID_RENDERER,
-                        new CAfxTask([drawingInteropImpl,
+                        new CAfxTask([self,
                                       fn_reject]() {
-                          drawingInteropImpl->m_Context->Enter();
+                          self->m_Interop->m_Context->Enter();
                           fn_reject->ExecuteFunction(NULL, CefV8ValueList());
-                          drawingInteropImpl->m_Context->Exit();
+                          self->m_Interop->m_Context->Exit();
                         }));
           });
         }
@@ -5962,141 +6117,141 @@ private:
       });
  
       if (out)
-        *out = val;
+        *out = GetAfxObject<AfxObjectType::AfxD3d9PixelShader,
+                            CAfxD3d9PixelShader>(
+            obj);
 
-      obj->SetUserData(val);
       return obj;
     }
 
-    CAfxD3d9PixelShader()
-        : CAfxUserData(AfxUserDataType::AfxD3d9PixelShader) {
+    CAfxD3d9PixelShader(CefRefPtr<CDrawingInteropImpl> interop)
+        : CAfxObject(AfxObjectType::AfxD3d9PixelShader), m_Interop(interop) {
     }
 
 
    private:
     bool m_DoReleased = false;
+    CefRefPtr<CDrawingInteropImpl> m_Interop;
 
-     IMPLEMENT_REFCOUNTING(CAfxD3d9PixelShader);
+    IMPLEMENT_REFCOUNTING(CAfxD3d9PixelShader);
   };
 
-  class CAfxD3d9VertexShader : public CAfxUserData {
-    IMPLEMENT_REFCOUNTING(CAfxD3d9VertexShader);
-
+ class CAfxD3d9VertexShader : public CAfxObject {
    public:
     static CefRefPtr<CefV8Value> Create(
-        CefRefPtr<CDrawingInteropImpl> drawingInteropImpl,
+        CefRefPtr<CDrawingInteropImpl> interop,
         CefRefPtr<CAfxD3d9VertexShader>* out = nullptr) {
-      CefRefPtr<CAfxD3d9VertexShader> val = new CAfxD3d9VertexShader();
-
-      CefRefPtr<CAfxObject> afxObject;
-      auto obj = CAfxObject::Create(&afxObject);
-
- afxObject->AddFunction(
+      CefRefPtr<CAfxObjectHandler> afxObject;
+      auto obj = CAfxObjectHandler::Create(new CAfxD3d9VertexShader(interop),
+                                           &afxObject);
+      afxObject->AddFunction(
           obj, "release",
-          [val, drawingInteropImpl](
-                                            const CefString& name,
-                                            CefRefPtr<CefV8Value> object,
-                                            const CefV8ValueList& arguments,
-                                            CefRefPtr<CefV8Value>& retval,
-                                            CefString& exception) {
-        if (2 <= arguments.size() && arguments[0]->IsFunction() &&
-            arguments[1]->IsFunction()) {
-          if (val->m_DoReleased) {
-            exception = g_szAlreadyReleased;
-            return true;
-          }
-
-          drawingInteropImpl->m_PipeQueue.Queue([drawingInteropImpl,
-                                                 fn_resolve = arguments[0],
-                                                 fn_reject = arguments[1],
-                                                 index = val->GetIndex(),
-                                                 val]() {
-            if (!drawingInteropImpl->m_InFlow)
-              goto __error;
-
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt32(
-                    (UINT32)DrawingReply::ReleaseD3d9VertexShader))
-              goto __error;
-            if (!drawingInteropImpl->m_PipeServer->WriteUInt64((UINT64)index))
-              goto __error;
-
-            if (!drawingInteropImpl->m_PipeServer->Flush())
-              goto __error;
-
-            int hr;
-            if (!drawingInteropImpl->m_PipeServer->ReadInt32(hr))
-              goto __error;
-
-            if (FAILED(hr)) {
-              unsigned int lastError;
-              if (!drawingInteropImpl->m_PipeServer->ReadUInt32(lastError))
-                goto __error;
-              CefPostTask(TID_RENDERER,
-                          new CAfxTask([drawingInteropImpl,
-                                        fn_resolve, hr, lastError]() {
-                            drawingInteropImpl->m_Context->Enter();
-
-                            CefRefPtr<CefV8Value> result =
-                                CefV8Value::CreateObject(nullptr, nullptr);
-                            result->SetValue("hr", CefV8Value::CreateInt(hr),
-                                             V8_PROPERTY_ATTRIBUTE_NONE);
-                            result->SetValue("lastError",
-                                             CefV8Value::CreateUInt(lastError),
-                                             V8_PROPERTY_ATTRIBUTE_NONE);
-
-                            CefV8ValueList args;
-                            args.push_back(result);
-                            fn_resolve->ExecuteFunction(NULL, args);
-                            drawingInteropImpl->m_Context->Exit();
-                          }));
-              return;
+          [](const CefString& name, CefRefPtr<CefV8Value> object,
+             const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+             CefString& exception) {
+            auto self = GetAfxObject<AfxObjectType::AfxD3d9VertexShader,
+                                     CAfxD3d9VertexShader>(object);
+            if (self == nullptr) {
+              exception = g_szInvalidThis;
+              return true;
             }
+            if (2 <= arguments.size() && arguments[0]->IsFunction() &&
+                arguments[1]->IsFunction()) {
+              if (self->m_DoReleased) {
+                exception = g_szAlreadyReleased;
+                return true;
+              }
 
-            CefPostTask(TID_RENDERER,
-                        new CAfxTask([drawingInteropImpl,
-                                      fn_resolve, hr, val]() {
-                          drawingInteropImpl->m_Context->Enter();
+              self->m_Interop->m_PipeQueue.Queue([self,
+                                                  fn_resolve = arguments[0],
+                                                  fn_reject = arguments[1]]() {
+                if (!self->m_Interop->m_InFlow)
+                  goto __error;
 
-                          val->m_DoReleased = true;
+                if (!self->m_Interop->m_PipeServer->WriteUInt32(
+                        (UINT32)DrawingReply::ReleaseD3d9VertexShader))
+                  goto __error;
+                if (!self->m_Interop->m_PipeServer->WriteUInt64(
+                        (UINT64)self->GetIndex()))
+                  goto __error;
 
-                          CefV8ValueList args;
-                          args.push_back(CefV8Value::CreateInt(hr));
+                if (!self->m_Interop->m_PipeServer->Flush())
+                  goto __error;
 
-                          fn_resolve->ExecuteFunction(NULL, args);
+                int hr;
+                if (!self->m_Interop->m_PipeServer->ReadInt32(hr))
+                  goto __error;
 
-                          drawingInteropImpl->m_Context->Exit();
-                        }));
-            return;
+                if (FAILED(hr)) {
+                  unsigned int lastError;
+                  if (!self->m_Interop->m_PipeServer->ReadUInt32(lastError))
+                    goto __error;
+                  CefPostTask(
+                      TID_RENDERER,
+                      new CAfxTask([self, fn_resolve, hr, lastError]() {
+                        self->m_Interop->m_Context->Enter();
 
-          __error:
-            drawingInteropImpl->Close();
+                        CefRefPtr<CefV8Value> result =
+                            CefV8Value::CreateObject(nullptr, nullptr);
+                        result->SetValue("hr", CefV8Value::CreateInt(hr),
+                                         V8_PROPERTY_ATTRIBUTE_NONE);
+                        result->SetValue("lastError",
+                                         CefV8Value::CreateUInt(lastError),
+                                         V8_PROPERTY_ATTRIBUTE_NONE);
 
-            CefPostTask(TID_RENDERER,
-                        new CAfxTask([drawingInteropImpl,
-                                      fn_reject]() {
-                          drawingInteropImpl->m_Context->Enter();
-                          fn_reject->ExecuteFunction(NULL, CefV8ValueList());
-                          drawingInteropImpl->m_Context->Exit();
-                        }));
+                        CefV8ValueList args;
+                        args.push_back(result);
+                        fn_resolve->ExecuteFunction(NULL, args);
+                        self->m_Interop->m_Context->Exit();
+                      }));
+                  return;
+                }
+
+                CefPostTask(TID_RENDERER,
+                            new CAfxTask([self, fn_resolve, hr]() {
+                              self->m_Interop->m_Context->Enter();
+
+                              self->m_DoReleased = true;
+
+                              CefV8ValueList args;
+                              args.push_back(CefV8Value::CreateInt(hr));
+
+                              fn_resolve->ExecuteFunction(NULL, args);
+
+                              self->m_Interop->m_Context->Exit();
+                            }));
+                return;
+
+              __error:
+                self->m_Interop->Close();
+
+                CefPostTask(TID_RENDERER, new CAfxTask([self, fn_reject]() {
+                              self->m_Interop->m_Context->Enter();
+                              fn_reject->ExecuteFunction(NULL,
+                                                         CefV8ValueList());
+                              self->m_Interop->m_Context->Exit();
+                            }));
+              });
+            }
+            exception = g_szInvalidArguments;
+            return true;
           });
-        }
-        exception = g_szInvalidArguments;
-        return true;
-      });
 
       if (out)
-        *out = val;
+        *out = GetAfxObject<AfxObjectType::AfxD3d9VertexShader,
+                            CAfxD3d9VertexShader>(obj);
 
-      obj->SetUserData(val);
       return obj;
     }
 
-    CAfxD3d9VertexShader() : CAfxUserData(AfxUserDataType::AfxD3d9VertexShader) {
-
-    }
+    CAfxD3d9VertexShader(CefRefPtr<CDrawingInteropImpl> interop)
+        : CAfxObject(AfxObjectType::AfxD3d9VertexShader), m_Interop(interop) {}
 
    private:
     bool m_DoReleased = false;
+    CefRefPtr<CDrawingInteropImpl> m_Interop;
+
+        IMPLEMENT_REFCOUNTING(CAfxD3d9VertexShader);
   };
 
   bool m_InFlow = false;
@@ -6301,13 +6456,14 @@ CefRefPtr<CefV8Value> CreateDrawingInterop(CefRefPtr<CefBrowser> browser,
                                      out);
 }
 
-class CEngineInteropImpl : public CInterop,
+class CEngineInteropImpl : public CAfxObject,
+                           public CInterop,
                            public CAfxInterop,
                            public CPipeServer,
                            public CPipeClient {
   IMPLEMENT_REFCOUNTING(CEngineInteropImpl);
 
-public:
+ public:
 
   static CefRefPtr<CefV8Value> Create(CefRefPtr<CefBrowser> browser,
                                      CefRefPtr<CefFrame> frame,
@@ -6347,51 +6503,61 @@ public:
       return CefV8Value::CreateNull();
     }
 
-   CefRefPtr<CAfxObject> afxObject;
-   auto obj = CAfxObject::Create(&afxObject);
+    CefRefPtr<CAfxObjectHandler> afxObject;
+    auto obj = CAfxObjectHandler::Create(self, &afxObject);
 
    //
    self->m_Context = context;
 
-   afxObject->AddGetter(
+    afxObject->AddGetter(
        obj, "id",
-       [browser](const CefString& name, const CefRefPtr<CefV8Value> object,
-                 CefRefPtr<CefV8Value>& retval, CefString& exception) {
-         retval = CefV8Value::CreateInt(browser->GetIdentifier());
+       [](const CefString& name, const CefRefPtr<CefV8Value> object,
+          CefRefPtr<CefV8Value>& retval, CefString& exception) {
+         auto self = GetAfxObject<AfxObjectType::EngineInteropImpl,
+                                  CEngineInteropImpl>(object);
+         if (self == nullptr) {
+           exception = g_szInvalidThis;
+           return true;
+         }
 
+         retval = CefV8Value::CreateInt(self->m_BrowserId);
          return true;
        });
 
    afxObject->AddGetter(
        obj, "args",
-      [argStr](const CefString& name, const CefRefPtr<CefV8Value> object,
-        CefRefPtr<CefV8Value>& retval, CefString& exception) {
-        retval = CefV8Value::CreateString(argStr);
-        return true;
-    });
+       [argStr](const CefString& name, const CefRefPtr<CefV8Value> object,
+                CefRefPtr<CefV8Value>& retval, CefString& exception) {
+         retval = CefV8Value::CreateString(argStr);
+         return true;
+       });
 
    afxObject->AddFunction(
        obj, "sendMessage",
-       [self](const CefString& name,
-                                                CefRefPtr<CefV8Value> object,
-                                                const CefV8ValueList& arguments,
-                                                CefRefPtr<CefV8Value>& retval,
-                                                CefString& exceptionoverride) {
-     if (4 <= arguments.size() && arguments[0]->IsFunction() &&
-         arguments[1]->IsFunction() && arguments[2]->IsInt() &&
-         arguments[3]->IsString()) {
-       self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
-                                 fn_reject = arguments[1],
-                                 id = arguments[2]->GetIntValue(),
-                                 str = arguments[3]->GetStringValue()]() {
+       [](const CefString& name, CefRefPtr<CefV8Value> object,
+          const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+          CefString& exceptionoverride) {
+         auto self = GetAfxObject<AfxObjectType::EngineInteropImpl,
+                                  CEngineInteropImpl>(object);
+         if (self == nullptr) {
+           exceptionoverride = g_szInvalidThis;
+           return true;
+         }
+
+         if (4 <= arguments.size() && arguments[0]->IsFunction() &&
+             arguments[1]->IsFunction() && arguments[2]->IsInt() &&
+             arguments[3]->IsString()) {
+           self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
+                                       fn_reject = arguments[1],
+                                       id = arguments[2]->GetIntValue(),
+                                       str = arguments[3]->GetStringValue()]() {
              try {
                self->WriteInt32((int)HostMessage::Message);
                self->WriteInt32(id);
                self->WriteStringUTF8(str.ToString().c_str());
                self->Flush();
 
-               CefPostTask(TID_RENDERER,
-                           new CAfxTask([self, fn_resolve]() {
+               CefPostTask(TID_RENDERER, new CAfxTask([self, fn_resolve]() {
                              self->m_Context->Enter();
                              fn_resolve->ExecuteFunction(NULL,
                                                          CefV8ValueList());
@@ -6400,34 +6566,40 @@ public:
              } catch (const std::exception& e) {
                CefPostTask(
                    TID_RENDERER,
-                   new CAfxTask([self, fn_reject,
-                                 error_msg = std::string(e.what())]() {
-                     self->m_Context->Enter();
-                     CefV8ValueList args;
-                     args.push_back(CefV8Value::CreateString(error_msg));
-                     fn_reject->ExecuteFunction(NULL, args);
-                     self->m_Context->Exit();
-                   }));
-
+                   new CAfxTask(
+                       [self, fn_reject, error_msg = std::string(e.what())]() {
+                         self->m_Context->Enter();
+                         CefV8ValueList args;
+                         args.push_back(CefV8Value::CreateString(error_msg));
+                         fn_reject->ExecuteFunction(NULL, args);
+                         self->m_Context->Exit();
+                       }));
              }
            });
 
-       return true;
-     }
+           return true;
+         }
 
-     exceptionoverride = g_szInvalidArguments;
-     return true;
-   });
+         exceptionoverride = g_szInvalidArguments;
+         return true;
+       });
 
    self->m_OnMessage = afxObject->AddCallback(obj, "onMessage");
 
    self->m_OnError = afxObject->AddCallback(obj, "onError");
 
-    afxObject->AddFunction(
+   afxObject->AddFunction(
        obj, "setPipeName",
-       [self](const CefString& name, CefRefPtr<CefV8Value> object,
-              const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-              CefString& exceptionoverride) {
+       [](const CefString& name, CefRefPtr<CefV8Value> object,
+          const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+          CefString& exceptionoverride) {
+         auto self = GetAfxObject<AfxObjectType::EngineInteropImpl,
+                                  CEngineInteropImpl>(object);
+         if (self == nullptr) {
+           exceptionoverride = g_szInvalidThis;
+           return true;
+         }
+
          if (1 <= arguments.size() && arguments[0]->IsString()) {
            self->m_InteropQueue.Queue(
                [self, pipeName = arguments[0]->GetStringValue().ToString()]() {
@@ -6440,72 +6612,86 @@ public:
          return true;
        });
 
-    afxObject->AddFunction(
-        obj, "connect",
-        [self](const CefString& name,
-                                             CefRefPtr<CefV8Value> object,
-                                             const CefV8ValueList& arguments,
-                                             CefRefPtr<CefV8Value>& retval,
-                                             CefString& exceptionoverride) {
-      if (2 <= arguments.size() && arguments[0]->IsFunction() &&
-          arguments[1]->IsFunction()) {
-        self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
-                                 fn_reject = arguments[1]]() {
-          if (self->Connection()) {
+afxObject->AddFunction(
+       obj, "connect",
+       [](const CefString& name, CefRefPtr<CefV8Value> object,
+          const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+          CefString& exceptionoverride) {
+         auto self = GetAfxObject<AfxObjectType::EngineInteropImpl,
+                                  CEngineInteropImpl>(object);
+         if (self == nullptr) {
+           exceptionoverride = g_szInvalidThis;
+           return true;
+         }
 
-            self->m_PumpResumeAt = 0;
-            self->m_NewConnection = true;
+         if (2 <= arguments.size() && arguments[0]->IsFunction() &&
+             arguments[1]->IsFunction()) {
+           self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
+                                       fn_reject = arguments[1]]() {
+             if (self->Connection()) {
+               CefPostTask(TID_RENDERER, new CAfxTask([self, fn_resolve]() {
+                             self->m_Context->Enter();
+                             fn_resolve->ExecuteFunction(NULL,
+                                                         CefV8ValueList());
+                             self->m_Context->Exit();
+                           }));
+             } else {
+               CefPostTask(TID_RENDERER, new CAfxTask([self, fn_reject]() {
+                             self->m_Context->Enter();
+                             fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                             self->m_Context->Exit();
+                           }));
+             }
+           });
+           return true;
+         }
+         exceptionoverride = g_szInvalidArguments;
+         return true;
+       });
 
-            CefPostTask(TID_RENDERER,
-                        new CAfxTask([self, fn_resolve]() {
-                          self->m_Context->Enter();
-                          fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
-                          self->m_Context->Exit();
-                        }));
-          } else {
-            CefPostTask(TID_RENDERER,
-                        new CAfxTask([self, fn_reject]() {
-                          self->m_Context->Enter();
-                          fn_reject->ExecuteFunction(NULL, CefV8ValueList());
-                          self->m_Context->Exit();
-                        }));
-          }
-        });
-        return true;
-      }
-      exceptionoverride = g_szInvalidArguments;
-      return true;
-    });
+   afxObject->AddFunction(
+       obj, "close",
+       [](const CefString& name, CefRefPtr<CefV8Value> object,
+          const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+          CefString& exceptionoverride) {
+         auto self = GetAfxObject<AfxObjectType::EngineInteropImpl,
+                                  CEngineInteropImpl>(object);
+         if (self == nullptr) {
+           exceptionoverride = g_szInvalidThis;
+           return true;
+         }
 
-    afxObject->AddFunction(
-        obj, "close",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
-               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
-          if (2 <= arguments.size() && arguments[0]->IsFunction() &&
-              arguments[1]->IsFunction()) {
-            self->m_InteropQueue.Queue([self, fn_resolve = arguments[0]]() {
-              self->Close();
-              CefPostTask(TID_RENDERER,
-                          new CAfxTask([self, fn_resolve]() {
-                            self->m_Context->Enter();
-                            fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
-                            self->m_Context->Exit();
-                          }));
-            });
-            return true;
-          }
-          exceptionoverride = g_szInvalidArguments;
-          return true;
-        });
+         if (2 <= arguments.size() && arguments[0]->IsFunction() &&
+             arguments[1]->IsFunction()) {
+           self->m_InteropQueue.Queue([self, fn_resolve = arguments[0]]() {
+             self->Close();
+             CefPostTask(TID_RENDERER, new CAfxTask([self, fn_resolve]() {
+                           self->m_Context->Enter();
+                           fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                           self->m_Context->Exit();
+                         }));
+           });
+           return true;
+         }
+         exceptionoverride = g_szInvalidArguments;
+         return true;
+       });
 
     afxObject->AddFunction(
         obj, "pump",
-        [self](const CefString& name,
+        [](const CefString& name,
                                           CefRefPtr<CefV8Value> object,
                                           const CefV8ValueList& arguments,
                                           CefRefPtr<CefV8Value>& retval,
-                                          CefString& exceptionoverride) {
+          CefString& exceptionoverride) {
+         auto self =
+             GetAfxObject<AfxObjectType::EngineInteropImpl, CEngineInteropImpl>(
+                 object);
+         if (self == nullptr) {
+           exceptionoverride = g_szInvalidThis;
+           return true;
+         }
+
           if (3 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction()) {
         self->m_PipeQueue.Queue(
@@ -6658,9 +6844,16 @@ public:
     afxObject->AddFunction(
         obj, 
        "gameEventAllowAdd",
-       [self](const CefString& name, CefRefPtr<CefV8Value> object,
+       [](const CefString& name, CefRefPtr<CefV8Value> object,
               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-              CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::EngineInteropImpl,
+                                   CEngineInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+
          if (1 == arguments.size() &&
              arguments[0]->IsString()) {
 
@@ -6680,9 +6873,16 @@ public:
     afxObject->AddFunction(
         obj, 
        "gameEventAllowRemove",
-       [self](const CefString& name, CefRefPtr<CefV8Value> object,
+       [](const CefString& name, CefRefPtr<CefV8Value> object,
               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-              CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::EngineInteropImpl,
+                                   CEngineInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+
          if (1 == arguments.size() &&
              arguments[0]->IsString()) {
 
@@ -6702,9 +6902,15 @@ public:
     afxObject->AddFunction(
         obj, 
        "gameEventDenyAdd",
-       [self](const CefString& name, CefRefPtr<CefV8Value> object,
+       [](const CefString& name, CefRefPtr<CefV8Value> object,
               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-              CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::EngineInteropImpl,
+                                   CEngineInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
          if (1 == arguments.size() &&
              arguments[0]->IsString()) {
 
@@ -6723,9 +6929,15 @@ public:
        });
     afxObject->AddFunction(
         obj, "gameEventDenyRemove",
-       [self](const CefString& name, CefRefPtr<CefV8Value> object,
+       [](const CefString& name, CefRefPtr<CefV8Value> object,
               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-              CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::EngineInteropImpl,
+                                   CEngineInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
          if (1 == arguments.size() &&
              arguments[0]->IsString()) {
 
@@ -6747,9 +6959,15 @@ public:
     afxObject->AddFunction(
         obj, 
        "gameEventSetEnrichment",
-       [self](const CefString& name, CefRefPtr<CefV8Value> object,
+       [](const CefString& name, CefRefPtr<CefV8Value> object,
               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-              CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::EngineInteropImpl,
+                                   CEngineInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
          if (3 == arguments.size() && arguments[0]->IsString() &&
              arguments[1]->IsString() && arguments[2]->IsUInt()) {
 
@@ -6770,9 +6988,16 @@ public:
        });
     afxObject->AddFunction(
         obj, "gameEventSetTransmitClientTime",
-       [self](const CefString& name, CefRefPtr<CefV8Value> object,
+       [](const CefString& name, CefRefPtr<CefV8Value> object,
               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-              CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::EngineInteropImpl,
+                                   CEngineInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+
          if (1 == arguments.size() && arguments[0]->IsBool()) {
            self->m_PipeQueue.Queue(
                [self, value = arguments[0]->GetBoolValue()] {
@@ -6791,9 +7016,16 @@ public:
    afxObject->AddFunction(
         obj, 
        "gameEventSetTransmitTick",
-       [self](const CefString& name, CefRefPtr<CefV8Value> object,
+       [](const CefString& name, CefRefPtr<CefV8Value> object,
               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-              CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::EngineInteropImpl,
+                                   CEngineInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+
          if (1 == arguments.size() && arguments[0]->IsBool()) {
            self->m_PipeQueue.Queue(
                [self, value = arguments[0]->GetBoolValue()] {
@@ -6812,9 +7044,17 @@ public:
    afxObject->AddFunction(
        obj, 
        "gameEventSetTransmitSystemTime",
-       [self](const CefString& name, CefRefPtr<CefV8Value> object,
+       [](const CefString& name, CefRefPtr<CefV8Value> object,
               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-              CefString& exceptionoverride) {
+          CefString& exceptionoverride) {
+         auto self =
+             GetAfxObject<AfxObjectType::EngineInteropImpl, CEngineInteropImpl>(
+                 object);
+         if (self == nullptr) {
+           exceptionoverride = g_szInvalidThis;
+           return true;
+         }
+
          if (1 == arguments.size() && arguments[0]->IsBool()) {
            self->m_PipeQueue.Queue(
                [self, value = arguments[0]->GetBoolValue()] {
@@ -6835,7 +7075,6 @@ public:
    if (out)
      *out = self;
 
-   obj->SetUserData(self);
    return obj;
 }
 
@@ -6870,7 +7109,7 @@ private:
 
      
   CEngineInteropImpl(int browserId)
-      : CAfxInterop("advancedfxInterop"),
+      : CAfxObject(AfxObjectType::EngineInteropImpl), CAfxInterop("advancedfxInterop"),
         m_BrowserId(browserId),
         m_ServerVersion(7, 0, 0, 0) {
     m_WaitConnectionThread =
@@ -7692,6 +7931,7 @@ private:
   CBoolCalcCallbacks m_BoolCalcCallbacks;
   CIntCalcCallbacks m_IntCalcCallbacks;
 
+
   int m_Width = 640;
   int m_Height = 480;
 
@@ -8360,9 +8600,11 @@ CefRefPtr<CefV8Value> CreateEngineInterop(CefRefPtr<CefBrowser> browser,
                                     out);
 }
 
-class CInteropImpl : public CInterop,
+class CInteropImpl : public CAfxObject,
+    public CInterop,
                      public CPipeServer,
-                     public CPipeClient{ 
+                     public CPipeClient{
+  IMPLEMENT_REFCOUNTING(CInteropImpl);
  public:
   static CefRefPtr<CefV8Value> Create(CefRefPtr<CefBrowser> browser,
                                       CefRefPtr<CefFrame> frame,
@@ -8400,36 +8642,100 @@ class CInteropImpl : public CInterop,
       return CefV8Value::CreateNull();
     }
 
-    CefRefPtr<CAfxObject> afxObject;
-    auto obj = CAfxObject::Create(&afxObject);
+    CefRefPtr<CAfxObjectHandler> afxObject;
+    auto obj = CAfxObjectHandler::Create(self, &afxObject);
 
     self->m_Context = context;
 
     afxObject->AddGetter(
-        obj, 
-        "id",
-        [browser](const CefString& name, const CefRefPtr<CefV8Value> object,
-                  CefRefPtr<CefV8Value>& retval, CefString& exception) {
-          retval = CefV8Value::CreateInt(browser->GetIdentifier());
+        obj, "id",
+        [](const CefString& name, const CefRefPtr<CefV8Value> object,
+           CefRefPtr<CefV8Value>& retval, CefString& exception) {
+          auto self =
+              GetAfxObject<AfxObjectType::InteropImpl,
+                                   CInteropImpl>(object);
+          if (self == nullptr) {
+            exception = g_szInvalidThis;
+            return true;
+          }
 
+          retval = CefV8Value::CreateInt(self->m_BrowserId);
           return true;
         });
 
-   afxObject->AddGetter(
-        obj, 
-      "args",
-      [argStr](const CefString& name, const CefRefPtr<CefV8Value> object,
-        CefRefPtr<CefV8Value>& retval, CefString& exception) {
-        retval = CefV8Value::CreateString(argStr);
-        return true;
-    });
+    afxObject->AddGetter(
+        obj, "args",
+        [argStr](const CefString& name, const CefRefPtr<CefV8Value> object,
+                 CefRefPtr<CefV8Value>& retval, CefString& exception) {
+          retval = CefV8Value::CreateString(argStr);
+          return true;
+        });
+
+    afxObject->AddFunction(
+        obj, "sendMessage",
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
+           const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+           CefString& exceptionoverride) {
+          auto self =
+              GetAfxObject<AfxObjectType::InteropImpl, CInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+
+          if (4 <= arguments.size() && arguments[0]->IsFunction() &&
+              arguments[1]->IsFunction() && arguments[2]->IsInt() &&
+              arguments[3]->IsString()) {
+            self->m_InteropQueue.Queue(
+                [self, fn_resolve = arguments[0], fn_reject = arguments[1],
+                 id = arguments[2]->GetIntValue(),
+                 str = arguments[3]->GetStringValue()]() {
+                  try {
+                    self->WriteInt32((int)HostMessage::Message);
+                    self->WriteInt32(id);
+                    self->WriteStringUTF8(str.ToString().c_str());
+                    self->Flush();
+
+                    CefPostTask(
+                        TID_RENDERER, new CAfxTask([self, fn_resolve]() {
+                          self->m_Context->Enter();
+                          fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                          self->m_Context->Exit();
+                        }));
+                  } catch (const std::exception& e) {
+                    CefPostTask(
+                        TID_RENDERER,
+                        new CAfxTask([self, fn_reject,
+                                      error_msg = std::string(e.what())]() {
+                          self->m_Context->Enter();
+                          CefV8ValueList args;
+                          args.push_back(CefV8Value::CreateString(error_msg));
+                          fn_reject->ExecuteFunction(NULL, args);
+                          self->m_Context->Exit();
+                        }));
+                  }
+                });
+
+            return true;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return true;
+        });
 
 afxObject->AddFunction(
        obj, 
         "createDrawingInterop",
-        [self](const CefString& name, CefRefPtr<CefV8Value> object,
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
                const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-               CefString& exceptionoverride) {
+           CefString& exceptionoverride) {
+          auto self =
+              GetAfxObject<AfxObjectType::InteropImpl, CInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+
           if (4 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction() && arguments[2]->IsString() &&
               arguments[3]->IsString()) {
@@ -8475,9 +8781,16 @@ afxObject->AddFunction(
 afxObject->AddFunction(
     obj, 
     "createEngineInterop",
-    [self](const CefString& name, CefRefPtr<CefV8Value> object,
+    [](const CefString& name, CefRefPtr<CefV8Value> object,
            const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-           CefString& exceptionoverride) {
+       CefString& exceptionoverride) {
+      auto self =
+          GetAfxObject<AfxObjectType::InteropImpl, CInteropImpl>(object);
+      if (self == nullptr) {
+        exceptionoverride = g_szInvalidThis;
+        return true;
+      }
+
       if (4 <= arguments.size() && arguments[0]->IsFunction() &&
           arguments[1]->IsFunction() && arguments[2]->IsString() &&
           arguments[3]->IsString()) {
@@ -8519,52 +8832,6 @@ afxObject->AddFunction(
       return true;
     });
 
-afxObject->AddFunction(
-    obj, "sendMessage",
-    [self](const CefString& name,
-                                             CefRefPtr<CefV8Value> object,
-                                             const CefV8ValueList& arguments,
-                                             CefRefPtr<CefV8Value>& retval,
-                                             CefString& exceptionoverride) {
-  if (4 <= arguments.size() && arguments[0]->IsFunction() &&
-      arguments[1]->IsFunction() && arguments[2]->IsInt() &&
-      arguments[3]->IsString()) {
-    self->m_InteropQueue.Queue([self, fn_resolve = arguments[0], fn_reject = arguments[1],
-                      id = arguments[2]->GetIntValue(),
-                      str = arguments[3]->GetStringValue()]() {
-          try {
-            self->WriteInt32((int)HostMessage::Message);
-            self->WriteInt32(id);
-            self->WriteStringUTF8(str.ToString().c_str());
-            self->Flush();
-
-            CefPostTask(TID_RENDERER,
-                        new CAfxTask([self, fn_resolve]() {
-                          self->m_Context->Enter();
-                          fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
-                          self->m_Context->Exit();
-                        }));
-          } catch (const std::exception& e) {
-            CefPostTask(TID_RENDERER,
-                        new CAfxTask([self, fn_reject,
-                                      error_msg = std::string(e.what())]() {
-                          self->m_Context->Enter();
-                          CefV8ValueList args;
-                          args.push_back(CefV8Value::CreateString(error_msg));
-                          fn_reject->ExecuteFunction(NULL, args);
-                          self->m_Context->Exit();
-                        }));
-
-          }
-        });
-
-    return true;
-  }
-
-  exceptionoverride = g_szInvalidArguments;
-  return true;
-});
-
     self->m_OnMessage = afxObject->AddCallback(obj, "onMessage");
 
     self->m_OnError = afxObject->AddCallback(obj, "onError");
@@ -8573,8 +8840,6 @@ afxObject->AddFunction(
 
     if (out)
       *out = self;
-
-    obj->SetUserData(self);
 
     return obj;
   }
@@ -8602,7 +8867,7 @@ afxObject->AddFunction(
   CefRefPtr<CefV8Context> m_Context;
 
 public:
-   CInteropImpl(int browserId) : m_BrowserId(browserId) {
+   CInteropImpl(int browserId) : CAfxObject(AfxObjectType::InteropImpl), m_BrowserId(browserId) {
      m_WaitConnectionThread =
          std::thread(&CInteropImpl::WaitConnectionThreadHandler, this);
    }
@@ -8685,7 +8950,6 @@ bool m_WaitConnectionQuit = false;
    CInteropImpl* m_Host;
  };
 
-  IMPLEMENT_REFCOUNTING(CInteropImpl);
 };
 
 CefRefPtr<CefV8Value> CreateInterop(CefRefPtr<CefBrowser> browser,

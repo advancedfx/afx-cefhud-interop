@@ -1,6 +1,7 @@
 #pragma once
 
 // TODO:
+// 
 // d3d9CreateVertexBuffer
 // d3d9CreateIndexbuffer
 // d3d9UpdatTexture
@@ -15,9 +16,13 @@
 // d3d9SetPixelShaderConstantI
 // d3d9DrawPrimitive
 // d3d9DrawIndexedPrimitive
-// CAfxD3d9IndexBuffer functions
-// CAfxD3d9VertexBuffer functions
-// CAfxD3d9Texture functions (updates)
+// CAfxD3d9IndexBuffer harden release
+// CAfxD3d9IndexBuffer harden release, do update
+// CAfxD3d9VertexBuffer harden release, do update
+// CAfxD3d9Texture harden relase, do update
+// CAfxD3d9PixelShader harden release
+// CAfxD3d9VertexShader harden release
+//
 // calcs
 // addCalcHandle
 // addCalcVecAng
@@ -25,6 +30,8 @@
 // addCalcFov
 // addCalcBool
 // addCalcInt
+//
+// Finish support for bluring background / drawing CS background into CEF
 
 #include <include/cef_base.h>
 #include <include/cef_v8.h>
@@ -312,7 +319,7 @@ enum class HostMessage : int {
   GpuRelaseShareHandle = 8
 };
 
-class CInterop : public CefBaseRefCounted {
+class CInterop : public virtual CefBaseRefCounted {
   public:
     virtual void CloseInterop() = 0;
 
