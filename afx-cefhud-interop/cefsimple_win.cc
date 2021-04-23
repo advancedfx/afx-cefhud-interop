@@ -114,9 +114,9 @@ void STDMETHODCALLTYPE My_ClearRenderTargetView(
       auto it = g_Textures.find((ID3D11Texture2D*)resource);
       if(it != g_Textures.end())
       {
-        FLOAT col[4] = {0,0,0.5,0.5};
+        //FLOAT col[4] = {0,0,0.5,0.5};
 
-        g_Org_ClearRenderTargetView(This, pRenderTargetView, col);
+        g_Org_ClearRenderTargetView(This, pRenderTargetView, ColorRGBA);
 
         HANDLE hHandle = it->second;
 
