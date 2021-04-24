@@ -2251,7 +2251,7 @@ afxObject->AddFunction(
           }
 
         if (1 <= arguments.size() && arguments[0]->IsString()) {
-        self->m_InteropQueue.Queue(
+        self->m_PipeQueue.Queue(
             [self, pipeName = arguments[0]->GetStringValue().ToString()]() {
               self->SetPipeName(pipeName.c_str());
             });
@@ -2282,7 +2282,7 @@ afxObject->AddFunction(
 
       if (2 <= arguments.size() && arguments[0]->IsFunction() &&
           arguments[1]->IsFunction()) {
-        self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
+        self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
                                  fn_reject = arguments[1]]() {
           if (self->Connection()) {
 
@@ -2305,6 +2305,23 @@ afxObject->AddFunction(
       return true;
     });
 
+  afxObject->AddFunction(
+        obj, "cancel",
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+           CefString& exceptionoverride) {
+          auto self = GetAfxObject<AfxObjectType::DrawingInteropImpl,
+                                   CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+
+          CancelSynchronousIo(self->m_PipeQueue.GetNativeThreadHandle());
+
+          return true;
+        });
+
     afxObject->AddFunction(
         obj, "close",
         [](const CefString& name, CefRefPtr<CefV8Value> object,
@@ -2319,7 +2336,8 @@ afxObject->AddFunction(
 
           if (2 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction()) {
-            self->m_InteropQueue.Queue([self, fn_resolve = arguments[0]]() {
+
+            self->m_PipeQueue.Queue([self, fn_resolve = arguments[0]]() {
               self->Close();
               CefPostTask(TID_RENDERER,
                           new CAfxTask([self, fn_resolve]() {
@@ -2333,6 +2351,7 @@ afxObject->AddFunction(
           exceptionoverride = g_szInvalidArguments;
           return true;
         });
+
     afxObject->AddFunction(
         obj, "pumpBegin",
         [](const CefString& name,
@@ -7671,7 +7690,7 @@ class CEngineInteropImpl : public CAfxObject,
          }
 
          if (1 <= arguments.size() && arguments[0]->IsString()) {
-           self->m_InteropQueue.Queue(
+           self->m_PipeQueue.Queue(
                [self, pipeName = arguments[0]->GetStringValue().ToString()]() {
                  self->SetPipeName(pipeName.c_str());
                });
@@ -7696,7 +7715,7 @@ afxObject->AddFunction(
 
          if (2 <= arguments.size() && arguments[0]->IsFunction() &&
              arguments[1]->IsFunction()) {
-           self->m_InteropQueue.Queue([self, fn_resolve = arguments[0],
+           self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
                                        fn_reject = arguments[1]]() {
              if (self->Connection()) {
                CefPostTask(TID_RENDERER, new CAfxTask([self, fn_resolve]() {
@@ -7719,6 +7738,23 @@ afxObject->AddFunction(
          return true;
        });
 
+  afxObject->AddFunction(
+        obj, "cancel",
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+           CefString& exceptionoverride) {
+         auto self = GetAfxObject<AfxObjectType::EngineInteropImpl,
+                                  CEngineInteropImpl>(object);
+         if (self == nullptr) {
+           exceptionoverride = g_szInvalidThis;
+           return true;
+         }
+
+          CancelSynchronousIo(self->m_PipeQueue.GetNativeThreadHandle());
+
+          return true;
+        });
+
    afxObject->AddFunction(
        obj, "close",
        [](const CefString& name, CefRefPtr<CefV8Value> object,
@@ -7733,7 +7769,8 @@ afxObject->AddFunction(
 
          if (2 <= arguments.size() && arguments[0]->IsFunction() &&
              arguments[1]->IsFunction()) {
-           self->m_InteropQueue.Queue([self, fn_resolve = arguments[0]]() {
+
+           self->m_PipeQueue.Queue([self, fn_resolve = arguments[0]]() {
              self->Close();
              CefPostTask(TID_RENDERER, new CAfxTask([self, fn_resolve]() {
                            self->m_Context->Enter();
@@ -8217,6 +8254,12 @@ private:
         m_ServerVersion(7, 0, 0, 0) {
     m_WaitConnectionThread =
         std::thread(&CEngineInteropImpl::WaitConnectionThreadHandler, this);
+  }
+
+  
+  virtual void OnConnect() OVERRIDE {
+    m_PumpResumeAt = 0;
+    m_NewConnection = true;
   }
 
   virtual advancedfx::interop::CPipeServerConnectionThread* OnNewConnection(

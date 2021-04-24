@@ -53,6 +53,10 @@ class CThreadedQueue {
   CThreadedQueue(CThreadedQueue&& rhs) = delete;
   CThreadedQueue& operator=(CThreadedQueue&& rhs) = delete;
 
+  std::thread::native_handle_type GetNativeThreadHandle(){
+    return m_Thread.native_handle();
+  }
+
  private:
   std::mutex m_Lock;
   std::thread m_Thread;

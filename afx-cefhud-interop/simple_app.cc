@@ -102,19 +102,9 @@ void SimpleApp::OnContextInitialized() {
   browser_settings.file_access_from_file_urls = STATE_ENABLED;
   browser_settings.windowless_frame_rate = 60;
 
-  std::string argUrl;
+  std::string argUrl = command_line->GetSwitchValue("url");
 
-  // Check if a "--url=" value was provided via the command-line. If so, use
-  // that instead of the default URL.
-  argUrl = command_line->GetSwitchValue("url");
-  if (argUrl.empty()) {
-    std::stringstream ss;
-    ss << "<html><body bgcolor=\"white\">"
-          "<h2>You forgot to pass the URL d(o)(O)b</h2></body></html>";
-    argUrl = GetDataURI(ss.str(), "text/html");
-  }
-
-  {
+ {
     // Information used when creating the native window.
     CefWindowInfo window_info;
 
@@ -134,47 +124,57 @@ void SimpleApp::OnContextInitialized() {
     window_info.external_begin_frame_enabled = bWindow ? false : true; // No need to draw what one can't see.
 #endif
 
-    CefRefPtr<CefDictionaryValue> _extra_info = CefDictionaryValue::Create();
-    _extra_info->SetString("interopType", "index");
+    std::string url;
 
-    auto argStr = CefValue::Create();
-    auto argCmd = CefDictionaryValue::Create();
-    argCmd->SetString("commandLineString",
-                      command_line->GetCommandLineString());
-    argStr->SetDictionary(argCmd);
-
-    _extra_info->SetString("argStr", CefWriteJSON(argStr, JSON_WRITER_DEFAULT));
-    _extra_info->SetInt("handlerId", GetCurrentProcessId());
-
-
-    auto val = CefValue::Create();
-    val->SetDictionary(_extra_info);
-
-    std::string prefix;
-    std::string query;
-    std::string suffix;
-
-    size_t pos_hash = argUrl.find("#"); 
-    if(std::string::npos != pos_hash)
-    {
-      prefix = argUrl.substr(0, pos_hash);
-      suffix = argUrl.substr(pos_hash);
+    if (argUrl.empty()) {
+      std::stringstream ss;
+      ss << "<html><body bgcolor=\"white\">"
+            "<h2>You forgot to pass the URL d(o)(O)b</h2></body></html>";
+      url = GetDataURI(ss.str(), "text/html");
     }
     else {
-      prefix = argUrl;
+      CefRefPtr<CefDictionaryValue> _extra_info = CefDictionaryValue::Create();
+      _extra_info->SetString("interopType", "index");
+
+      auto argStr = CefValue::Create();
+      auto argCmd = CefDictionaryValue::Create();
+      argCmd->SetString("commandLineString",
+                        command_line->GetCommandLineString());
+      argStr->SetDictionary(argCmd);
+
+      _extra_info->SetString("argStr", CefWriteJSON(argStr, JSON_WRITER_DEFAULT));
+      _extra_info->SetInt("handlerId", GetCurrentProcessId());
+
+
+      auto val = CefValue::Create();
+      val->SetDictionary(_extra_info);
+
+      std::string prefix;
+      std::string query;
+      std::string suffix;
+
+      size_t pos_hash = argUrl.find("#"); 
+      if(std::string::npos != pos_hash)
+      {
+        prefix = argUrl.substr(0, pos_hash);
+        suffix = argUrl.substr(pos_hash);
+      }
+      else {
+        prefix = argUrl;
+      }
+      size_t pos_query = prefix.find("?");
+
+      if(std::string::npos != pos_query)
+      {
+        query = prefix.substr(pos_query + 1);
+        prefix = prefix.substr(0, pos_query);
+      }
+
+      if(0 < query.size()) query += "&";
+      query += "afx="+CefURIEncode(CefWriteJSON(val, JSON_WRITER_DEFAULT), false).ToString();
+
+      url = prefix+"?"+query+suffix;
     }
-    size_t pos_query = prefix.find("?");
-
-    if(std::string::npos != pos_query)
-    {
-      query = prefix.substr(pos_query + 1);
-      prefix = prefix.substr(0, pos_query);
-    }
-
-    if(0 < query.size()) query += "&";
-    query += "afx="+CefURIEncode(CefWriteJSON(val, JSON_WRITER_DEFAULT), false).ToString();
-
-    std::string url = prefix+"?"+query+suffix;
 
     // Create the first browser window.
     CefBrowserHost::CreateBrowser(window_info, handler, url, browser_settings,

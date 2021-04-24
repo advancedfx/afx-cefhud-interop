@@ -539,7 +539,7 @@ function AfxDrawingInterop(interop,args) {
 	this.engineInteropId = null;
 
 	this.connected = false;
-	this.messagePromise = Promise.resolve();
+	this.messageQueues = {};
 
 	this.renderQueue = [];
 	this.firstRender = true;
@@ -603,9 +603,8 @@ function AfxDrawingInterop(interop,args) {
 			this.engineInteropId = senderId;
 			await this.connect(senderId);
 		},
-		"disconnect" : async function(senderId) {
-			await this.disconnect(senderId);
-			this.engineInteropId = null;
+		"disconnect": async function(senderId) {
+			await toPromise(this, "disconnect");
 		},
 		"onRenderViewBegin": async function(renderInfo){
 
@@ -722,22 +721,40 @@ function AfxDrawingInterop(interop,args) {
 
 		const jMessage = JSON.parse(message);
 
-		var newPromise = self.messagePromise
-		.then(()=>self.messageHandlers[jMessage.id].apply(self, jMessage.args))
-		.catch((e)=>{
-			logError(e);
-			if(!(e && e.soft))
-				return self.disconnect();
-		});
+		const port = jMessage.port || "0";
 
-		self.messagePromise = newPromise;
-	};
+		var arr = self.messageQueues[port];
+		if(undefined === arr) self.messageQueues[port] = arr = [];
+		arr.push([jMessage.id,jMessage.args]);
+		if(arr.length == 1)
+		{
+			function processQueue(port)
+			{
+				queueMicrotask(()=>{
+					var message = self.messageQueues[port][0];
+					self.messageHandlers[message[0]].apply(self, message[1])
+					.then(()=>{
+						self.messageQueues[port].shift();
+						if(0 < self.messageQueues[port].length)
+							processQueue(port);
+					})
+					.catch((e)=>{
+						logError(e);
+						if(!(e && e.soft))
+							return toPromise(self, "disconnect");
+					});
+				});
+			}
 
+			processQueue(port);
+		} 
+	}
+	
 	interop.onDeviceReset = function(){
 		self.onDeviceReset().catch((e)=>{
 			logError(e);
 			if(!(e && e.soft))
-				return self.disconnect();
+				return toPromise(self, "disconnect");
 		});
 	};
 
@@ -772,7 +789,7 @@ function AfxDrawingInterop(interop,args) {
 		release(cefTextureHandle).catch((e)=>{
 			logError(e);
 			if(!(e && e.soft))
-				return self.disconnect();
+				return toPromise(self, "disconnect");
 		});
 	}
 
@@ -1097,14 +1114,15 @@ AfxDrawingInterop.prototype.buildD3d9VertexElements = function(definitions) {
 
 AfxDrawingInterop.prototype.connect = async function() {
 
-	await toPromise(this.interop, "connect");
-		
 	this.connected = true;
+
+	await toPromise(this.interop, "connect");
 
 	await toPromise(this.interop, "sendMessage", this.args.indexInteropId, JSON.stringify({
 		"id": "drawingConnected",
 		"args": [this.interop.id]
 	}));
+
 	await toPromise(this.interop, "sendMessage", this.engineInteropId, JSON.stringify({
 		"id": "drawingConnected",
 		"args": [this.interop.id]
@@ -1113,29 +1131,44 @@ AfxDrawingInterop.prototype.connect = async function() {
 
 AfxDrawingInterop.prototype.disconnect = async function() {
 
-	try {
-		await toPromise(this.interop, "close")
-	}
-	catch(e)
+	while(0 < this.renderQueue.length)
 	{
-		logError(e);
+		console.log("Waiting for renderer to finish before disconnecting ...");
+		await sleepPromise(250);
 	}
 
-	this.connected = false;
-	this.cefTextures = {};
+	this.messageQueues = {}
 
-	this.shaders["afx_drawtexture_vs20"] = null;
-	this.shaders["afx_drawtexture_ps20"] = null;
-	this.vertexDeclarations["pos3_uv2"] = null;	
+	if(this.connected)
+	{
+		this.connected = false;
 
-	await toPromise(this.interop, "sendMessage", this.args.indexInteropId, JSON.stringify({
-		"id": "drawingDisconnected",
-		"args": [this.interop.id]
-	}));
-	await toPromise(this.interop, "sendMessage", this.engineInteropId, JSON.stringify({
-		"id": "drawingDisconnected",
-		"args": [this.interop.id]
-	}));
+		try {
+			this.interop.cancel();
+			await toPromise(this.interop, "close")
+		}
+		catch(e)
+		{
+			logError(e);
+		}
+
+		this.cefTextures = {};
+		this.shaders["afx_drawtexture_vs20"] = null;
+		this.shaders["afx_drawtexture_ps20"] = null;
+		this.vertexDeclarations["pos3_uv2"] = null;
+
+
+		await toPromise(this.interop, "sendMessage", this.engineInteropId, JSON.stringify({
+			"id": "drawingDisconnected",
+			"port": "1",
+			"args": [this.interop.id]
+		}));
+
+		await toPromise(this.interop, "sendMessage", this.args.indexInteropId, JSON.stringify({
+			"id": "drawingDisconnected",
+			"args": [this.interop.id]
+		}));
+	}
 }
 
 AfxDrawingInterop.prototype.setCefTexture = function(cefTextureHandle, cefTexture) {

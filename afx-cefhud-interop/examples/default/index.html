@@ -43,7 +43,7 @@ function AfxInterop(interop, args) {
 	this.drawingInteropId = null;
 	this.engineInteropId = null;
 
-	this.messagePromise = Promise.resolve();
+	this.messageQueues = {};
 
 	this.reconnects = 0;
 
@@ -76,12 +76,9 @@ function AfxInterop(interop, args) {
 			this.elEngineStatus.innerText = "connected";
 		},
 		"engineDisconnected": async function(engineInteropId) {
-			console.warn("Engine disconnected, reconnecting in 1 second ...");
 			this.elEngineStatus.innerText = "DISCONNECTED";
 
-			await new Promise((resolve,reject)=>{
-				setTimeout(resolve, 1000);
-			});
+			await sleepPromise(1000);
 
 			await this.reconnect();
 		},
@@ -97,16 +94,34 @@ function AfxInterop(interop, args) {
 
 		const jMessage = JSON.parse(message);
 
-		var newPromise = self.messagePromise
-		.then(()=>self.messageHandlers[jMessage.id].apply(self, jMessage.args))
-		.catch((e)=>{
-			logError(e);
-			if(!(e && e.soft))
-				return self.disconnect();
-		});
+		const port = jMessage.port || "0";
 
-		self.messagePromise = newPromise;
-	};
+		var arr = self.messageQueues[port];
+		if(undefined === arr) self.messageQueues[port] = arr = [];
+		arr.push([jMessage.id,jMessage.args]);
+		if(arr.length == 1)
+		{
+			function processQueue(port)
+			{
+				queueMicrotask(()=>{
+					var message = self.messageQueues[port][0];
+					self.messageHandlers[message[0]].apply(self, message[1])
+					.then(()=>{
+						self.messageQueues[port].shift();
+						if(0 < self.messageQueues[port].length)
+							processQueue(port);
+					})					
+					.catch((e)=>{
+						logError(e);
+						if(!(e && e.soft))
+							throw e;
+					});
+				});
+			}
+
+			processQueue(port);
+		} 
+	}
 
 	interop.onError = function(senderId, message){
 		self.onError(senderId, message);
@@ -133,11 +148,11 @@ AfxInterop.prototype.onError = function(senderId, message) {
 
 AfxInterop.prototype.reconnect = async function(senderId, message) {
 
-	this.messages = [];
+	self.messageQueues = {};
 
 	++this.reconnects;
 	this.elReconnects.innerText = this.reconnects;
-	
+
 	await toPromise(this.interop, "sendMessage", this.engineInteropId, JSON.stringify({
 		"id": "connect",
 		"args": [this.interop.id]

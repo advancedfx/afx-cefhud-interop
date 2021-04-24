@@ -29,3 +29,9 @@ function logError(error) {
 		console.error(new Error().stack);
 	}
 }
+
+function sleepPromise(milliSeconds) {
+	return new Promise((resolve,reject)=>{
+		setTimeout(resolve, milliSeconds);
+	});
+}

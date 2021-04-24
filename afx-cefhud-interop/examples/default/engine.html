@@ -41,46 +41,70 @@ function AfxEngineInterop(interop, args) {
 	this.interop = interop;
 	this.args = args;
 	this.newConnection = true;
+
 	this.connected = false;
-	this.drawingConnected = false;
-	this.messagePromise = Promise.resolve();
+	this.messageQueues = {};
+
+	this.drawingConnectRequested = false;
 	
 	this.messageHandlers = {
 		"connect": async function(senderId) {
 			await this.connect();
 		},
 		"disconnect" : async function(senderId) {
-			await this.disconnect();
+			await toPromise(this, "disconnect");
 		},
 		"drawingConnected": async function(senderId) {
 
 			console.log("drawingConnected: "+senderId);
 
-			this.drawingConnected = true;
-	
-			await toPromise(this.interop, "pump",  this.pumpEvents);
+			if(this.drawingConnectedEvent)
+			{
+				var e = this.drawingConnectedEvent;
+				this.drawingConnectedEvent = null;
+				e[0]();
+			}
 		},
 		"drawingDisconnected": async function(senderId) {
 			console.log("drawingDisconnected: "+senderId);
-			this.drawingConnected = false;
-			await this.disconnect();
+			this.drawingConnectRequested = false;
+			await toPromise(this, "disconnect");
 		}
 	};
+	
 	interop.onMessage = function(senderId, message){
 
 		const jMessage = JSON.parse(message);
 
-		var newPromise = self.messagePromise
-		.then(()=>self.messageHandlers[jMessage.id].apply(self, jMessage.args))
-		.catch((e)=>{
-			logError(e);
-			if(!(e && e.soft))
-				return self.disconnect();
-		});
+		const port = jMessage.port || "0";
 
-		self.messagePromise = newPromise;
-	};
-	
+		var arr = self.messageQueues[port];
+		if(undefined === arr) self.messageQueues[port] = arr = [];
+		arr.push([jMessage.id,jMessage.args]);
+		if(arr.length == 1)
+		{
+			function processQueue(port)
+			{
+				queueMicrotask(()=>{
+					var message = self.messageQueues[port][0];
+					self.messageHandlers[message[0]].apply(self, message[1])
+					.then(()=>{
+						self.messageQueues[port].shift();
+						if(0 < self.messageQueues[port].length)
+							processQueue(port);
+					})										
+					.catch((e)=>{
+						logError(e);
+						if(!(e && e.soft))
+							return toPromise(self, "disconnect");
+					});
+				});
+			}
+
+			processQueue(port);
+		} 
+	}
+
 	// GameEvents:
 	//
 	// https://wiki.alliedmods.net/Counter-Strike:_Global_Offensive_Event
@@ -336,57 +360,76 @@ function AfxEngineInterop(interop, args) {
 
 AfxEngineInterop.prototype.connect = async function() {
 
-	await toPromise(this.interop, "connect");
-	
-	if(!this.connected)
-	{
-		this.newConnection = true;
-		this.connected = true;
+	var self = this;
 
-		await toPromise(this.interop, "sendMessage", this.args.indexInteropId, JSON.stringify({
-			"id": "engineConnected",
-			"args": [this.interop.id]
-		}));		
+	await new Promise(function(resolve,reject){
+		self.connected = true;
+		self.newConnection = true;
+		self.drawingConnectedEvent = [resolve,reject];
 
-		await toPromise(this.interop, "sendMessage", this.args.drawingInteropId, JSON.stringify({
-			"id": "connect",
-			"args": [this.interop.id]
-		}));
-	}
+		async function doConnect() {
+			self.drawingConnectRequested = true;
+
+			await toPromise(self.interop, "sendMessage", self.args.drawingInteropId, JSON.stringify({
+				"id": "connect",
+				"args": [self.interop.id]
+			}));
+
+			await toPromise(self.interop, "connect");
+				
+			await toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
+					"id": "engineConnected",
+					"args": [self.interop.id]
+			}));
+		}
+
+		doConnect()
+		.then(()=>this)
+		.then(()=>toPromise(self.interop, "pump",  self.pumpEvents));
+	});
 }
 
 AfxEngineInterop.prototype.disconnect = async function() {
 
-	if(this.connected) {
+	this.messageQueues = {};
 
-		if(this.drawingConnected)
-		{
-			await toPromise(this.interop, "sendMessage", this.args.drawingInteropId, JSON.stringify({
-				"id": "disconnect",
-				"args": [this.interop.id]
-			}));
+	if(this.drawingConnectedEvent)
+	{
+		var e = this.drawingConnectedEvent;
+		this.drawingConnectedEvent = null;
+		e[1]();
+		return;
+	}
 
-			return;
-		}
+	if(this.drawingConnectRequested)
+	{
+		await toPromise(this.interop, "sendMessage", this.args.drawingInteropId, JSON.stringify({
+			"id": "disconnect",
+			"port": "1",
+			"args": [this.interop.id]
+		}));
+
+		return;
+	}
+
+	if(this.connected)
+	{
+		this.connected = false;
 
 		try {
-			await toPromise(this.interop, "close")
+			this.interop.cancel();
+			await toPromise(this.interop, "close");
 		}
 		catch(e)
 		{
 			logError(e);
 		}
-		finally {
-			this.messages = []; // drop all messages, they are useless now.
-		}
-
-		this.connected = false;
 
 		await toPromise(this.interop, "sendMessage", this.args.indexInteropId, JSON.stringify({
 			"id": "engineDisconnected",
 			"args": [this.interop.id]
-		}));		
-	};
+		}));
+	}
 }
 
  AfxEngineInterop.prototype.makePumpEvents = function() {
@@ -403,9 +446,7 @@ AfxEngineInterop.prototype.disconnect = async function() {
 				logError(e);
 
 				if(!(e && e.soft))
-					self.disconnect().catch((e)=>{
-						throw e;
-					});
+					return toPromise(self, "disconnect");
 			});
 		}
 	});
