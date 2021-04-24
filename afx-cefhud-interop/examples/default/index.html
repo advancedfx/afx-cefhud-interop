@@ -43,7 +43,7 @@ function AfxInterop(interop, args) {
 	this.drawingInteropId = null;
 	this.engineInteropId = null;
 
-	this.messageQueues = {};
+	this.messagePromises = {};
 
 	this.reconnects = 0;
 
@@ -96,31 +96,22 @@ function AfxInterop(interop, args) {
 
 		const port = jMessage.port || "0";
 
-		var arr = self.messageQueues[port];
-		if(undefined === arr) self.messageQueues[port] = arr = [];
-		arr.push([jMessage.id,jMessage.args]);
-		if(arr.length == 1)
-		{
-			function processQueue(port)
-			{
-				queueMicrotask(()=>{
-					var message = self.messageQueues[port][0];
-					self.messageHandlers[message[0]].apply(self, message[1])
-					.then(()=>{
-						self.messageQueues[port].shift();
-						if(0 < self.messageQueues[port].length)
-							processQueue(port);
-					})					
-					.catch((e)=>{
-						logError(e);
-						if(!(e && e.soft))
-							throw e;
-					});
-				});
-			}
+		var promise = self.messagePromises[port];
+		if(undefined === promise) promise = Promise.resolve();
 
-			processQueue(port);
-		} 
+		async function processMessage(jMessage)
+		{
+			try {
+				await self.messageHandlers[jMessage.id].apply(self, jMessage.args);
+			}
+			catch(e) {
+				logError(e);
+				if(!(e && e.soft))
+					throw e;
+			}
+		}
+
+		self.messagePromises[port] = promise.finally(()=>processMessage(jMessage));
 	}
 
 	interop.onError = function(senderId, message){
@@ -148,7 +139,7 @@ AfxInterop.prototype.onError = function(senderId, message) {
 
 AfxInterop.prototype.reconnect = async function(senderId, message) {
 
-	self.messageQueues = {};
+	self.messagePromises = {};
 
 	++this.reconnects;
 	this.elReconnects.innerText = this.reconnects;
