@@ -74,6 +74,10 @@ set(CEFSIMPLE_RESOURCES_SRCS
   ${CEFSIMPLE_RESOURCES_MAC_ENGLISH_LPROJ_SRCS}
   )
 
+if(MSVC AND NOT(MSVC_VERSION LESS 1400))
+  set_source_files_properties(AfxInterop.cpp
+      PROPERTIES COMPILE_FLAGS "/bigobj")
+endif()
 
 #
 # Shared configuration.
