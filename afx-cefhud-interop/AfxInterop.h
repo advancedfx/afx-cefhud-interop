@@ -1,38 +1,5 @@
 #pragma once
 
-// TODO:
-// 
-// d3d9CreateVertexBuffer
-// d3d9CreateIndexbuffer
-// d3d9UpdatTexture
-// d3d9SetIndices
-// d3d9SetStreamSource
-// d3d9SetStreamSourceFreq
-// d3d9SetVertexShaderConstantB
-// d3d9SetVertexShaderConstantF
-// d3d9SetVertexShaderConstantI
-// d3d9SetPixelShaderConstantB
-// d3d9SetPixelShaderConstantF
-// d3d9SetPixelShaderConstantI
-// d3d9DrawPrimitive
-// d3d9DrawIndexedPrimitive
-// CAfxD3d9IndexBuffer harden release
-// CAfxD3d9IndexBuffer harden release, do update
-// CAfxD3d9VertexBuffer harden release, do update
-// CAfxD3d9Texture harden relase, do update
-// CAfxD3d9PixelShader harden release
-// CAfxD3d9VertexShader harden release
-//
-// calcs
-// addCalcHandle
-// addCalcVecAng
-// addCalcCam
-// addCalcFov
-// addCalcBool
-// addCalcInt
-//
-// Finish support for bluring background / drawing CS background into CEF
-
 #include <include/cef_base.h>
 #include <include/cef_v8.h>
 
