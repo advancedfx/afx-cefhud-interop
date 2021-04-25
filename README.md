@@ -37,7 +37,7 @@ cmake -G "Visual Studio 16" -A x64 "-DUSE_SANDBOX=Off" ..
 Then, open the newly created c:\some\directory\afx-cefhud-interop\build\cef.sln in Visual Studio 2019 and select **Release** and **x64** in the confugration, right click afx-cefhud-interop in Solution tree and select Build.
 
 For instructions how to use the binary see the comments at the top of the example.html here:  
-https://github.com/advancedfx/afx-cefhud-interop/tree/main/afx-interop-v7/afx-cefhud-interop/examples/default/index.html#L4
+https://github.com/advancedfx/afx-cefhud-interop/blob/main/afx-cefhud-interop/examples/default/index.html#L4
 
 ----
 
