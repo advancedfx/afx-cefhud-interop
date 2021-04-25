@@ -718,14 +718,9 @@ function AfxDrawingInterop(interop,args) {
 	};
 	
 	interop.onMessage = function(senderId, message){
-
+		
 		const jMessage = JSON.parse(message);
-
-		const port = jMessage.port || "0";
-
-		var promise = self.messagePromises[port];
-		if(undefined === promise) promise = Promise.resolve();
-
+		
 		async function processMessage(jMessage)
 		{
 			try {
@@ -737,8 +732,18 @@ function AfxDrawingInterop(interop,args) {
 					await toPromise(self, "disconnect");
 			}
 		}
-
-		self.messagePromises[port] = promise.finally(()=>processMessage(jMessage));
+		
+		function queueMessage(jMessage)
+		{
+			const port = jMessage.port || 0;
+			
+			var promise = self.messagePromises[port];
+			if(undefined === promise) promise = Promise.resolve();
+			
+			self.messagePromises[port] = promise.finally(()=>processMessage(jMessage));
+		}
+		
+		queueMessage(jMessage);
 	}
 	
 	interop.onDeviceReset = function(){
@@ -1151,7 +1156,7 @@ AfxDrawingInterop.prototype.disconnect = async function() {
 
 		await toPromise(this.interop, "sendMessage", this.engineInteropId, JSON.stringify({
 			"id": "drawingDisconnected",
-			"port": "1",
+			"port": 1,
 			"args": [this.interop.id]
 		}));
 

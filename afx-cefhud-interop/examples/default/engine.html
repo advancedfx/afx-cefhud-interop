@@ -44,6 +44,8 @@ function AfxEngineInterop(interop, args) {
 
 	this.connected = false;
 	this.messagePromises = {};
+	
+	this.pumpPromise = Promise.resolve();
 
 	this.drawingConnectRequested = false;
 	
@@ -73,14 +75,9 @@ function AfxEngineInterop(interop, args) {
 	};
 	
 	interop.onMessage = function(senderId, message){
-
+		
 		const jMessage = JSON.parse(message);
-
-		const port = jMessage.port || "0";
-
-		var promise = self.messagePromises[port];
-		if(undefined === promise) promise = Promise.resolve();
-
+		
 		async function processMessage(jMessage)
 		{
 			try {
@@ -92,8 +89,18 @@ function AfxEngineInterop(interop, args) {
 					await toPromise(self, "disconnect");
 			}
 		}
-
-		self.messagePromises[port] = promise.finally(()=>processMessage(jMessage));
+		
+		function queueMessage(jMessage)
+		{
+			const port = jMessage.port || "0";
+			
+			var promise = self.messagePromises[port];
+			if(undefined === promise) promise = Promise.resolve();
+			
+			self.messagePromises[port] = promise.finally(()=>processMessage(jMessage));
+		}
+		
+		queueMessage(jMessage);
 	}
 
 	// GameEvents:
@@ -396,7 +403,7 @@ AfxEngineInterop.prototype.disconnect = async function() {
 	{
 		await toPromise(this.interop, "sendMessage", this.args.drawingInteropId, JSON.stringify({
 			"id": "disconnect",
-			"port": "1",
+			"port": 1,
 			"args": [this.interop.id]
 		}));
 
@@ -432,8 +439,10 @@ AfxEngineInterop.prototype.disconnect = async function() {
 	Object.keys(self.pumpEventsAsync).forEach((key) => {
 
 		pumpEvents[key] = function(...args){
-
-			self.pumpEventsAsync[key].apply(self, args).catch((e) => {
+		
+			self.pumpPromise = self.pumpPromise
+			.finally(()=>self.pumpEventsAsync[key].apply(self, args))
+			.catch((e) => {
 				logError(e);
 
 				if(!(e && e.soft))

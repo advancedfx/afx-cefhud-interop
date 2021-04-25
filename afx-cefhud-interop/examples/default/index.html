@@ -91,14 +91,9 @@ function AfxInterop(interop, args) {
 	};
 	
 	interop.onMessage = function(senderId, message){
-
+		
 		const jMessage = JSON.parse(message);
-
-		const port = jMessage.port || "0";
-
-		var promise = self.messagePromises[port];
-		if(undefined === promise) promise = Promise.resolve();
-
+		
 		async function processMessage(jMessage)
 		{
 			try {
@@ -110,8 +105,18 @@ function AfxInterop(interop, args) {
 					throw e;
 			}
 		}
-
-		self.messagePromises[port] = promise.finally(()=>processMessage(jMessage));
+		
+		function queueMessage(jMessage)
+		{
+			const port = jMessage.port || "0";
+			
+			var promise = self.messagePromises[port];
+			if(undefined === promise) promise = Promise.resolve();
+			
+			self.messagePromises[port] = promise.finally(()=>processMessage(jMessage));
+		}
+		
+		queueMessage(jMessage);
 	}
 
 	interop.onError = function(senderId, message){
