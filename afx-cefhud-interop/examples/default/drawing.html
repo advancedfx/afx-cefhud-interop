@@ -1141,7 +1141,6 @@ AfxDrawingInterop.prototype.disconnect = async function() {
 		this.connected = false;
 
 		try {
-			this.interop.cancel();
 			await toPromise(this.interop, "close")
 		}
 		catch(e)

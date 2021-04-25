@@ -170,9 +170,22 @@ ULONG STDMETHODCALLTYPE My_ID3D11Texture2D_Release(ID3D11Texture2D* This) {
     auto it = g_Textures.find(This);
     if(it != g_Textures.end())
     {
-      g_GpuPipeClient.WriteInt32((INT32)advancedfx::interop::HostMessage::GpuRelaseShareHandle);
-      g_GpuPipeClient.WriteHandle(it->second);
-      g_GpuPipeClient.Flush();
+      try {
+        g_GpuPipeClient.WriteInt32(
+            (INT32)advancedfx::interop::HostMessage::GpuRelaseShareHandle);
+        g_GpuPipeClient.WriteHandle(it->second);
+        g_GpuPipeClient.Flush();
+      } catch (const std::exception& e) {
+        DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                    << e.what();
+        /*
+        std::string str = "Error in " + std::string(__FILE__) + ":" +
+                          std::to_string(__LINE__) + ": " +
+                          std::string(e.what());
+
+        OutputDebugStringA(str.c_str());*/
+      }
+
       g_Textures.erase(it);
     }
 
@@ -349,7 +362,6 @@ ULONG STDMETHODCALLTYPE My_ID3D11Device_Release(ID3D11Device* This) {
 
   if (0 == count) {
     try {
-      g_GpuPipeClient.WriteInt32((int)advancedfx::interop::ClientMessage::Quit);
       g_GpuPipeClient.Flush();
     } catch (const std::exception &) {
     }    
@@ -490,7 +502,8 @@ MyD3D11CreateDevice(_In_opt_ IDXGIAdapter* pAdapter,
       g_GpuPipeClient.WriteInt32(0);
       g_GpuPipeClient.Flush();
     } catch (const std::exception& e) {
-        MessageBoxA(0, e.what(), "Error in cefsimple_win.cpp", MB_OK|MB_ICONERROR);
+      DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                  << e.what();
     }
   }
 
@@ -573,11 +586,14 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
   settings.windowless_rendering_enabled = true;
   
   // Initialize CEF.
-  CefInitialize(main_args, settings, app.get(), sandbox_info);
+  CefInitialize(main_args, settings, app, sandbox_info);
 
   // Run the CEF message loop. This will block until CefQuitMessageLoop() is
   // called.
   CefRunMessageLoop();
+
+  // Disable logs, since they will become unavailable upon shutdown:
+
 
   // Shut down CEF.
   CefShutdown();

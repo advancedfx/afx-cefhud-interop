@@ -8,6 +8,7 @@
 #include <string>
 #include <functional>
 #include <mutex>
+#include <memory>
 
 #include <malloc.h>
 
@@ -23,8 +24,11 @@ class CPipeHandle {
  public:
   HANDLE GetHandle() { return m_Handle; }
 
+  virtual ~CPipeHandle() {}
+
  protected:
   HANDLE m_Handle = INVALID_HANDLE_VALUE;
+  std::mutex m_PipeMutex;
 };
 
 struct CPipeException : public std::exception {
@@ -213,14 +217,49 @@ public:
   CPipeServerConnectionThread(HANDLE handle)
   {
       m_Handle = handle;
+
+      m_Thread =
+          std::thread(&CPipeServerConnectionThread::ConnectionThread, this);
   }
 
-  virtual ~CPipeServerConnectionThread() {}
+  HANDLE GetHandle() { return m_Handle;
+  }
 
-  /**
-   * @throws exception
-   */
-  virtual void HandleConnection() = 0;
+  virtual ~CPipeServerConnectionThread() {
+    ClosePipe();
+  }
+
+  void Join() {
+    if (m_Thread.joinable())
+      m_Thread.join();
+  }
+
+  void Detach() { m_Thread.detach();
+  }
+
+  void ClosePipe() {
+    std::unique_lock<std::mutex> lock(m_PipeMutex);
+
+    if (m_Handle != INVALID_HANDLE_VALUE) {
+      FlushFileBuffers(m_Handle);
+      DisconnectNamedPipe(m_Handle);
+      CloseHandle(m_Handle);
+      m_Handle = INVALID_HANDLE_VALUE;
+    }
+  }
+
+  void Cancel() {
+    std::unique_lock<std::mutex> lock(m_PipeMutex);
+
+    if (m_Handle != INVALID_HANDLE_VALUE) {
+      CancelSynchronousIo(m_Thread.native_handle());
+    }
+  }
+
+protected:
+  std::thread m_Thread;
+
+  virtual void ConnectionThread() = 0;
 };
 
 struct CWinApiException : public std::exception {
@@ -239,13 +278,12 @@ public:
   /**
    * @throws exception
    */
- void WaitForConnection(const char* pipeName, int timeOut);
+ CPipeServerConnectionThread * WaitForConnection(const char* pipeName,
+     DWORD pipeTimeOut);
 
 protected:
-  virtual CPipeServerConnectionThread* OnNewConnection(HANDLE handle) = 0;
-
-private:
-  static DWORD WINAPI InstanceThread(LPVOID lpvParam);
+ virtual CPipeServerConnectionThread* OnNewConnection(
+     HANDLE handle) = 0;
 
 };
 
@@ -253,11 +291,12 @@ class CPipeClient : public CPipeReaderWriter {
 
 public:
   virtual ~CPipeClient() {
-   try {
-      ClosePipe();   
-   }
-   catch(...) {
-   }
+    try {
+      ClosePipe();
+    } catch (const std::exception& e) {
+      DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                  << e.what();
+    }
   }
 
   /**
@@ -272,7 +311,6 @@ public:
 };
 
 enum class ClientMessage : int {
-  Quit = 0,
   Message = 1,
   TextureHandle = 2,
   WaitedForGpu = 3,
@@ -280,7 +318,6 @@ enum class ClientMessage : int {
 };
 
 enum class HostMessage : int {
-  Quit = 0,
   DrawingResized = 1,
   RenderFrame = 2,
   CreateDrawing = 3,
@@ -292,7 +329,9 @@ enum class HostMessage : int {
 
 class CInterop : public virtual CefBaseRefCounted {
   public:
-    virtual void CloseInterop() = 0;
+  CefRefPtr<CefV8Context> m_Context;
+
+  virtual void CloseInterop() = 0;
 
   protected:
     CThreadedQueue m_InteropQueue;

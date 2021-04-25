@@ -89,28 +89,26 @@ class SimpleHandler : public CefClient,
                            const CefString& errorText,
                            const CefString& failedUrl) OVERRIDE;
   
-  // Request that all existing browser windows close.
-  void CloseAllBrowsers(bool force_close);
-
   bool IsClosing() const { return is_closing_; }
 
  protected:
   class CHostPipeServerConnectionThread;
 
-  virtual advancedfx::interop::CPipeServerConnectionThread* OnNewConnection(
-      HANDLE handle) override {
+  advancedfx::interop::CPipeServerConnectionThread * OnNewConnection(HANDLE handle) override {
     return new CHostPipeServerConnectionThread(handle, this);
   }
 
  private:
   CefRefPtr<CefBrowser> AddBrowserConnection(
       int browserId,
-      class CHostPipeServerConnectionThread* connection) {
+      CHostPipeServerConnectionThread*
+          connection) {
     std::unique_lock<std::mutex> lock(m_BrowserMutex);
     auto it = m_Browsers.find(browserId);
     if (it == m_Browsers.end())
     {
-      MessageBoxA(0, "AddBrowserConnection failed: no browser.", "Error in simple_handler.h", MB_OK|MB_ICONERROR);
+      DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                  << "AddBrowserConnection browser not found.";
       return nullptr;
     }
 
@@ -119,18 +117,20 @@ class SimpleHandler : public CefClient,
     return it->second.Browser;
   }
 
-
-
   void RemoveBrowserConnection(int browserId) {
     std::unique_lock<std::mutex> lock(m_BrowserMutex);
     auto it = m_Browsers.find(browserId);
     if (it == m_Browsers.end())
     {
-      MessageBoxA(0, "RemoveBrowserConnection failed: no browser.", "Error in simple_handler.h", MB_OK|MB_ICONERROR);
+      DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                  << "RemoveBrowserConnection browser not found.";
+      return;
     }
 
     it->second.Connection = nullptr;
   }
+
+  void DoQuit();
 
   /**
    * @throws exception
@@ -139,16 +139,18 @@ class SimpleHandler : public CefClient,
     std::unique_lock<std::mutex> lock(m_BrowserMutex);
     auto it = m_Browsers.find(targetId);
     if (it == m_Browsers.end()) {
-      MessageBoxA(0, "Message failed: no target browser.", "Error in simple_handler.h", MB_OK|MB_ICONERROR);
+      DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                  << "Message: browser not found.";
       return;
     }
 
     if (CHostPipeServerConnectionThread* connection = it->second.Connection)
     {
-      it->second.Connection->Message(senderId, message);
+      connection->Message(senderId, message);
     }
     else {
-      MessageBoxA(0, "Message failed: no target connection.", "Error in simple_handler.h", MB_OK|MB_ICONERROR);
+      DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                  << "Message: no connection.";
       return;
     }
   }
@@ -304,8 +306,6 @@ class SimpleHandler : public CefClient,
         : advancedfx::interop::CPipeServerConnectionThread(handle),
           m_Host(host) {}
 
-    ~CHostPipeServerConnectionThread() { m_ClientConnection.ClosePipe(); }
-
     int GetWidth() { return m_Width; }
 
     int GetHeight() { return m_Height; }
@@ -358,10 +358,23 @@ class SimpleHandler : public CefClient,
       m_ShareHandles.erase(share_handle);
     }
 
-    /**
-     * @throws exception
-     */
-    virtual void HandleConnection() override {
+    void DeleteExternal(std::unique_lock<std::mutex> &lock)
+    {
+        m_ExternalAbort = true;
+        lock.unlock();
+ 
+        m_Quit = true;
+        Cancel();
+        Join();
+
+        delete this;
+
+        lock.lock();
+    }
+
+   protected:
+
+    virtual void ConnectionThread() override {
       DWORD processId;
       int browserId;
 
@@ -389,26 +402,21 @@ class SimpleHandler : public CefClient,
 
           if(!bError) break;
         }
+      } else {
+        std::unique_lock<std::mutex> lock(m_Host->m_BrowserMutex);
+        m_Host->m_Connection0 = this;
       }
 
       try {
-        m_Browser = browserId ? m_Host->AddBrowserConnection(browserId, this) : nullptr;
+        m_Browser =
+            browserId ? m_Host->AddBrowserConnection(
+                            browserId, this)
+                      : nullptr;
 
-        while (true) {
+        while (!m_Quit) {
           advancedfx::interop::HostMessage message =
               (advancedfx::interop::HostMessage)ReadInt32();
           switch (message) {
-            case advancedfx::interop::HostMessage::Quit: {
-              if(browserId)
-              {
-                std::unique_lock<std::mutex> lock(m_ClientConnectionMutex);
-                m_ClientConnection.WriteInt32(
-                    (int)advancedfx::interop::ClientMessage::Quit);
-                m_ClientConnection.Flush();
-                m_ClientConnection.ClosePipe();
-              }
-            }
-              return;
             case advancedfx::interop::HostMessage::DrawingResized: {
               m_Width = ReadInt32();
               m_Height = ReadInt32();
@@ -468,24 +476,49 @@ class SimpleHandler : public CefClient,
           }
         }
       } catch (const std::exception& e) {
-        MessageBoxA(0, e.what(), "Error in simple_handler.h", MB_OK|MB_ICONERROR);
+        DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                    << e.what();
       }
 
       {
         std::unique_lock<std::mutex> lock(m_Host->m_BrowserMutex);
-        for(auto it = m_ShareHandles.begin(); it != m_ShareHandles.end(); ++it)
-        {
+
+        for (auto it = m_ShareHandles.begin(); it != m_ShareHandles.end();
+             ++it) {
           m_Host->m_HandleToBrowserId.erase(*it);
         }
-
       }
 
       if (m_Browser)
         m_Host->RemoveBrowserConnection(browserId);
+
+      if (0 == browserId) {
+        std::unique_lock<std::mutex> lock(m_Host->m_BrowserMutex);
+        m_Host->m_Connection0 = nullptr;
+      }
+
+      try {
+        m_ClientConnection.ClosePipe();
+      } catch (const std::exception& e) {
+        DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                    << e.what();
+      }
+
+      m_Browser = nullptr; // !
+
+      ClosePipe();
+
+      if (!m_ExternalAbort) {
+        Detach();
+
+        delete this;
+      }
     }
 
    private:
     SimpleHandler* m_Host;
+    bool m_Quit = false;
+    bool m_ExternalAbort = false;
     CefRefPtr<CefBrowser> m_Browser;
     advancedfx::interop::CPipeClient m_ClientConnection;
     std::mutex m_ClientConnectionMutex;
@@ -502,7 +535,7 @@ class SimpleHandler : public CefClient,
 
   struct BrowserMapElem {
     CefRefPtr<CefBrowser> Browser;
-    class CHostPipeServerConnectionThread* Connection = nullptr;
+    CHostPipeServerConnectionThread* Connection = nullptr;
 
     BrowserMapElem(CefRefPtr<CefBrowser> browser) : Browser(browser) {}
   };
@@ -511,6 +544,7 @@ class SimpleHandler : public CefClient,
   std::map<int, BrowserMapElem> m_Browsers;
   HANDLE m_ShareHandle = INVALID_HANDLE_VALUE;
   std::map<HANDLE, int> m_HandleToBrowserId;
+  CHostPipeServerConnectionThread* m_Connection0 = nullptr;
 
    // Platform-specific implementation.
   void PlatformTitleChange(CefRefPtr<CefBrowser> browser,

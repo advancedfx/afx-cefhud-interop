@@ -42,18 +42,18 @@ void SimpleHandler::WaitConnectionThreadHandler(void) {
   std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_handler_");
   strPipeName.append(std::to_string(GetCurrentProcessId()));
 
-  //MessageBoxA(0, strPipeName.c_str(), "SERVER", MB_OK);
-
-  while (!m_WaitConnectionQuit) {
+   while (!m_WaitConnectionQuit) {
     try {
-      this->WaitForConnection(strPipeName.c_str(), INFINITE);
-    } catch (...) {
+      this->WaitForConnection(strPipeName.c_str(), 500);
+    } catch (const std::exception& e) {
+      DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": " << e.what();
     }
   }
 }
 
 SimpleHandler::~SimpleHandler() {
   m_WaitConnectionQuit = true;
+  CancelSynchronousIo(m_WaitConnectionThread.native_handle());
   if (m_WaitConnectionThread.joinable())
     m_WaitConnectionThread.join();
 }
@@ -89,30 +89,37 @@ bool SimpleHandler::DoClose(CefRefPtr<CefBrowser> browser) {
 
   // Allow the close. For windowed browsers this will result in the OS close
   // event being sent.
-  //return false;
-
-  return browser->GetIdentifier() != 1;
+  return false;
 }
 
 
 void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
 
-    std::unique_lock<std::mutex> lock(m_BrowserMutex);
+  std::unique_lock<std::mutex> lock(m_BrowserMutex);
 
   auto it = m_Browsers.find(browser->GetIdentifier());
   if (it != m_Browsers.end()) {
+    auto connection = it->second.Connection;
+    it->second.Connection = nullptr;
     m_Browsers.erase(it);
+    if (connection) {
+      connection->DeleteExternal(lock);
+    }
   }
 
   if (m_Browsers.empty()) {
+    if (m_Connection0) {
+      m_Connection0->DeleteExternal(lock);
+    }
+
+    browser = nullptr;  // !
 
     // All browser windows have closed. Quit the application message loop.
     CefQuitMessageLoop();
   } else {
-
     bool bHasWindowWithHandle = false;
-      
+
     for (auto it2 = m_Browsers.begin(); it2 != m_Browsers.end(); ++it2) {
       if (it2->second.Browser->GetHost()->GetWindowHandle()) {
         bHasWindowWithHandle = true;
@@ -122,8 +129,13 @@ void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
 
     // We have no non-offscreen windows open anymore, close all others:
     if (!bHasWindowWithHandle) {
-      lock.unlock();
-      CloseAllBrowsers(true);
+      while (!m_Browsers.empty()) {
+        CefRefPtr<CefBrowserHost> browserHost =
+            m_Browsers.begin()->second.Browser->GetHost();
+        lock.unlock();
+        browserHost->CloseBrowser(true);
+        lock.lock();
+      }
     }
   }
 }
@@ -147,26 +159,6 @@ void SimpleHandler::OnLoadError(CefRefPtr<CefBrowser> browser,
      << " (" << errorCode << ").</h2></body></html>";
 
   frame->LoadURL(GetDataURI(ss.str(), "text/html"));
-}
-
-void SimpleHandler::CloseAllBrowsers(bool force_close) {
-  if (!CefCurrentlyOn(TID_UI)) {
-    // Execute on the UI thread.
-    CefPostTask(TID_UI, base::Bind(&SimpleHandler::CloseAllBrowsers, this,
-                                   force_close));
-    return;
-  }
-
-  std::unique_lock<std::mutex> lock(m_BrowserMutex);
-
-  while (!m_Browsers.empty()) {
-    CefRefPtr<CefBrowserHost> browserHost =
-        m_Browsers.begin()->second.Browser->GetHost();
-
-    lock.unlock();
-    browserHost->CloseBrowser(force_close);
-    lock.lock();
-  }
 }
 
 void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
@@ -205,8 +197,13 @@ void SimpleHandler::DoPainted(int browserId, void* share_handle) {
         m_HandleToBrowserId[share_handle] = browserId;
         connection->OnPainted(share_handle);
       } catch (const std::exception e) {
-        MessageBoxA(0, e.what(), "Error in simple_handler.cc", MB_OK|MB_ICONERROR);
+        DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                    << e.what();
       }
     }
   }
+}
+
+void SimpleHandler::DoQuit() {
+  CefQuitMessageLoop();
 }
