@@ -15,11 +15,15 @@
 #include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_helpers.h"
 
+#include <include/cef_base.h>
+#include <include/base/cef_bind.h>
+#include <include/wrapper/cef_closure_task.h>
+
+#include <d3d11.h>
+
 namespace {
 
-SimpleHandler* g_instance = nullptr;
-
-// Returns a data: URI with the specified contents.
+ // Returns a data: URI with the specified contents.
 std::string GetDataURI(const std::string& data, const std::string& mime_type) {
   return "data:" + mime_type + ";base64," +
          CefURIEncode(CefBase64Encode(data.data(), data.size()), false)
@@ -28,18 +32,30 @@ std::string GetDataURI(const std::string& data, const std::string& mime_type) {
 
 }  // namespace
 
-SimpleHandler::SimpleHandler() : is_closing_(false) {
-  DCHECK(!g_instance);
-  g_instance = this;
+
+SimpleHandler::SimpleHandler() {
+  m_WaitConnectionThread =
+      std::thread(&SimpleHandler::WaitConnectionThreadHandler, this);
+}
+
+void SimpleHandler::WaitConnectionThreadHandler(void) {
+  std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_handler_");
+  strPipeName.append(std::to_string(GetCurrentProcessId()));
+
+   while (!m_WaitConnectionQuit) {
+    try {
+      this->WaitForConnection(strPipeName.c_str(), 500);
+    } catch (const std::exception& e) {
+      DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": " << e.what();
+    }
+  }
 }
 
 SimpleHandler::~SimpleHandler() {
-  g_instance = nullptr;
-}
-
-// static
-SimpleHandler* SimpleHandler::GetInstance() {
-  return g_instance;
+  m_WaitConnectionQuit = true;
+  CancelSynchronousIo(m_WaitConnectionThread.native_handle());
+  if (m_WaitConnectionThread.joinable())
+    m_WaitConnectionThread.join();
 }
 
 void SimpleHandler::OnTitleChange(CefRefPtr<CefBrowser> browser,
@@ -52,17 +68,21 @@ void SimpleHandler::OnTitleChange(CefRefPtr<CefBrowser> browser,
 void SimpleHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
 
+  std::unique_lock<std::mutex> lock(m_BrowserMutex);
+
   // Add to the list of existing browsers.
-  browser_list_.push_back(browser);
+  m_Browsers.emplace(std::piecewise_construct, std::forward_as_tuple(browser->GetIdentifier()), std::forward_as_tuple(browser));
 }
 
 bool SimpleHandler::DoClose(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
 
+  std::unique_lock<std::mutex> lock(m_BrowserMutex);
+
   // Closing the main window requires special handling. See the DoClose()
   // documentation in the CEF header for a detailed destription of this
   // process.
-  if (browser_list_.size() == 1) {
+  if (m_Browsers.size() == 1) {
     // Set a flag to indicate that the window close should be allowed.
     is_closing_ = true;
   }
@@ -72,24 +92,51 @@ bool SimpleHandler::DoClose(CefRefPtr<CefBrowser> browser) {
   return false;
 }
 
+
 void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
 
-  if (drawing_interop_)
-    drawing_interop_->Release();
+  std::unique_lock<std::mutex> lock(m_BrowserMutex);
 
-  // Remove from the list of existing browsers.
-  BrowserList::iterator bit = browser_list_.begin();
-  for (; bit != browser_list_.end(); ++bit) {
-    if ((*bit)->IsSame(browser)) {
-      browser_list_.erase(bit);
-      break;
+  auto it = m_Browsers.find(browser->GetIdentifier());
+  if (it != m_Browsers.end()) {
+    auto connection = it->second.Connection;
+    it->second.Connection = nullptr;
+    m_Browsers.erase(it);
+    if (connection) {
+      connection->DeleteExternal(lock);
     }
   }
 
-  if (browser_list_.empty()) {
+  if (m_Browsers.empty()) {
+    if (m_Connection0) {
+      m_Connection0->DeleteExternal(lock);
+    }
+
+    browser = nullptr;  // !
+
     // All browser windows have closed. Quit the application message loop.
     CefQuitMessageLoop();
+  } else {
+    bool bHasWindowWithHandle = false;
+
+    for (auto it2 = m_Browsers.begin(); it2 != m_Browsers.end(); ++it2) {
+      if (it2->second.Browser->GetHost()->GetWindowHandle()) {
+        bHasWindowWithHandle = true;
+        break;
+      }
+    }
+
+    // We have no non-offscreen windows open anymore, close all others:
+    if (!bHasWindowWithHandle) {
+      while (!m_Browsers.empty()) {
+        CefRefPtr<CefBrowserHost> browserHost =
+            m_Browsers.begin()->second.Browser->GetHost();
+        lock.unlock();
+        browserHost->CloseBrowser(true);
+        lock.lock();
+      }
+    }
   }
 }
 
@@ -114,71 +161,49 @@ void SimpleHandler::OnLoadError(CefRefPtr<CefBrowser> browser,
   frame->LoadURL(GetDataURI(ss.str(), "text/html"));
 }
 
-void SimpleHandler::CloseAllBrowsers(bool force_close) {
-  if (!CefCurrentlyOn(TID_UI)) {
-    // Execute on the UI thread.
-    CefPostTask(TID_UI, base::Bind(&SimpleHandler::CloseAllBrowsers, this,
-                                   force_close));
-    return;
+void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
+  rect.Set(0, 0, 640, 480);
+
+  std::unique_lock<std::mutex> lock(m_BrowserMutex);
+
+  auto it = m_Browsers.find(browser->GetIdentifier());
+  if (it != m_Browsers.end()) {
+    if (CHostPipeServerConnectionThread* connection = it->second.Connection) {
+      rect.Set(0, 0, connection->GetWidth(), connection->GetHeight());
+    }
   }
-
-  if (browser_list_.empty())
-    return;
-
-  BrowserList::const_iterator it = browser_list_.begin();
-  for (; it != browser_list_.end(); ++it)
-    (*it)->GetHost()->CloseBrowser(force_close);
 }
 
+void SimpleHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
+                                       PaintElementType type,
+                                       const RectList& dirtyRects,
+                                       void* share_handle) {
 
-void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> /*browser*/,
-                                CefRect& rect) {
-    rect.Set(0, 0, width_, height_);
+  if (PET_VIEW == type) {
+
+    CefPostTask(TID_FILE_USER_BLOCKING,
+                base::Bind(&SimpleHandler::DoPainted, this,
+                                   browser->GetIdentifier(), share_handle));
+  }
+}
+  extern ID3D11Texture2D * g_ActiveTexture;
+
+void SimpleHandler::DoPainted(int browserId, void* share_handle) {
+  std::unique_lock<std::mutex> lock(m_BrowserMutex);
+  auto it = m_Browsers.find(browserId);
+  if (it != m_Browsers.end()) {
+    if (CHostPipeServerConnectionThread* connection = it->second.Connection) {
+      try {
+        m_HandleToBrowserId[share_handle] = browserId;
+        connection->OnPainted(share_handle);
+      } catch (const std::exception e) {
+        DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                    << e.what();
+      }
+    }
+  }
 }
 
-bool SimpleHandler::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
-                                        CefRefPtr<CefFrame> frame,
-                                        CefProcessId source_process,
-                                        CefRefPtr<CefProcessMessage> message) {
-  auto const name = message->GetName().ToString();
-
-  if (name == "afx-connect") {
-    auto const args = message->GetArgumentList();
-    auto const size = args->GetSize();
-    if (size == 0) {
-      AfxDrawingInteropConnection();
-    } else if (1 <= size) {
-      AfxDrawingInteropConnection(
-          args->GetInt(0));
-    }
-    return true;
-  }
-
-  if (name == "afx-begin-frame" && browser != nullptr) {
-    auto const args = message->GetArgumentList();
-    auto const size = args->GetSize();
-    if (size == 2) {
-      AfxSetSize(browser, args->GetInt(0), args->GetInt(1));
-    }
-    
-    browser->GetHost()->SendExternalBeginFrame();
-    return true;
-  }
-
-  if (name == "afx-set-pipename") {
-    auto const args = message->GetArgumentList();
-    auto const size = args->GetSize();
-    if (1 == size && args->GetType(0) == VTYPE_STRING) {
-      AfxDrawingInteropSetPipeName(
-          args->GetString(0));
-    }
-    return true;
-  }
-
-  if (name == "afx-close") {
-    AfxDrawingInteropClose();
-    return true;
-  }
-
-  return false;
-  }
+void SimpleHandler::DoQuit() {
+  CefQuitMessageLoop();
+}

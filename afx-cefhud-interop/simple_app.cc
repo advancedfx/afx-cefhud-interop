@@ -8,9 +8,11 @@
 
 #include "include/cef_browser.h"
 #include "include/cef_command_line.h"
+#include "include/cef_parser.h"
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_window.h"
 #include "include/wrapper/cef_helpers.h"
+
 #include "afx-cefhud-interop/simple_handler.h"
 
 namespace {
@@ -75,6 +77,13 @@ class SimpleBrowserViewDelegate : public CefBrowserViewDelegate {
   DISALLOW_COPY_AND_ASSIGN(SimpleBrowserViewDelegate);
 };
 
+// Returns a data: URI with the specified contents.
+std::string GetDataURI(const std::string& data, const std::string& mime_type) {
+  return "data:" + mime_type + ";base64," +
+         CefURIEncode(CefBase64Encode(data.data(), data.size()), false)
+             .ToString();
+}
+
 }  // namespace
 
 SimpleApp::SimpleApp() {}
@@ -90,56 +99,85 @@ void SimpleApp::OnContextInitialized() {
 
   // Specify CEF browser settings here.
   CefBrowserSettings browser_settings;
-
-
-  // Set the maximum rate that the HTML content will render at
-  //
-  // NOTE: this value is NOT capped to 60 by CEF when using shared textures and
-  // it is completely ignored when using SendExternalBeginFrame
-  //
-  // For testing, this application uses 120Hz to show that the 60Hz limit is
-  // ignored (set window_info.external_begin_frame_enabled above to false to
-  // test)
+  browser_settings.file_access_from_file_urls = STATE_ENABLED;
   browser_settings.windowless_frame_rate = 60;
 
-  std::string url;
+  std::string argUrl = command_line->GetSwitchValue("url");
 
-  // Check if a "--url=" value was provided via the command-line. If so, use
-  // that instead of the default URL.
-  url = command_line->GetSwitchValue("url");
-  if (url.empty()) {
-    url = "file:///C:/source/cef-project/build/afx-cefhud-interop/Release/example.html";
-  }
-
-  {
+ {
     // Information used when creating the native window.
     CefWindowInfo window_info;
 
 #if defined(OS_WIN)
     // On Windows we need to specify certain flags that will be passed to
     // CreateWindowEx().
-    //window_info.SetAsPopup(NULL, "cefsimple");    
-    window_info.SetAsWindowless(nullptr);
 
-    // we want to use OnAcceleratedPaint
-    window_info.shared_texture_enabled = true;
+    bool bWindow = !command_line->HasSwitch("afx-no-window");
 
-	// we are going to issue calls to SendExternalBeginFrame
-    // and CEF will not use its internal BeginFrameTimer in this case
-    window_info.external_begin_frame_enabled = true;
+    if(bWindow)
+      window_info.SetAsPopup(NULL, "cefsimple");
+    else
+      window_info.SetAsWindowless(NULL);
+    window_info.width = 405;
+    window_info.height = 720;
+    window_info.shared_texture_enabled =  false;
+    window_info.external_begin_frame_enabled = bWindow ? false : true; // No need to draw what one can't see.
 #endif
+
+    std::string url;
+
+    if (argUrl.empty()) {
+      std::stringstream ss;
+      ss << "<html><body bgcolor=\"white\">"
+            "<h2>You forgot to pass the URL d(o)(O)b</h2></body></html>";
+      url = GetDataURI(ss.str(), "text/html");
+    }
+    else {
+      CefRefPtr<CefDictionaryValue> _extra_info = CefDictionaryValue::Create();
+      _extra_info->SetString("interopType", "index");
+
+      auto argStr = CefValue::Create();
+      auto argCmd = CefDictionaryValue::Create();
+      argCmd->SetString("commandLineString",
+                        command_line->GetCommandLineString());
+      argStr->SetDictionary(argCmd);
+
+      _extra_info->SetString("argStr", CefWriteJSON(argStr, JSON_WRITER_DEFAULT));
+      _extra_info->SetInt("handlerId", GetCurrentProcessId());
+
+
+      auto val = CefValue::Create();
+      val->SetDictionary(_extra_info);
+
+      std::string prefix;
+      std::string query;
+      std::string suffix;
+
+      size_t pos_hash = argUrl.find("#"); 
+      if(std::string::npos != pos_hash)
+      {
+        prefix = argUrl.substr(0, pos_hash);
+        suffix = argUrl.substr(pos_hash);
+      }
+      else {
+        prefix = argUrl;
+      }
+      size_t pos_query = prefix.find("?");
+
+      if(std::string::npos != pos_query)
+      {
+        query = prefix.substr(pos_query + 1);
+        prefix = prefix.substr(0, pos_query);
+      }
+
+      if(0 < query.size()) query += "&";
+      query += "afx="+CefURIEncode(CefWriteJSON(val, JSON_WRITER_DEFAULT), false).ToString();
+
+      url = prefix+"?"+query+suffix;
+    }
 
     // Create the first browser window.
     CefBrowserHost::CreateBrowser(window_info, handler, url, browser_settings,
-                                  nullptr, nullptr);
+                                  nullptr);
   }
-}
-
-bool SimpleApp::OnProcessMessageReceived(
-    CefRefPtr<CefBrowser> browser,
-    CefRefPtr<CefFrame> frame,
-    CefProcessId source_process,
-    CefRefPtr<CefProcessMessage> message) {
-
-    return false;
 }

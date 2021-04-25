@@ -11,19 +11,22 @@
 #include <iostream>
 #include <fstream>
 
-
 #include "include/cef_sandbox_win.h"
 #include "afx-cefhud-interop/simple_app.h"
+#include "AfxInterop.h"
+
+#include <map>
 
 #include <d3d11.h>
 #include <tchar.h>
-#include "third_party/Detours/src/detours.h"
+#include <third_party/Detours/src/detours.h>
+#include <tlhelp32.h>
 
 // When generating projects with CMake the CEF_USE_SANDBOX value will be defined
 // automatically if using the required compiler version. Pass -DUSE_SANDBOX=OFF
 // to the CMake command-line to disable use of the sandbox.
 // Uncomment this line to manually enable sandbox support.
-// #define CEF_USE_SANDBOX 1
+//#define CEF_USE_SANDBOX 1
 
 #if defined(CEF_USE_SANDBOX)
 // The cef_sandbox.lib static library may not link successfully with all VS
@@ -34,12 +37,162 @@
 HMODULE g_hD3d11Dll = NULL;
 LONG g_detours_error = NO_ERROR;
 
-typedef ULONG(STDMETHODCALLTYPE* AddReff_t)(ID3D11Device* This);
-typedef ULONG(STDMETHODCALLTYPE* Release_t)(ID3D11Device* This);
+typedef ULONG(STDMETHODCALLTYPE* AddReff_t)(IUnknown* This);
+typedef ULONG(STDMETHODCALLTYPE* Release_t)(IUnknown* This);
 
 ID3D11Device* pDevice = NULL;
-//ID3D11DeviceContext* pContext = NULL;
+ID3D11DeviceContext* pContext = NULL;
 ID3D11Query* pQuery = NULL;
+
+std::map<ID3D11Texture2D *,HANDLE> g_Textures;
+
+HANDLE g_ActiveShareHandle = INVALID_HANDLE_VALUE;
+
+bool AfxWaitForGPU()
+{
+  if(!pDevice) return false;
+
+	bool bOk = false;
+	bool immediateContextUsed = false;
+
+	if (!pContext)
+	{
+		immediateContextUsed = true;
+		pDevice->GetImmediateContext(&pContext);
+	}
+
+	if (pDevice && pQuery)
+	{
+		pContext->Flush();
+
+		pContext->End(pQuery);
+
+		while (S_OK != pContext->GetData(pQuery, NULL, 0, 0))
+			;
+
+		bOk = true;
+	}
+
+	if (immediateContextUsed)
+	{
+		pContext->Release();
+		pContext = NULL;
+	}
+
+	return bOk;
+}
+
+class CGpuPipeClient : public advancedfx::interop::CPipeClient 
+{
+public:
+} g_GpuPipeClient;
+
+typedef void (STDMETHODCALLTYPE * ClearRenderTargetView_t)( 
+            ID3D11DeviceContext * This,
+            /* [annotation] */ 
+            _In_  ID3D11RenderTargetView *pRenderTargetView,
+            /* [annotation] */ 
+            _In_  const FLOAT ColorRGBA[ 4 ]);
+
+ClearRenderTargetView_t g_Org_ClearRenderTargetView;
+
+void STDMETHODCALLTYPE My_ClearRenderTargetView( 
+            ID3D11DeviceContext * This,
+            /* [annotation] */ 
+            _In_  ID3D11RenderTargetView *pRenderTargetView,
+            /* [annotation] */ 
+            _In_  const FLOAT ColorRGBA[ 4 ]) {
+
+  if(pRenderTargetView)
+  {
+    ID3D11Resource * resource = nullptr;
+
+    pRenderTargetView->GetResource(&resource);
+
+    if(resource)
+    {
+      auto it = g_Textures.find((ID3D11Texture2D*)resource);
+      if(it != g_Textures.end())
+      {
+        //FLOAT col[4] = {0,0,0.5,0.5};
+
+        g_Org_ClearRenderTargetView(This, pRenderTargetView, ColorRGBA);
+
+        HANDLE hHandle = it->second;
+
+        g_GpuPipeClient.WriteInt32((INT32)advancedfx::interop::HostMessage::GpuOfferShareHandle);
+        g_GpuPipeClient.WriteHandle(hHandle);
+        g_GpuPipeClient.Flush();
+        bool waitForGPU = g_GpuPipeClient.ReadBoolean();
+        if(waitForGPU) {
+          //AfxWaitForGPU();
+          g_GpuPipeClient.WriteBoolean(true);
+          g_GpuPipeClient.Flush();      
+        }
+
+        resource->Release();
+        return;
+      }
+
+      resource->Release();
+    }
+  }
+
+   g_Org_ClearRenderTargetView(This, pRenderTargetView, ColorRGBA);
+}
+
+HANDLE AfxInteropGetSharedHandle(ID3D11Resource* pD3D11Resource) {
+  HANDLE result = INVALID_HANDLE_VALUE;
+
+  if (pD3D11Resource) {
+    IDXGIResource* dxgiResource;
+
+    if (SUCCEEDED(pD3D11Resource->QueryInterface(__uuidof(IDXGIResource),
+                                           (void**)&dxgiResource))) {
+      if (FAILED(dxgiResource->GetSharedHandle(&result))) {
+        result = INVALID_HANDLE_VALUE;
+      }
+      dxgiResource->Release();
+    }
+  }
+
+  return result;
+}
+
+Release_t g_Old_ID3D11Texture2D_Release;
+
+ULONG STDMETHODCALLTYPE My_ID3D11Texture2D_Release(ID3D11Texture2D* This) {
+
+  ULONG count = g_Old_ID3D11Texture2D_Release(This);
+
+  if (0 == count) {
+
+    auto it = g_Textures.find(This);
+    if(it != g_Textures.end())
+    {
+      try {
+        g_GpuPipeClient.WriteInt32(
+            (INT32)advancedfx::interop::HostMessage::GpuRelaseShareHandle);
+        g_GpuPipeClient.WriteHandle(it->second);
+        g_GpuPipeClient.Flush();
+      } catch (const std::exception& e) {
+        DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                    << e.what();
+        /*
+        std::string str = "Error in " + std::string(__FILE__) + ":" +
+                          std::to_string(__LINE__) + ": " +
+                          std::string(e.what());
+
+        OutputDebugStringA(str.c_str());*/
+      }
+
+      g_Textures.erase(it);
+    }
+
+  }
+
+  return count;
+}
 
 typedef HRESULT(STDMETHODCALLTYPE* CreateTexture2D_t)(
     ID3D11Device* This,
@@ -53,6 +206,42 @@ typedef HRESULT(STDMETHODCALLTYPE* CreateTexture2D_t)(
 
 CreateTexture2D_t True_CreateTexture2D;
 
+
+void InstallTextureHooks(ID3D11Texture2D* pTexture2D)
+{
+  if(nullptr == pContext)
+  {
+    pDevice->GetImmediateContext(&pContext);
+    if(pContext)
+    {
+      DWORD oldProtect;
+      VirtualProtect(pContext, sizeof(void*) * 51, PAGE_EXECUTE_READWRITE, &oldProtect);
+          
+      g_Org_ClearRenderTargetView = (ClearRenderTargetView_t) * (void**)((*(char**)(pContext)) + sizeof(void*) * 50);
+
+      DetourTransactionBegin();
+      DetourUpdateThread(GetCurrentThread());
+      DetourAttach(&(PVOID&)g_Org_ClearRenderTargetView, My_ClearRenderTargetView);
+      DetourTransactionCommit();
+
+      VirtualProtect(pContext, sizeof(void*) * 51, oldProtect, NULL);
+    }
+  }
+
+  if(nullptr == g_Old_ID3D11Texture2D_Release){
+    DWORD oldProtect;
+
+    VirtualProtect(pTexture2D, sizeof(void*) * 3, PAGE_EXECUTE_READWRITE, &oldProtect);
+    g_Old_ID3D11Texture2D_Release = (Release_t) * (void**)((*(char**)(pTexture2D)) + sizeof(void*) * 2);    
+    VirtualProtect(pTexture2D, sizeof(void*) * 3, oldProtect, NULL);
+
+    DetourTransactionBegin();
+    DetourUpdateThread(GetCurrentThread());
+    DetourAttach(&(PVOID&)g_Old_ID3D11Texture2D_Release, My_ID3D11Texture2D_Release);
+    DetourTransactionCommit();
+  }
+}
+
 HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
     ID3D11Device* This,
     /* [annotation] */
@@ -63,56 +252,167 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
     /* [annotation] */
     _COM_Outptr_opt_ ID3D11Texture2D** ppTexture2D) {
   if (pDesc) {
-    switch (pDesc->Format) {
-      default:
-        break;
-      case DXGI_FORMAT_B8G8R8A8_UNORM: 
-        if (pDesc->MiscFlags & D3D11_RESOURCE_MISC_SHARED)
-        {
-          D3D11_TEXTURE2D_DESC*pDescNc = const_cast<D3D11_TEXTURE2D_DESC*>(pDesc);
-          pDescNc->BindFlags |= D3D11_BIND_RENDER_TARGET;
-          //MessageBoxA(0, "HI", "HI", MB_OK);
-        }
-        break;
+
+/*
+          MessageBoxA(0,
+          (
+          +", "+std::to_string(pDesc->Width)
+          +", "+std::to_string(pDesc->Height)
+          +", "+std::to_string(pDesc->MipLevels)
+          +", "+std::to_string(pDesc->ArraySize)
+          +", "+std::to_string(pDesc->SampleDesc.Count)
+          +", "+std::to_string(pDesc->SampleDesc.Quality)
+          +", "+std::to_string(pDesc->Usage)
+          +", "+std::to_string(pDesc->BindFlags)
+          +", "+std::to_string(pDesc->CPUAccessFlags)
+          +", "+std::to_string(pDesc->MiscFlags)
+          +", "+std::to_string(0 != pInitialData)
+          ).c_str(), "LOL", MB_OK);
+*/
+
+    if(pDesc->Width > 1 
+        && pDesc->Height > 1
+        && pDesc->MipLevels == 1
+        && pDesc->ArraySize == 1
+        && pDesc->Format == DXGI_FORMAT_B8G8R8A8_UNORM
+        && pDesc->SampleDesc.Count == 1
+        && pDesc->SampleDesc.Quality == 0
+        && pDesc->Usage == D3D11_USAGE_DEFAULT
+        && pDesc->BindFlags == (D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE)
+        && pDesc->CPUAccessFlags == 0
+        && pDesc->MiscFlags == 0)
+    {
+      D3D11_TEXTURE2D_DESC Desc = *pDesc;
+
+      // Desc.Width = Width;
+      // Desc.Height = Height;
+      Desc.MipLevels = 1;
+      Desc.ArraySize = 1;
+      Desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+      Desc.SampleDesc.Count = 1;
+      Desc.SampleDesc.Quality = 0;
+      Desc.Usage = D3D11_USAGE_DEFAULT;
+      Desc.BindFlags =
+          D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+      Desc.CPUAccessFlags = 0;
+      Desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+
+      HRESULT result = True_CreateTexture2D(This, pDesc, pInitialData, ppTexture2D);
+      if(SUCCEEDED(result) && *ppTexture2D) InstallTextureHooks(*ppTexture2D);
+
+
+      if(pContext && ppTexture2D && SUCCEEDED(result))
+      {
+        ID3D11RenderTargetView * views[1] = {nullptr};
+        pContext->OMGetRenderTargets(1,views,NULL);
+
+        if(views[0])
+          views[0]->Release();
+        else
+          g_Textures.emplace(*ppTexture2D, AfxInteropGetSharedHandle(*ppTexture2D));
+      } 
+
+      return result;
     }
+    else if(pDesc->Width > 1 
+        && pDesc->Height > 1
+        && pDesc->MipLevels == 1
+        && pDesc->ArraySize == 1
+        && pDesc->Format == DXGI_FORMAT_B8G8R8A8_UNORM
+        && pDesc->SampleDesc.Count == 1
+        && pDesc->SampleDesc.Quality == 0
+        && pDesc->Usage == D3D11_USAGE_DEFAULT
+        && pDesc->BindFlags == D3D11_BIND_SHADER_RESOURCE
+        && pDesc->CPUAccessFlags == 0
+        && pDesc->MiscFlags == D3D11_RESOURCE_MISC_SHARED
+        )
+    {
+      D3D11_TEXTURE2D_DESC Desc = *pDesc;
+
+      // Desc.Width = Width;
+      // Desc.Height = Height;
+      Desc.MipLevels = 1;
+      Desc.ArraySize = 1;
+      Desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+      Desc.SampleDesc.Count = 1;
+      Desc.SampleDesc.Quality = 0;
+      Desc.Usage = D3D11_USAGE_DEFAULT;
+      Desc.BindFlags =
+          D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+      Desc.CPUAccessFlags = 0;
+      Desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+
+      HRESULT result = True_CreateTexture2D(This, &Desc, pInitialData, ppTexture2D);
+      if(SUCCEEDED(result) && *ppTexture2D) InstallTextureHooks(*ppTexture2D);
+
+      return result;
+    }
+
+    return True_CreateTexture2D(This, pDesc, pInitialData, ppTexture2D);
   }
 
   return True_CreateTexture2D(This, pDesc, pInitialData, ppTexture2D);
 }
 
-ULONG g_RefCOunt = 1;
-AddReff_t True_AddRef = NULL;
-Release_t True_Release;
+Release_t g_Old_ID3D11Device_Release;
 
-ULONG STDMETHODCALLTYPE My_AddRef(ID3D11Device* This) {
-  g_RefCOunt = True_AddRef(This);
+ULONG STDMETHODCALLTYPE My_ID3D11Device_Release(ID3D11Device* This) {
 
-  return g_RefCOunt;
-}
+  ULONG count = g_Old_ID3D11Device_Release(This);
 
-ULONG STDMETHODCALLTYPE My_Release(ID3D11Device* This) {
-  if (1 == g_RefCOunt) {
+  if (0 == count) {
+    try {
+      g_GpuPipeClient.Flush();
+    } catch (const std::exception &) {
+    }    
+    try {
+      g_GpuPipeClient.ClosePipe();
+    } catch (const std::exception &) {
+    }
+
     if (pQuery) {
       pQuery->Release();
       pQuery = NULL;
     }
 
     pDevice = NULL;
-  }
 
-  g_RefCOunt = True_Release(This);
-
-  if (0 == g_RefCOunt) {
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
-    DetourDetach(&(PVOID&)True_AddRef, My_AddRef);
-    DetourDetach(&(PVOID&)True_Release, My_Release);
+    DetourDetach(&(PVOID&)g_Old_ID3D11Device_Release, My_ID3D11Device_Release);
     DetourDetach(&(PVOID&)True_CreateTexture2D, My_CreateTexture2D);
-    //DetourDetach(&(PVOID&)True_CreateDeferredContext, My_CreateDeferredContext);
-    g_detours_error = DetourTransactionCommit();
+    DetourTransactionCommit();    
   }
 
-  return g_RefCOunt;
+  return count;
+}
+
+DWORD GetParentProcessId( )
+{
+    HANDLE hSnapshot;
+    PROCESSENTRY32 pe32;
+    DWORD ppid = 0, pid = GetCurrentProcessId();
+
+    hSnapshot = CreateToolhelp32Snapshot( TH32CS_SNAPPROCESS, 0 );
+    __try{
+        if( hSnapshot == INVALID_HANDLE_VALUE ) __leave;
+
+        ZeroMemory( &pe32, sizeof( pe32 ) );
+        pe32.dwSize = sizeof( pe32 );
+        if( !Process32First( hSnapshot, &pe32 ) ) __leave;
+
+        do{
+            if( pe32.th32ProcessID == pid ){
+                ppid = pe32.th32ParentProcessID;
+                break;
+            }
+        }while( Process32Next( hSnapshot, &pe32 ) );
+
+    }
+    __finally{
+        if( hSnapshot != INVALID_HANDLE_VALUE ) CloseHandle( hSnapshot );
+    }
+    return ppid;
 }
 
 typedef HRESULT(WINAPI* D3D11CreateDevice_t)(
@@ -149,116 +449,66 @@ MyD3D11CreateDevice(_In_opt_ IDXGIAdapter* pAdapter,
     return result;
   }
 
-  if (NULL == True_AddRef) {
+  if (NULL == g_Old_ID3D11Device_Release) {
     DWORD oldProtect;
-    VirtualProtect(*ppDevice, sizeof(void*) * 27, PAGE_EXECUTE_READWRITE,
+    VirtualProtect(*ppDevice, sizeof(void*) * 8, PAGE_EXECUTE_READWRITE,
                    &oldProtect);
 
-    True_AddRef =
-        (AddReff_t) * (void**)((*(char**)(*ppDevice)) + sizeof(void*) * 1);
-    True_Release =
+    g_Old_ID3D11Device_Release =
         (Release_t) * (void**)((*(char**)(*ppDevice)) + sizeof(void*) * 2);
     True_CreateTexture2D = (CreateTexture2D_t) *
                            (void**)((*(char**)(*ppDevice)) + sizeof(void*) * 5);
-    //True_CreateDeferredContext =  (CreateDeferredContext_t) * (void**)((*(char**)(*ppDevice)) + sizeof(void*) * 27);
 
-    VirtualProtect(*ppDevice, sizeof(void*) * 27, oldProtect, NULL);
+    VirtualProtect(*ppDevice, sizeof(void*) * 8, oldProtect, NULL);
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
-    DetourAttach(&(PVOID&)True_AddRef, My_AddRef);
-    DetourAttach(&(PVOID&)True_Release, My_Release);
+    DetourAttach(&(PVOID&)g_Old_ID3D11Device_Release, My_ID3D11Device_Release);
     DetourAttach(&(PVOID&)True_CreateTexture2D, My_CreateTexture2D);
-    //DetourAttach(&(PVOID&)True_CreateDeferredContext, My_CreateDeferredContext);
-    g_detours_error = DetourTransactionCommit();
-  }
+    DetourTransactionCommit();
 
-  if (SUCCEEDED(g_detours_error)) {
-    pDevice = *ppDevice;
+    if (nullptr == pQuery) {
+      pDevice = *ppDevice;
 
-    D3D11_QUERY_DESC queryDesc = {D3D11_QUERY_EVENT, 0};
+      D3D11_QUERY_DESC queryDesc = {D3D11_QUERY_EVENT, 0};
 
-    if (FAILED((*ppDevice)->CreateQuery(&queryDesc, &pQuery))) {
-      pQuery = NULL;
+      if (FAILED((*ppDevice)->CreateQuery(&queryDesc, &pQuery))) {
+        pQuery = NULL;
+       }
+    }
+
+    std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_handler_");
+    strPipeName.append(std::to_string(GetParentProcessId()));
+
+    try {
+      while(true)
+      {
+        bool bError = false;
+        try {
+          g_GpuPipeClient.OpenPipe(strPipeName.c_str(), INFINITE);
+          Sleep(100);
+        }
+        catch(const std::exception&)
+        {
+          bError = true;
+        }
+
+        if(!bError) break;
+      }
+
+      //MessageBoxA(0, strPipeName.c_str(), "CLIENT", MB_OK);
+
+      g_GpuPipeClient.WriteUInt32(GetCurrentProcessId());
+      g_GpuPipeClient.WriteInt32(0);
+      g_GpuPipeClient.Flush();
+    } catch (const std::exception& e) {
+      DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                  << e.what();
     }
   }
 
   return result;
 }
-
-static const WORD MAX_CONSOLE_LINES = 500;
-
-// http://dslweb.nwnexus.com/~ast/dload/guicon.htm
-void RedirectIOToConsole()
-
-{
-  int hConHandle;
-
-  intptr_t lStdHandle;
-
-  CONSOLE_SCREEN_BUFFER_INFO coninfo;
-
-  FILE* fp;
-
-  // allocate a console for this app
-
-  AllocConsole();
-
-  // set the screen buffer to be big enough to let us scroll text
-
-  GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE),
-
-                             &coninfo);
-
-  coninfo.dwSize.Y = MAX_CONSOLE_LINES;
-
-  SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE),
-
-                             coninfo.dwSize);
-
-  // redirect unbuffered STDOUT to the console
-
-  lStdHandle = (intptr_t)GetStdHandle(STD_OUTPUT_HANDLE);
-
-  hConHandle = _open_osfhandle(lStdHandle, _O_TEXT);
-
-  fp = _fdopen(hConHandle, "w");
-
-  *stdout = *fp;
-
-  setvbuf(stdout, NULL, _IONBF, 0);
-
-  // redirect unbuffered STDIN to the console
-
-  lStdHandle = (intptr_t)GetStdHandle(STD_INPUT_HANDLE);
-
-  hConHandle = _open_osfhandle(lStdHandle, _O_TEXT);
-
-  fp = _fdopen(hConHandle, "r");
-
-  *stdin = *fp;
-
-  setvbuf(stdin, NULL, _IONBF, 0);
-
-  // redirect unbuffered STDERR to the console
-
-  lStdHandle = (intptr_t)GetStdHandle(STD_ERROR_HANDLE);
-
-  hConHandle = _open_osfhandle(lStdHandle, _O_TEXT);
-
-  fp = _fdopen(hConHandle, "w");
-
-  *stderr = *fp;
-
-  setvbuf(stderr, NULL, _IONBF, 0);
-
-  // make cout, wcout, cin, wcin, wcerr, cerr, wclog and clog
-
-  // point to console as well
-
-  std::ios::sync_with_stdio();
-}
-
 
 // Entry point function for all processes.
 int APIENTRY wWinMain(HINSTANCE hInstance,
@@ -267,6 +517,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
                       int nCmdShow) {
   UNREFERENCED_PARAMETER(hPrevInstance);
 
+  bool afxWindow = true;
+
   {
     LPWSTR* szArglist;
     int nArgs;
@@ -274,13 +526,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
 
     szArglist = CommandLineToArgvW(GetCommandLineW(), &nArgs);
     if (NULL != szArglist) {
-      bool enableConsole = false;
       for (i = 0; i < nArgs; i++) {
-        if (0 == wcsicmp(L"--afxConsole", szArglist[i]))
-          enableConsole = true;
+        if (0 == wcsicmp(L"--afx-no-window", szArglist[i]))
+          afxWindow = false;
       }
-      if (enableConsole)
-        RedirectIOToConsole();
     }
   }
 
@@ -296,6 +545,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
   g_detours_error = DetourTransactionCommit();
   //
 
+
   // Enable High-DPI support on Windows 7 or newer.
   CefEnableHighDPISupport();
 
@@ -304,8 +554,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
 #if defined(CEF_USE_SANDBOX)
   // Manage the life span of the sandbox information object. This is necessary
   // for sandbox support on Windows. See cef_sandbox_win.h for complete details.
-  //CefScopedSandboxInfo scoped_sandbox;
-  //sandbox_info = scoped_sandbox.sandbox_info();
+  CefScopedSandboxInfo scoped_sandbox;
+  sandbox_info = scoped_sandbox.sandbox_info();
 #endif
 
   // Provide CEF with command-line arguments.
@@ -332,16 +582,18 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
   settings.no_sandbox = true;
 #endif
 
-  settings.no_sandbox = true;
   settings.multi_threaded_message_loop = false;
   settings.windowless_rendering_enabled = true;
   
   // Initialize CEF.
-  CefInitialize(main_args, settings, app.get(), sandbox_info);
+  CefInitialize(main_args, settings, app, sandbox_info);
 
   // Run the CEF message loop. This will block until CefQuitMessageLoop() is
   // called.
   CefRunMessageLoop();
+
+  // Disable logs, since they will become unavailable upon shutdown:
+
 
   // Shut down CEF.
   CefShutdown();
