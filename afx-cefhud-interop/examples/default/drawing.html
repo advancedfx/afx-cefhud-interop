@@ -1132,9 +1132,10 @@ AfxDrawingInterop.prototype.disconnect = async function() {
 		console.log("Waiting for renderer to finish before disconnecting ...");
 		await sleepPromise(250);
 	}
-
+	
+	this.interop.cancel();
 	this.messagePromises = {}
-
+	
 	if(this.connected)
 	{
 		this.connected = false;
@@ -1156,7 +1157,7 @@ AfxDrawingInterop.prototype.disconnect = async function() {
 
 		await toPromise(this.interop, "sendMessage", this.engineInteropId, JSON.stringify({
 			"id": "drawingDisconnected",
-			"port": 1,
+			"port": "1",
 			"args": [this.interop.id]
 		}));
 

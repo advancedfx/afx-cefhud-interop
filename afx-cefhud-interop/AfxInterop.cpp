@@ -2251,7 +2251,7 @@ afxObject->AddFunction(
           }
 
         if (1 <= arguments.size() && arguments[0]->IsString()) {
-        self->m_PipeQueue.Queue(
+            self->m_PipeQueue.Queue(
             [self, pipeName = arguments[0]->GetStringValue().ToString()]() {
               self->SetPipeName(pipeName.c_str());
             });
@@ -6986,6 +6986,15 @@ private:
                 dataBytesPerRow, columnOffsetBytes,
                 rowOffsetBytes,
                 totalBytesPerRow]() {
+
+
+            if (self->m_DoReleased)
+                    goto __error;
+                  else
+                    self->m_DoReleased = true;
+
+                  if (!self->m_Interop->m_InFlow)
+                    goto __error;
 
           if (!self->m_Interop->m_PipeServer->WriteUInt32(
                   (UINT32)DrawingReply::UpdateD3d9Texture))

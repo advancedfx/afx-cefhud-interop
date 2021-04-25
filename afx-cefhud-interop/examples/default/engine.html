@@ -388,7 +388,8 @@ AfxEngineInterop.prototype.connect = async function() {
 }
 
 AfxEngineInterop.prototype.disconnect = async function() {
-
+	
+	this.interop.cancel();
 	this.messagePromises = {};
 	this.pumpPromise = Promise.resolve();
 
@@ -416,7 +417,6 @@ AfxEngineInterop.prototype.disconnect = async function() {
 		this.connected = false;
 
 		try {
-			this.interop.cancel();
 			await toPromise(this.interop, "close");
 		}
 		catch(e)
