@@ -390,6 +390,7 @@ AfxEngineInterop.prototype.connect = async function() {
 AfxEngineInterop.prototype.disconnect = async function() {
 
 	this.messagePromises = {};
+	this.pumpPromise = Promise.resolve();
 
 	if(this.drawingConnectedEvent)
 	{
