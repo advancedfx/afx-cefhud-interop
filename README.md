@@ -1,5 +1,13 @@
 # afx-cefhud-interop
 
+## FAQ
+
+### Can I use this for browsing the internet?
+
+You should strongly avoid loading any untrusted content with afx-cefhud-interop at the moment, this would put your PC at a high risk:
+- CEF sandbox is disabled for technical reasons, so no sandbox protection
+- even on v7 the CEF version is from 2019, so lots of unpatched security holes
+
 ## Old v6 (compatible with official HLAE)
 
 https://github.com/advancedfx/afx-cefhud-interop/tree/v6
