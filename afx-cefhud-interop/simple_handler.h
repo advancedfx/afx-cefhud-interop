@@ -28,6 +28,7 @@ class SimpleHandler : public CefClient,
                       public CefRenderHandler,
                       public CefLifeSpanHandler,
                       public CefLoadHandler,
+                      public CefRequestHandler,
                       private advancedfx::interop::CPipeServer {
  public:
   explicit SimpleHandler();
@@ -49,6 +50,7 @@ class SimpleHandler : public CefClient,
 
   virtual CefRefPtr<CefLoadHandler> GetLoadHandler() OVERRIDE { return this; }
 
+  virtual CefRefPtr<CefRequestHandler> GetRequestHandler() OVERRIDE { return this; }
 
   // CefDisplayHandler methods:
 
@@ -90,6 +92,40 @@ class SimpleHandler : public CefClient,
                            const CefString& failedUrl) OVERRIDE;
   
   bool IsClosing() const { return is_closing_; }
+
+  // CefRquestHandler methods:
+
+  virtual bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
+                              CefRefPtr<CefFrame> frame,
+                              CefRefPtr<CefRequest> request,
+                              bool user_gesture,
+                              bool is_redirect) {
+
+    // Limit afx features to only the allowed requests:
+
+    std::string url = request->GetURL();
+    if(
+      url.find("?afx=") != std::string::npos
+      || url.find("&afx") != std::string::npos
+      || 0 == url.find("afx://")) {
+        bool afx_enabled = false;
+        auto plugins_enabled = browser->GetHost()->GetRequestContext()->GetPreference("plugins.plugins_enabled");
+        auto plugins_enabled_list = plugins_enabled ? plugins_enabled->GetList() : nullptr;
+        if(plugins_enabled_list)
+        {
+          size_t n = plugins_enabled_list->GetSize();
+          for(size_t i = 0; i < n; ++i)
+          {
+            if(plugins_enabled_list->GetString(i) == "afx")
+              afx_enabled = true;
+          }
+        }
+        if(!afx_enabled) return true;
+      }
+
+    return false;
+  }
+
 
  protected:
   class CHostPipeServerConnectionThread;
@@ -158,7 +194,7 @@ class SimpleHandler : public CefClient,
   bool OfferShareHandle(HANDLE share_handle)
   {
     std::unique_lock<std::mutex> lock(m_BrowserMutex);    
-    m_ShareHandle = share_handle;
+
     auto it = m_HandleToBrowserId.emplace(share_handle, 0);
     if(!it.second)
     {
@@ -175,7 +211,7 @@ class SimpleHandler : public CefClient,
   void ReleaseShareHandle(HANDLE share_handle)
   {
     std::unique_lock<std::mutex> lock(m_BrowserMutex);    
-    m_ShareHandle = share_handle;
+
     auto it = m_HandleToBrowserId.emplace(share_handle, 0);
     if(!it.second)
     {
@@ -244,6 +280,14 @@ class SimpleHandler : public CefClient,
 
     std::string url = prefix+"?"+query+suffix;
 
+    auto req_ctx = CefRequestContext::CreateContext(CefRequestContext::GetGlobalContext(), nullptr);
+    auto plugins_enabled = CefListValue::Create();
+    plugins_enabled->SetString(0,"afx");
+    auto val_plugins_enabled = CefValue::Create();
+    val_plugins_enabled->SetList(plugins_enabled);
+    CefString req_ctx_pref_error;
+    req_ctx->SetPreference("plugins.plugins_enabled", val_plugins_enabled, req_ctx_pref_error);
+
     CefBrowserHost::CreateBrowser(window_info, this, url, browser_settings, nullptr);
   }
 
@@ -294,8 +338,16 @@ class SimpleHandler : public CefClient,
 
     std::string url = prefix+"?"+query+suffix;
     
+    auto req_ctx = CefRequestContext::CreateContext(CefRequestContext::GetGlobalContext(), nullptr);
+    auto plugins_enabled = CefListValue::Create();
+    plugins_enabled->SetString(0,"afx");
+    auto val_plugins_enabled = CefValue::Create();
+    val_plugins_enabled->SetList(plugins_enabled);
+    CefString req_ctx_pref_error;
+    req_ctx->SetPreference("plugins.plugins_enabled", val_plugins_enabled, req_ctx_pref_error);
+
     CefBrowserHost::CreateBrowser(window_info, this, url, browser_settings,
-                                  nullptr);
+                                  req_ctx);
   }
 
  protected:
@@ -435,7 +487,7 @@ class SimpleHandler : public CefClient,
               std::string argStr;
               ReadStringUTF8(argStr);
 
-              CefPostTask(TID_PROCESS_LAUNCHER,
+              CefPostTask(TID_UI,
                           base::Bind(&SimpleHandler::DoCreateDrawing,
                                              m_Host, argStr, argUrl));
             } break;
@@ -446,7 +498,7 @@ class SimpleHandler : public CefClient,
               std::string argStr;
               ReadStringUTF8(argStr);
 
-              CefPostTask(TID_PROCESS_LAUNCHER,
+              CefPostTask(TID_UI,
                           base::Bind(&SimpleHandler::DoCreateEngine,
                                              m_Host, argStr, argUrl));
             } break;
@@ -542,7 +594,6 @@ class SimpleHandler : public CefClient,
 
   std::mutex m_BrowserMutex;
   std::map<int, BrowserMapElem> m_Browsers;
-  HANDLE m_ShareHandle = INVALID_HANDLE_VALUE;
   std::map<HANDLE, int> m_HandleToBrowserId;
   CHostPipeServerConnectionThread* m_Connection0 = nullptr;
 
