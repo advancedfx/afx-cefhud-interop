@@ -15,11 +15,7 @@
 #include "include/wrapper/cef_helpers.h"
 
 #include "afx-cefhud-interop/simple_handler.h"
-
 #include "afx-cefhud-interop/scheme_handler_impl.h"
-#include "afx-cefhud-interop/scheme_strings.h"
-
-
 #include "afx-cefhud-interop/AfxInterop.h"
 
 namespace {
@@ -100,7 +96,7 @@ SimpleApp::SimpleApp() {}
 
      // Register the custom scheme as standard and secure.
      // Must be the same implementation in all processes.
-     registrar->AddCustomScheme(scheme_handler::kScheme, true, false, false, true, true, false);
+     registrar->AddCustomScheme("afx", true, false, false, true, true, false);
   }
 
 
@@ -118,7 +114,7 @@ void SimpleApp::OnContextInitialized() {
       CefCommandLine::GetGlobalCommandLine();
 
   // SimpleHandler implements browser-level callbacks.
-  CefRefPtr<SimpleHandler> handler(new SimpleHandler());
+  CefRefPtr<SimpleHandler> handler(new SimpleHandler(this));
 
   // Specify CEF browser settings here.
   CefBrowserSettings browser_settings;
@@ -126,163 +122,106 @@ void SimpleApp::OnContextInitialized() {
 
   std::string argUrl = command_line->GetSwitchValue("url");
 
- {
-    // Information used when creating the native window.
-    CefWindowInfo window_info;
+  // Information used when creating the native window.
+  CefWindowInfo window_info;
 
 #if defined(OS_WIN)
-    // On Windows we need to specify certain flags that will be passed to
-    // CreateWindowEx().
+  // On Windows we need to specify certain flags that will be passed to
+  // CreateWindowEx().
 
-    bool bWindow = !command_line->HasSwitch("afx-no-window");
+  bool bWindow = !command_line->HasSwitch("afx-no-window");
 
-    if(bWindow)
-      window_info.SetAsPopup(NULL, "cefsimple");
-    else
-      window_info.SetAsWindowless(NULL);
-    window_info.width = 405;
-    window_info.height = 720;
-    window_info.shared_texture_enabled =  false;
-    window_info.external_begin_frame_enabled = bWindow ? false : true; // No need to draw what one can't see.
+  if(bWindow)
+    window_info.SetAsPopup(NULL, "cefsimple");
+  else
+    window_info.SetAsWindowless(NULL);
+  window_info.width = 640;
+  window_info.height = 400;
+  window_info.shared_texture_enabled =  false;
+  window_info.external_begin_frame_enabled = bWindow ? false : true; // No need to draw what one can't see.
 #endif
 
-    std::string url;
-
-    if (argUrl.empty()) {
-      std::stringstream ss;
-      ss << "<html><body bgcolor=\"white\">"
-            "<h2>You forgot to pass the URL d(o)(O)b</h2></body></html>";
-      url = GetDataURI(ss.str(), "text/html");
-    }
-    else {
-      CefRefPtr<CefDictionaryValue> _extra_info = CefDictionaryValue::Create();
-      _extra_info->SetString("interopType", "index");
-
-      auto argStr = CefValue::Create();
-      auto argCmd = CefDictionaryValue::Create();
-      argCmd->SetString("commandLineString",
-                        command_line->GetCommandLineString());
-      argStr->SetDictionary(argCmd);
-
-      _extra_info->SetString("argStr", CefWriteJSON(argStr, JSON_WRITER_DEFAULT));
-      _extra_info->SetInt("handlerId", GetCurrentProcessId());
-
-
-      auto val = CefValue::Create();
-      val->SetDictionary(_extra_info);
-
-      std::string prefix;
-      std::string query;
-      std::string suffix;
-
-      size_t pos_hash = argUrl.find("#"); 
-      if(std::string::npos != pos_hash)
-      {
-        prefix = argUrl.substr(0, pos_hash);
-        suffix = argUrl.substr(pos_hash);
-      }
-      else {
-        prefix = argUrl;
-      }
-      size_t pos_query = prefix.find("?");
-
-      if(std::string::npos != pos_query)
-      {
-        query = prefix.substr(pos_query + 1);
-        prefix = prefix.substr(0, pos_query);
-      }
-
-      if(0 < query.size()) query += "&";
-      query += "afx="+CefURIEncode(CefWriteJSON(val, JSON_WRITER_DEFAULT), false).ToString();
-
-      url = prefix+"?"+query+suffix;
-    }
-
-    auto req_ctx = CefRequestContext::CreateContext(CefRequestContext::GetGlobalContext(), nullptr);
-    auto plugins_enabled = CefListValue::Create();
-    plugins_enabled->SetString(0,"afx");
-    auto val_plugins_enabled = CefValue::Create();
-    val_plugins_enabled->SetList(plugins_enabled);
-    CefString req_ctx_pref_error;
-    req_ctx->SetPreference("plugins.plugins_enabled", val_plugins_enabled, req_ctx_pref_error);
-
-    //DLOG(ERROR) << "ERROR: " << req_ctx_pref_error.ToString().c_str();
-
-    // Create the first browser window.
-    CefBrowserHost::CreateBrowser(window_info, handler, url, browser_settings,
-                                  req_ctx);
+  if (argUrl.empty()) {
+    std::stringstream ss;
+    ss << "<html><body bgcolor=\"white\" color=\"black\">"
+          "<h2>You forgot to pass the URL d(o)(O)b</h2></body></html>";
+    argUrl = GetDataURI(ss.str(), "text/html");
   }
+
+  auto argStr = CefValue::Create();
+  auto argCmd = CefDictionaryValue::Create();
+  argCmd->SetString("commandLineString",
+                    command_line->GetCommandLineString());
+  argStr->SetDictionary(argCmd);
+
+  extra_info_ = CefListValue::Create();
+  extra_info_->SetSize(3);
+  extra_info_->SetString(0,"index");
+  extra_info_->SetInt(1, GetCurrentProcessId());
+  extra_info_->SetString(2, CefWriteJSON(argStr, JSON_WRITER_DEFAULT));
+
+  // Create the first browser window.
+  CefBrowserHost::CreateBrowser(window_info, handler, argUrl, browser_settings,
+                                nullptr);
 }
 
 void SimpleApp::OnContextCreated(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefFrame> frame,
                                 CefRefPtr<CefV8Context> context) {
 
-     if (frame->IsMain()) {   
+  if(extra_info_ && 3 == extra_info_->GetSize())
+  {
+    auto interopType = extra_info_->GetString(0);
+    auto handlerProcessId = extra_info_->GetInt(1);
+    auto argStr = extra_info_->GetString(2);
 
-      CefString url = frame->GetURL();
-     
-      CefURLParts parts;
-      if(!CefParseURL(url, parts)) return;
+    if (frame->IsMain()) {   
+      if (interopType.compare("drawing") == 0) {
+      
+        browser->SendProcessMessage(PID_BROWSER, CefProcessMessage::Create("afx-scheme-enable"));
 
-      std::string query = CefString(&parts.query).ToString();
+        auto window = context->GetGlobal();
+        window->SetValue(
+            "afxInterop",
+            advancedfx::interop::CreateDrawingInterop(
+                browser, frame, context, argStr,
+                handlerProcessId, &m_Interop),
+            V8_PROPERTY_ATTRIBUTE_NONE);
+      }
+      else if (interopType.compare("engine") == 0) {
+        
+        auto window = context->GetGlobal();
+        window->SetValue("afxInterop",
+                        advancedfx::interop::CreateEngineInterop(
+                            browser, frame, context, argStr,
+                handlerProcessId, &m_Interop),
+                            V8_PROPERTY_ATTRIBUTE_NONE);
+      }
+      else if (interopType.compare("index") == 0) {
 
-      size_t pos = query.find("afx=");
-      if(std::string::npos != pos) query = query.substr(pos + 4);
-      else return;
-
-      pos = query.find("&");
-      if(std::string::npos != pos) query = query.substr(0,pos);
-
-      auto val = CefParseJSON(CefURIDecode(query,false,(cef_uri_unescape_rule_t)(UU_SPACES|UU_PATH_SEPARATORS|UU_URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS|UU_SPOOFING_AND_CONTROL_CHARS)), JSON_PARSER_RFC);   
-
-      if(nullptr == val) return;
-
-      auto extra_info = val->GetDictionary();
-
-      if(nullptr == extra_info) return;
-
-      if(extra_info->HasKey("interopType") && extra_info->HasKey("argStr") && extra_info->HasKey("handlerId")) {
-        if (extra_info->GetString("interopType").compare("drawing") == 0) {
-         
-          browser->SendProcessMessage(PID_BROWSER, CefProcessMessage::Create("afx-scheme-enable"));
-
-          auto window = context->GetGlobal();
-          window->SetValue(
-              "afxInterop",
-              advancedfx::interop::CreateDrawingInterop(
-                  browser, frame, context, extra_info->GetString("argStr"),
-                  extra_info->GetInt("handlerId"), &m_Interop),
-              V8_PROPERTY_ATTRIBUTE_NONE);
-        }
-        else if (extra_info->GetString("interopType").compare("engine") == 0) {
-          
-          auto window = context->GetGlobal();
-          window->SetValue("afxInterop",
-                           advancedfx::interop::CreateEngineInterop(
-                               browser, frame, context, extra_info->GetString("argStr"),
-                  extra_info->GetInt("handlerId"), &m_Interop),
-                               V8_PROPERTY_ATTRIBUTE_NONE);
-        }
-        else if (extra_info->GetString("interopType").compare("index") == 0) {
-
-          auto window = context->GetGlobal();
-          window->SetValue("afxInterop",advancedfx::interop::CreateInterop(
-                               browser, frame, context, extra_info->GetString("argStr"),
-                  extra_info->GetInt("handlerId"), &m_Interop),
-                               V8_PROPERTY_ATTRIBUTE_NONE);
-        }
+        auto window = context->GetGlobal();
+        window->SetValue("afxInterop",advancedfx::interop::CreateInterop(
+                            browser, frame, context, argStr,
+                handlerProcessId, &m_Interop),
+                            V8_PROPERTY_ATTRIBUTE_NONE);
       }
     }
+
+    extra_info_ = nullptr;
   }
+}
 
 void SimpleApp::OnContextReleased(CefRefPtr<CefBrowser> browser,
                                  CefRefPtr<CefFrame> frame,
                                  CefRefPtr<CefV8Context> context) {
 
-      if (frame->IsMain() && nullptr != m_Interop) {
-        m_Interop->CloseInterop();
-        m_Interop = nullptr;
+      if (frame->IsMain()) {
+        if(m_Interop != nullptr)
+        {
+          m_Interop->CloseInterop();
+          m_Interop = nullptr;
+        }
+        extra_info_ = nullptr;
       }
   }
 

@@ -13,7 +13,6 @@
 #include "include/cef_scheme.h"
 #include "include/wrapper/cef_helpers.h"
 
-#include "afx-cefhud-interop/scheme_strings.h"
 #include "examples/shared/client_util.h"
 #include "examples/shared/resource_util.h"
 
@@ -146,7 +145,7 @@ class ClientSchemeHandler : public CefResourceHandler {
     
     std::string url = request->GetURL();
 
-    std::string prefix = std::string(kScheme) + "://"+ std::string(kDomain) +"/";
+    std::string prefix = "afx://file/";
 
     if(0 == url.find(prefix))
     {
@@ -241,7 +240,7 @@ class ClientSchemeHandlerFactory : public CefSchemeHandlerFactory {
                                        const CefString& scheme_name,
                                        CefRefPtr<CefRequest> request) OVERRIDE {
     CEF_REQUIRE_IO_THREAD();
-    
+   
     return new ClientSchemeHandler();
   }
 
@@ -255,7 +254,7 @@ class ClientSchemeHandlerFactory : public CefSchemeHandlerFactory {
 }  // namespace
 
 void RegisterSchemeHandlerFactory() {
-  CefRegisterSchemeHandlerFactory(kScheme, kDomain,
+  CefRegisterSchemeHandlerFactory("afx", "file",
                                   new ClientSchemeHandlerFactory());
 }
 

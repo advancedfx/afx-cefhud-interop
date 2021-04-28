@@ -592,8 +592,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
   // called.
   CefRunMessageLoop();
 
-  // Disable logs, since they will become unavailable upon shutdown:
-
+  app = nullptr;
 
   // Shut down CEF.
   CefShutdown();

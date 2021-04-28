@@ -4,8 +4,7 @@
 
 #include "afx-cefhud-interop/simple_handler.h"
 
-#include <sstream>
-#include <string>
+#include "afx-cefhud-interop/simple_app.h"
 
 #include "include/base/cef_bind.h"
 #include "include/cef_app.h"
@@ -18,6 +17,9 @@
 #include <include/cef_base.h>
 #include <include/base/cef_bind.h>
 #include <include/wrapper/cef_closure_task.h>
+
+#include <sstream>
+#include <string>
 
 #include <d3d11.h>
 
@@ -33,10 +35,18 @@ std::string GetDataURI(const std::string& data, const std::string& mime_type) {
 }  // namespace
 
 
-SimpleHandler::SimpleHandler() {
+SimpleHandler::SimpleHandler(class SimpleApp * simpleApp) : simple_app_(simpleApp) {
   m_WaitConnectionThread =
       std::thread(&SimpleHandler::WaitConnectionThreadHandler, this);
 }
+
+SimpleHandler::~SimpleHandler() {
+  m_WaitConnectionQuit = true;
+  CancelSynchronousIo(m_WaitConnectionThread.native_handle());
+  if (m_WaitConnectionThread.joinable())
+    m_WaitConnectionThread.join();
+}
+
 
 void SimpleHandler::WaitConnectionThreadHandler(void) {
   std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_handler_");
@@ -49,13 +59,6 @@ void SimpleHandler::WaitConnectionThreadHandler(void) {
       DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": " << e.what();
     }
   }
-}
-
-SimpleHandler::~SimpleHandler() {
-  m_WaitConnectionQuit = true;
-  CancelSynchronousIo(m_WaitConnectionThread.native_handle());
-  if (m_WaitConnectionThread.joinable())
-    m_WaitConnectionThread.join();
 }
 
 void SimpleHandler::OnTitleChange(CefRefPtr<CefBrowser> browser,
@@ -113,7 +116,8 @@ void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
       m_Connection0->DeleteExternal(lock);
     }
 
-    browser = nullptr;  // !
+    browser = nullptr;
+    simple_app_ = nullptr;
 
     // All browser windows have closed. Quit the application message loop.
     CefQuitMessageLoop();
@@ -206,4 +210,68 @@ void SimpleHandler::DoPainted(int browserId, void* share_handle) {
 
 void SimpleHandler::DoQuit() {
   CefQuitMessageLoop();
+}
+
+bool SimpleHandler::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
+                            CefRefPtr<CefFrame> frame,
+                            CefRefPtr<CefRequest> request,
+                            bool user_gesture,
+                            bool is_redirect) {
+
+  // Limit afx features to only the allowed requests:
+
+  std::string url = request->GetURL();
+
+  if(0 == url.find("afx://")) {
+    bool afx_enabled =
+    simple_app_->extra_info_ && 3 == simple_app_->extra_info_->GetSize()
+    && (frame->IsMain() || frame->GetURL().ToString().find("afx://")== 0);
+
+    if(!afx_enabled) return true; // cancel request, not allowed.
+  }
+
+  return false;
+}
+
+void SimpleHandler::DoCreateDrawing(const std::string& argStr, const std::string& argUrl) {
+  CefBrowserSettings browser_settings;
+  browser_settings.file_access_from_file_urls = STATE_ENABLED;
+  browser_settings.windowless_frame_rate =
+      60;  // vsync doesn't matter only if external_begin_frame_enabled
+  CefWindowInfo window_info;
+  window_info.SetAsWindowless(NULL);
+  window_info.shared_texture_enabled = true;
+  window_info.external_begin_frame_enabled = true;
+  window_info.width = 640;
+  window_info.height = 360;
+
+  simple_app_->extra_info_ = CefListValue::Create();
+  simple_app_->extra_info_->SetSize(3);
+  simple_app_->extra_info_->SetString(0,"drawing");
+  simple_app_->extra_info_->SetInt(1, GetCurrentProcessId());
+  simple_app_->extra_info_->SetString(2, argStr);
+
+  CefBrowserHost::CreateBrowser(window_info, this, argUrl, browser_settings, nullptr);
+}
+
+void SimpleHandler::DoCreateEngine(const std::string& argStr, const std::string& argUrl) {
+  CefBrowserSettings browser_settings;
+  browser_settings.file_access_from_file_urls = STATE_ENABLED;
+  browser_settings.windowless_frame_rate = 1;
+
+  CefWindowInfo window_info;
+  window_info.SetAsWindowless(NULL);
+  window_info.shared_texture_enabled = false;
+  window_info.external_begin_frame_enabled = true;
+  window_info.width = 640;
+  window_info.height = 360;
+
+  simple_app_->extra_info_ = CefListValue::Create();
+  simple_app_->extra_info_->SetSize(3);
+  simple_app_->extra_info_->SetString(0,"engine");
+  simple_app_->extra_info_->SetInt(1, GetCurrentProcessId());
+  simple_app_->extra_info_->SetString(2, argStr);
+
+  CefBrowserHost::CreateBrowser(window_info, this, argUrl, browser_settings,
+                                nullptr);
 }

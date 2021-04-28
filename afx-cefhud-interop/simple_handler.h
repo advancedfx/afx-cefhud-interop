@@ -31,7 +31,7 @@ class SimpleHandler : public CefClient,
                       public CefRequestHandler,
                       private advancedfx::interop::CPipeServer {
  public:
-  explicit SimpleHandler();
+  explicit SimpleHandler(class SimpleApp * simpleApp);
   ~SimpleHandler();
 
   // CefClient methods:
@@ -99,32 +99,7 @@ class SimpleHandler : public CefClient,
                               CefRefPtr<CefFrame> frame,
                               CefRefPtr<CefRequest> request,
                               bool user_gesture,
-                              bool is_redirect) {
-
-    // Limit afx features to only the allowed requests:
-
-    std::string url = request->GetURL();
-    if(
-      url.find("?afx=") != std::string::npos
-      || url.find("&afx") != std::string::npos
-      || 0 == url.find("afx://")) {
-        bool afx_enabled = false;
-        auto plugins_enabled = browser->GetHost()->GetRequestContext()->GetPreference("plugins.plugins_enabled");
-        auto plugins_enabled_list = plugins_enabled ? plugins_enabled->GetList() : nullptr;
-        if(plugins_enabled_list)
-        {
-          size_t n = plugins_enabled_list->GetSize();
-          for(size_t i = 0; i < n; ++i)
-          {
-            if(plugins_enabled_list->GetString(i) == "afx")
-              afx_enabled = true;
-          }
-        }
-        if(!afx_enabled) return true;
-      }
-
-    return false;
-  }
+                              bool is_redirect) OVERRIDE;
 
 
  protected:
@@ -232,123 +207,9 @@ class SimpleHandler : public CefClient,
     browser->GetHost()->SendExternalBeginFrame();
   }
 
-  void DoCreateDrawing(const std::string& argStr, const std::string& argUrl) {
-    CefBrowserSettings browser_settings;
-    browser_settings.file_access_from_file_urls = STATE_ENABLED;
-    browser_settings.windowless_frame_rate =
-        60;  // vsync doesn't matter only if external_begin_frame_enabled
-    CefWindowInfo window_info;
-    window_info.SetAsWindowless(NULL);
-    window_info.shared_texture_enabled = true;
-    window_info.external_begin_frame_enabled = true;
-    window_info.width = 640;
-    window_info.height = 360;
+  void DoCreateDrawing(const std::string& argStr, const std::string& argUrl);
 
-    
-    CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
-    extra_info->SetString("interopType", "drawing");
-    extra_info->SetString("argStr", argStr);
-    extra_info->SetInt("handlerId", (int)GetCurrentProcessId());
-
-    auto val = CefValue::Create();
-    val->SetDictionary(extra_info);
-
-    std::string prefix;
-    std::string query;
-    std::string suffix;
-
-    size_t pos_hash = argUrl.find("#"); 
-    if(std::string::npos != pos_hash)
-    {
-      prefix = argUrl.substr(0, pos_hash);
-      suffix = argUrl.substr(pos_hash);
-    }
-    else {
-      prefix = argUrl;
-    }
-
-    size_t pos_query = prefix.find("?");
-
-    if(std::string::npos != pos_query)
-    {
-      query = prefix.substr(pos_query + 1);
-      prefix = prefix.substr(0, pos_query);
-    }
-
-    if(0 < query.size()) query += "&";
-    query += "afx="+CefURIEncode(CefWriteJSON(val, JSON_WRITER_DEFAULT), false).ToString();
-
-    std::string url = prefix+"?"+query+suffix;
-
-    auto req_ctx = CefRequestContext::CreateContext(CefRequestContext::GetGlobalContext(), nullptr);
-    auto plugins_enabled = CefListValue::Create();
-    plugins_enabled->SetString(0,"afx");
-    auto val_plugins_enabled = CefValue::Create();
-    val_plugins_enabled->SetList(plugins_enabled);
-    CefString req_ctx_pref_error;
-    req_ctx->SetPreference("plugins.plugins_enabled", val_plugins_enabled, req_ctx_pref_error);
-
-    CefBrowserHost::CreateBrowser(window_info, this, url, browser_settings, nullptr);
-  }
-
-  void DoCreateEngine(const std::string& argStr, const std::string& argUrl) {
-    CefBrowserSettings browser_settings;
-    browser_settings.file_access_from_file_urls = STATE_ENABLED;
-    browser_settings.windowless_frame_rate = 1;
-
-    CefWindowInfo window_info;
-    window_info.SetAsWindowless(NULL);
-    window_info.shared_texture_enabled = false;
-    window_info.external_begin_frame_enabled = true;
-    window_info.width = 640;
-    window_info.height = 360;
-
-    CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
-    extra_info->SetString("interopType", "engine");
-    extra_info->SetString("argStr", argStr);
-    extra_info->SetInt("handlerId", GetCurrentProcessId());
-
-    auto val = CefValue::Create();
-    val->SetDictionary(extra_info);
-
-    std::string prefix;
-    std::string query;
-    std::string suffix;
-
-    size_t pos_hash = argUrl.find("#"); 
-    if(std::string::npos != pos_hash)
-    {
-      prefix = argUrl.substr(0, pos_hash);
-      suffix = argUrl.substr(pos_hash);
-    }
-    else {
-      prefix = argUrl;
-    }
-
-    size_t pos_query = prefix.find("?");
-
-    if(std::string::npos != pos_query)
-    {
-      query = prefix.substr(pos_query + 1);
-      prefix = prefix.substr(0, pos_query);
-    }
-
-    if(0 < query.size()) query += "&";
-    query += "afx="+CefURIEncode(CefWriteJSON(val, JSON_WRITER_DEFAULT), false).ToString();
-
-    std::string url = prefix+"?"+query+suffix;
-    
-    auto req_ctx = CefRequestContext::CreateContext(CefRequestContext::GetGlobalContext(), nullptr);
-    auto plugins_enabled = CefListValue::Create();
-    plugins_enabled->SetString(0,"afx");
-    auto val_plugins_enabled = CefValue::Create();
-    val_plugins_enabled->SetList(plugins_enabled);
-    CefString req_ctx_pref_error;
-    req_ctx->SetPreference("plugins.plugins_enabled", val_plugins_enabled, req_ctx_pref_error);
-
-    CefBrowserHost::CreateBrowser(window_info, this, url, browser_settings,
-                                  req_ctx);
-  }
+  void DoCreateEngine(const std::string& argStr, const std::string& argUrl);
 
  protected:
   class CHostPipeServerConnectionThread
@@ -579,6 +440,7 @@ class SimpleHandler : public CefClient,
     std::set<HANDLE> m_ShareHandles;
   };
 
+  class SimpleApp * simple_app_;
   bool is_closing_;
 
   bool m_WaitConnectionQuit = false;

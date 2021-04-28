@@ -22,6 +22,8 @@ class SimpleApp : public CefApp,
                   public CefBrowserProcessHandler,
                   public CefRenderProcessHandler {
  public:
+  CefRefPtr<CefListValue> extra_info_;
+
   SimpleApp();
 
   // CefApp methods:
@@ -34,19 +36,34 @@ class SimpleApp : public CefApp,
       OVERRIDE {
     return this;
   }
-
-  void SimpleApp::OnRegisterCustomSchemes(
+    
+  virtual void SimpleApp::OnRegisterCustomSchemes(
       CefRawPtr<CefSchemeRegistrar> registrar) OVERRIDE;
 
   // CefBrowserProcessHandler methods:
 
   virtual void OnContextInitialized() OVERRIDE;
+
+
+  virtual void OnRenderProcessThreadCreated(
+      CefRefPtr<CefListValue> extra_info) OVERRIDE {
+        if(nullptr != extra_info_ && 3 == extra_info_->GetSize())
+        {
+          extra_info->SetString(0,extra_info_->GetString(0));
+          extra_info->SetInt(1,extra_info_->GetInt(1));
+          extra_info->SetString(2,extra_info_->GetString(2));
+        }
+      }
 /*
   virtual void OnBrowserCreated( CefRefPtr< CefBrowser > browser, CefRefPtr< CefDictionaryValue > _extra_info ) OVERRIDE {
     extra_info = _extra_info->Copy(false);
   }*/
 
   // CefRenderProcessHandler methods:
+
+  virtual void OnRenderThreadCreated(CefRefPtr<CefListValue> extra_info) OVERRIDE {
+    extra_info_ = extra_info->Copy();
+  }
 
   virtual void OnContextCreated(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefFrame> frame,
@@ -63,7 +80,6 @@ class SimpleApp : public CefApp,
 
  private:
   CefRefPtr<class advancedfx::interop::CInterop> m_Interop;
-  //CefRefPtr< CefDictionaryValue > extra_info;
 
   // Include the default reference counting implementation.
   IMPLEMENT_REFCOUNTING(SimpleApp);

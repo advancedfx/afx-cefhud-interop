@@ -6,11 +6,10 @@
 Launch CS:GO from HLAE with -afxInteropLight.
 
 Execute (will log warings / errors to debug.log in current directoy):
-afx-cefhud-interop.exe "--url=afx://files.localhost/C:/source/afx-cefhud-interop/afx-cefhud-interop/assets/js/examples/default/index.html" --enable-experimental-web-platform-features --enable-logging --v=1
-Use CTRL + C in termianl to quit.
+afx-cefhud-interop.exe "--url=afx://file/C:/source/afx-cefhud-interop/afx-cefhud-interop/assets/examples/default/index.html" --enable-experimental-web-platform-features --enable-logging --v=1
 
 For live execute:
-afx-cefhud-interop.exe "--url=afx://files.localhost/C:/source/afx-cefhud-interop/afx-cefhud-interop/assets/js/examples/default/index.html" --enable-experimental-web-platform-features --enable-logging --log-severity=error
+afx-cefhud-interop.exe "--url=afx://file/C:/source/afx-cefhud-interop/afx-cefhud-interop/assets/examples/default/index.html" --enable-experimental-web-platform-features --enable-logging --log-severity=error
 
 Optional arguments:
 --afx-no-window
@@ -32,7 +31,7 @@ afx_interop send cefhud [...]
 <p>Drawing connected: <span id="drawingStatus">n/a</span></p>
 <script type="module">
 
-import * as Utils from '../../modules/utils.js';	
+import * as Utils from '../../js/modules/utils.js';	
 
 function AfxInterop(interop, args) {
 	
@@ -158,16 +157,12 @@ AfxInterop.prototype.reconnect = async function(senderId, message) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-//window.open("http://google.com");
-
 window.addEventListener('load', function(){
 
 	console.log(window.afxInterop.args);
 	new AfxInterop(window.afxInterop, JSON.parse(window.afxInterop.args))
-	
-}, false);
 
-console.log("HIIIII");
+}, false);
 
 </script>
 </body>

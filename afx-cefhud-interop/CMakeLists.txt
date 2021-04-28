@@ -14,8 +14,6 @@ set(CEFSIMPLE_SRCS
   simple_handler.h
   scheme_handler_impl.cpp
   scheme_handler_impl.h
-  scheme_strings.cpp
-  scheme_strings.h
   AfxInterop.cpp
   AfxInterop.h
   ../third_party/Detours/src/detours.cpp
