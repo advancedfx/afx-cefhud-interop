@@ -310,11 +310,10 @@ export const D3DTEXTUREFILTERTYPE = {
 	D3DTEXF_ANISOTROPIC     : 3,    // anisotropic
 	D3DTEXF_PYRAMIDALQUAD   : 6,    // 4-sample tent
 	D3DTEXF_GAUSSIANQUAD    : 7,    // 4-sample gaussian
-/* D3D9Ex only -- */
 
+	/* D3D9Ex only -- */
 	D3DTEXF_CONVOLUTIONMONO : 8     // Convolution filter for monochrome textures
-
-/* -- D3D9Ex only */
+	/* -- D3D9Ex only */
 };
 
 export const D3DSAMPLERSTATETYPE = {

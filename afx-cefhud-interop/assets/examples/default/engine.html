@@ -312,8 +312,14 @@ function AfxEngineInterop(interop, args) {
 			//TODO: schedule for drawing.
 			await Utils.toPromise(this.interop, "pump", this.pumpEvents);
 		},*/
+		/*
 		// optional.
-		"onRenderViewHudBegin": async function(){
+		"onRenderViewHudBegin" : async function() {
+			//TODO: schedule for drawing.
+			await Utils.toPromise(this.interop, "pump", this.pumpEvents);
+		},*/		
+		// optional.
+		"onRenderViewHudEnd": async function(){
 			await Utils.toPromise(this.interop, "sendMessage", this.args.drawingInteropId, JSON.stringify({
 				"id": "onHudEnd",
 				"args": [this.renderInfo.frameCount, this.pass]
@@ -323,12 +329,6 @@ function AfxEngineInterop(interop, args) {
 
 			await Utils.toPromise(this.interop, "pump", this.pumpEvents);
 		},
-		/*
-		// optional.
-		"onRenderViewHudEnd" : async function() {
-			//TODO: schedule for drawing.
-			await Utils.toPromise(this.interop, "pump", this.pumpEvents);
-		},*/		
 		// optional.
 		/*"onRenderViewEnd": aync function() {
 			//TODO: schedule for drawing.

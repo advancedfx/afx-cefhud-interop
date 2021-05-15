@@ -36,6 +36,15 @@ std::string GetDataURI(const std::string& data, const std::string& mime_type) {
 
 
 SimpleHandler::SimpleHandler(class SimpleApp * simpleApp) : simple_app_(simpleApp) {
+
+  // Create fake browser for GPU process communication:
+  // TODO: This is a bit stupid, but okay for now.
+  {
+    std::unique_lock<std::mutex> lock(m_BrowserMutex);
+    m_Browsers.emplace(std::piecewise_construct, std::forward_as_tuple(0),
+                       std::forward_as_tuple(nullptr));
+  }
+
   m_WaitConnectionThread =
       std::thread(&SimpleHandler::WaitConnectionThreadHandler, this);
 }
@@ -57,6 +66,7 @@ void SimpleHandler::WaitConnectionThreadHandler(void) {
       this->WaitForConnection(strPipeName.c_str(), 500);
     } catch (const std::exception& e) {
       DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": " << e.what();
+      DebugBreak();
     }
   }
 }
@@ -73,8 +83,12 @@ void SimpleHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
 
   std::unique_lock<std::mutex> lock(m_BrowserMutex);
 
-  // Add to the list of existing browsers.
-  m_Browsers.emplace(std::piecewise_construct, std::forward_as_tuple(browser->GetIdentifier()), std::forward_as_tuple(browser));
+  auto emplaced = m_Browsers.emplace(std::piecewise_construct, std::forward_as_tuple(browser->GetIdentifier()), std::forward_as_tuple(browser));
+  if (emplaced.second) {
+
+  }
+  else
+    emplaced.first->second.Browser = browser;
 }
 
 bool SimpleHandler::DoClose(CefRefPtr<CefBrowser> browser) {
@@ -85,7 +99,7 @@ bool SimpleHandler::DoClose(CefRefPtr<CefBrowser> browser) {
   // Closing the main window requires special handling. See the DoClose()
   // documentation in the CEF header for a detailed destription of this
   // process.
-  if (m_Browsers.size() == 1) {
+  if (m_Browsers.size() == 2) {
     // Set a flag to indicate that the window close should be allowed.
     is_closing_ = true;
   }
@@ -101,20 +115,25 @@ void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
 
   std::unique_lock<std::mutex> lock(m_BrowserMutex);
 
-  auto it = m_Browsers.find(browser->GetIdentifier());
-  if (it != m_Browsers.end()) {
-    auto connection = it->second.Connection;
-    it->second.Connection = nullptr;
-    m_Browsers.erase(it);
-    if (connection) {
-      connection->DeleteExternal(lock);
+  {
+    auto it = m_Browsers.find(browser->GetIdentifier());
+    if (it != m_Browsers.end()) {
+      auto connection = it->second.Connection;
+      it->second.Connection = nullptr;
+      m_Browsers.erase(it);
+      if (connection) {
+        connection->DeleteExternal(lock);
+      }
     }
   }
 
-  if (m_Browsers.empty()) {
-    if (m_Connection0) {
-      m_Connection0->DeleteExternal(lock);
-    }
+  if (m_Browsers.size() == 1) {
+
+    // Delete the fake 0 browser:
+
+    auto it = m_Browsers.begin();
+    it->second.Connection->DeleteExternal(lock);
+    m_Browsers.erase(it);
 
     browser = nullptr;
     simple_app_ = nullptr;
@@ -124,21 +143,25 @@ void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   } else {
     bool bHasWindowWithHandle = false;
 
-    for (auto it2 = m_Browsers.begin(); it2 != m_Browsers.end(); ++it2) {
-      if (it2->second.Browser->GetHost()->GetWindowHandle()) {
+    for (auto it = m_Browsers.begin(); it != m_Browsers.end(); ++it) {
+      if (nullptr != it->second.Browser && it->second.Browser->GetHost()
+                         ->GetWindowHandle()) {
         bHasWindowWithHandle = true;
         break;
       }
     }
 
+    // TODO: Actually a window should close it's "child" windows and not the way it is now.
     // We have no non-offscreen windows open anymore, close all others:
     if (!bHasWindowWithHandle) {
-      while (!m_Browsers.empty()) {
-        CefRefPtr<CefBrowserHost> browserHost =
-            m_Browsers.begin()->second.Browser->GetHost();
-        lock.unlock();
-        browserHost->CloseBrowser(true);
-        lock.lock();
+      if (1 < m_Browsers.size()) {
+        for (auto it = m_Browsers.begin(); it != m_Browsers.end(); ++it) {
+          if (nullptr != it->second.Browser) {
+            lock.unlock();
+            it->second.Browser->GetHost()->CloseBrowser(true);
+            return;  // CEF should call into this function later again.
+          }        
+        }       
       }
     }
   }
@@ -166,50 +189,62 @@ void SimpleHandler::OnLoadError(CefRefPtr<CefBrowser> browser,
 }
 
 void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
-  rect.Set(0, 0, 640, 480);
-
   std::unique_lock<std::mutex> lock(m_BrowserMutex);
+  
+  m_LastBrowserId = browser->GetIdentifier();
 
   auto it = m_Browsers.find(browser->GetIdentifier());
   if (it != m_Browsers.end()) {
     if (CHostPipeServerConnectionThread* connection = it->second.Connection) {
       rect.Set(0, 0, connection->GetWidth(), connection->GetHeight());
+      return;
     }
   }
+
+  rect.Set(0, 0, 640, 480);
 }
 
 void SimpleHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
                                        PaintElementType type,
                                        const RectList& dirtyRects,
                                        void* share_handle) {
-
   if (PET_VIEW == type) {
+    std::unique_lock<std::mutex> lock(m_BrowserMutex);
+
+    auto emplaced =
+        m_Browsers.emplace(std::piecewise_construct,
+                           std::forward_as_tuple(browser->GetIdentifier()),
+                           std::forward_as_tuple(browser));
+//    if (emplaced.second) {
+
+//    } else
+      emplaced.first->second.Browser = browser;
 
     CefPostTask(TID_FILE_USER_BLOCKING,
                 base::Bind(&SimpleHandler::DoPainted, this,
-                                   browser->GetIdentifier(), share_handle));
+                           browser->GetIdentifier(), share_handle));
+
+    //lock.unlock();
+    //DoPainted(browser->GetIdentifier(), share_handle);
   }
 }
-  extern ID3D11Texture2D * g_ActiveTexture;
 
 void SimpleHandler::DoPainted(int browserId, void* share_handle) {
   std::unique_lock<std::mutex> lock(m_BrowserMutex);
   auto it = m_Browsers.find(browserId);
   if (it != m_Browsers.end()) {
+    m_HandleToBrowserId[share_handle] = browserId;
+    it->second.ShareHandles.emplace(share_handle);
     if (CHostPipeServerConnectionThread* connection = it->second.Connection) {
       try {
-        m_HandleToBrowserId[share_handle] = browserId;
         connection->OnPainted(share_handle);
-      } catch (const std::exception e) {
+      } catch (const std::exception & e) {
         DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
                     << e.what();
+        DebugBreak();
       }
     }
   }
-}
-
-void SimpleHandler::DoQuit() {
-  CefQuitMessageLoop();
 }
 
 bool SimpleHandler::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
@@ -224,8 +259,8 @@ bool SimpleHandler::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
 
   if(0 == url.find("afx://")) {
     bool afx_enabled =
-    simple_app_->extra_info_ && 3 == simple_app_->extra_info_->GetSize()
-    && (frame->IsMain() || frame->GetURL().ToString().find("afx://")== 0);
+        simple_app_->extra_info_ && 3 == simple_app_->extra_info_->GetSize() ||
+        simple_app_->GetAfxEnabled(frame->GetIdentifier());
 
     if(!afx_enabled) return true; // cancel request, not allowed.
   }
@@ -251,7 +286,8 @@ void SimpleHandler::DoCreateDrawing(const std::string& argStr, const std::string
   simple_app_->extra_info_->SetInt(1, GetCurrentProcessId());
   simple_app_->extra_info_->SetString(2, argStr);
 
-  CefBrowserHost::CreateBrowser(window_info, this, argUrl, browser_settings, nullptr);
+  CefBrowserHost::CreateBrowser(window_info, this, argUrl, browser_settings,
+                                nullptr, nullptr);
 }
 
 void SimpleHandler::DoCreateEngine(const std::string& argStr, const std::string& argUrl) {
@@ -273,5 +309,5 @@ void SimpleHandler::DoCreateEngine(const std::string& argStr, const std::string&
   simple_app_->extra_info_->SetString(2, argStr);
 
   CefBrowserHost::CreateBrowser(window_info, this, argUrl, browser_settings,
-                                nullptr);
+                                nullptr, nullptr);
 }

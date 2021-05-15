@@ -19,6 +19,24 @@
 
 namespace advancedfx {
 namespace interop {
+   
+class CAfxTask : public CefTask {
+ public:
+  typedef std::function<void(void)> fp_t;
+
+  explicit CAfxTask(const fp_t& op) : m_Op(op) {}
+
+  explicit CAfxTask(fp_t&& op) : m_Op(std::move(op)) {}
+
+  // CefTask method
+  virtual void Execute() OVERRIDE { m_Op(); }
+
+ private:
+  fp_t m_Op;
+
+  IMPLEMENT_REFCOUNTING(CAfxTask);
+  DISALLOW_COPY_AND_ASSIGN(CAfxTask);
+};
 
 class CPipeHandle {
  public:
@@ -296,6 +314,7 @@ public:
     } catch (const std::exception& e) {
       DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
                   << e.what();
+      DebugBreak();
     }
   }
 
@@ -312,19 +331,18 @@ public:
 
 enum class ClientMessage : int {
   Message = 1,
-  TextureHandle = 2,
+  OnPainted = 2,
   WaitedForGpu = 3,
   ReleaseTextureHandle = 4
 };
 
 enum class HostMessage : int {
-  DrawingResized = 1,
-  RenderFrame = 2,
-  CreateDrawing = 3,
-  CreateEngine = 4,
-  Message = 5,
-  GpuOfferShareHandle = 7,
-  GpuRelaseShareHandle = 8
+  RenderFrame = 1,
+  CreateDrawing = 2,
+  CreateEngine = 3,
+  Message = 4,
+  GpuRelaseShareHandle = 5,
+  MapHandle = 6
 };
 
 class CInterop : public virtual CefBaseRefCounted {

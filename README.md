@@ -18,7 +18,7 @@ First install / extract the Release-Base.7z and over that replace with the conte
 
 ## New v7 (under development)
 
-- Based on CEF 03/08/2019 - 3.3626.1895.g7001d56 / Chromium 72.0.3626.121
+- Based on CEF 07/27/2019 - 75.1.14+gc81164e+chromium-75.0.3770.100 / Chromium 75.0.3770.100
 - Pre-releases available here: https://github.com/advancedfx/afx-cefhud-interop/releases
 
 ### Build instructions

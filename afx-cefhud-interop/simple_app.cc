@@ -96,7 +96,10 @@ SimpleApp::SimpleApp() {}
 
      // Register the custom scheme as standard and secure.
      // Must be the same implementation in all processes.
-     registrar->AddCustomScheme("afx", true, false, false, true, true, false);
+     //registrar->AddCustomScheme("afx", true, false, false, true, true, false);
+    registrar->AddCustomScheme("afx", CEF_SCHEME_OPTION_STANDARD |
+                                             CEF_SCHEME_OPTION_SECURE |
+                                         CEF_SCHEME_OPTION_CORS_ENABLED);
   }
 
 
@@ -162,48 +165,56 @@ void SimpleApp::OnContextInitialized() {
 
   // Create the first browser window.
   CefBrowserHost::CreateBrowser(window_info, handler, argUrl, browser_settings,
-                                nullptr);
+                                nullptr, nullptr);
 }
 
 void SimpleApp::OnContextCreated(CefRefPtr<CefBrowser> browser,
-                                CefRefPtr<CefFrame> frame,
-                                CefRefPtr<CefV8Context> context) {
-
-  if(extra_info_ && 3 == extra_info_->GetSize())
-  {
+                                 CefRefPtr<CefFrame> frame,
+                                 CefRefPtr<CefV8Context> context) {
+  if (extra_info_ && 3 == extra_info_->GetSize()) {
     auto interopType = extra_info_->GetString(0);
     auto handlerProcessId = extra_info_->GetInt(1);
     auto argStr = extra_info_->GetString(2);
 
-    if (frame->IsMain()) {   
+    if (frame->IsMain()) {
       if (interopType.compare("drawing") == 0) {
-      
-        browser->SendProcessMessage(PID_BROWSER, CefProcessMessage::Create("afx-scheme-enable"));
+        std::unique_lock<std::mutex> lock(m_InteropMutex);
+
+        CefRefPtr<advancedfx::interop::CInterop> interop;
 
         auto window = context->GetGlobal();
         window->SetValue(
             "afxInterop",
             advancedfx::interop::CreateDrawingInterop(
-                browser, frame, context, argStr,
-                handlerProcessId, &m_Interop),
+                browser, frame, context, argStr, handlerProcessId, &interop),
             V8_PROPERTY_ATTRIBUTE_NONE);
-      }
-      else if (interopType.compare("engine") == 0) {
-        
-        auto window = context->GetGlobal();
-        window->SetValue("afxInterop",
-                        advancedfx::interop::CreateEngineInterop(
-                            browser, frame, context, argStr,
-                handlerProcessId, &m_Interop),
-                            V8_PROPERTY_ATTRIBUTE_NONE);
-      }
-      else if (interopType.compare("index") == 0) {
+        m_Interops[frame->GetIdentifier()] = interop;
+      } else if (interopType.compare("engine") == 0) {
+        std::unique_lock<std::mutex> lock(m_InteropMutex);
+
+        CefRefPtr<advancedfx::interop::CInterop> interop;
 
         auto window = context->GetGlobal();
-        window->SetValue("afxInterop",advancedfx::interop::CreateInterop(
-                            browser, frame, context, argStr,
-                handlerProcessId, &m_Interop),
-                            V8_PROPERTY_ATTRIBUTE_NONE);
+        window->SetValue(
+            "afxInterop",
+            advancedfx::interop::CreateEngineInterop(
+                browser, frame, context, argStr, handlerProcessId, &interop),
+            V8_PROPERTY_ATTRIBUTE_NONE);
+        m_Interops[frame->GetIdentifier()] = interop;
+
+      } else if (interopType.compare("index") == 0) {
+        std::unique_lock<std::mutex> lock(m_InteropMutex);
+
+        CefRefPtr<advancedfx::interop::CInterop> interop;
+
+        auto window = context->GetGlobal();
+        window->SetValue(
+            "afxInterop",
+            advancedfx::interop::CreateInterop(browser, frame, context, argStr,
+                                               handlerProcessId, &interop),
+            V8_PROPERTY_ATTRIBUTE_NONE);
+        m_Interops[frame->GetIdentifier()] = interop;
+
       }
     }
 
@@ -212,19 +223,14 @@ void SimpleApp::OnContextCreated(CefRefPtr<CefBrowser> browser,
 }
 
 void SimpleApp::OnContextReleased(CefRefPtr<CefBrowser> browser,
-                                 CefRefPtr<CefFrame> frame,
-                                 CefRefPtr<CefV8Context> context) {
-
-      if (frame->IsMain()) {
-        if(m_Interop != nullptr)
-        {
-          m_Interop->CloseInterop();
-          m_Interop = nullptr;
-        }
-        extra_info_ = nullptr;
-      }
+                                  CefRefPtr<CefFrame> frame,
+                                  CefRefPtr<CefV8Context> context) {
+  auto it = m_Interops.find(frame->GetIdentifier());
+  if (it != m_Interops.end()) {
+    it->second->CloseInterop();
+    m_Interops.erase(it);
   }
-
+}
 
 void SimpleApp::OnBeforeCommandLineProcessing(
       const CefString& process_type,
@@ -252,24 +258,4 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     // requiring the muted attribute or user interaction
     command_line->AppendSwitchWithValue("autoplay-policy",
                                         "no-user-gesture-required");
-
-    //
-
-    command_line->AppendSwitch("no-sandbox");
-    command_line->AppendSwitch("disable-gpu-watchdog");
-    command_line->AppendSwitch("disable-hang-monitor");
-    //command_line->AppendSwitch("enable-prune-gpu-command-buffers");
-
-    //command_line->AppendSwitch("disable-gpu");
-    //command_line->AppendSwitch("disable-gpu-compositing");
-    //command_line->AppendSwitch("gpu-sandbox-failures-fatal");
-    //command_line->AppendSwitch("disable-gpu-early-init");
-    //command_line->AppendSwitch("d3d11");
-    //command_line->AppendSwitch("enable-gpu");
-    //command_line->AppendSwitch("disable-threaded-compositing");
-    //command_line->AppendSwitch("cc-layer-tree-test-no-timeout");
-    //command_line->AppendSwitch("skip-gpu-data-loading");
-    //command_line->AppendSwitch("disable-mojo-renderer");
-    //enable-prune-gpu-command-buffers
-
   }

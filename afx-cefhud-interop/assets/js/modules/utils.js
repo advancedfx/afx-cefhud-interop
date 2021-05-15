@@ -45,7 +45,7 @@ export function FAILED(hr) {
 }
 
 export function failedHResultToError(hr, message) {
-	errorStr = message === undefined ? "" : message+": ";
+	var errorStr = message === undefined ? "" : message+": ";
 	errorStr = errorStr+"HRESULT is FAILED: "+hr.hr+", GetLastError: "+hr.lastError;
 	var error = new Error(errorStr);
 	error.hResult = hr.hr;

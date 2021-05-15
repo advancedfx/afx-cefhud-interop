@@ -10,6 +10,9 @@
 #include <include/cef_parser.h>
 
 #include <list>
+#include <set>
+#include <map>
+#include <mutex>
 
 namespace advancedfx {
   namespace interop {
@@ -25,6 +28,14 @@ class SimpleApp : public CefApp,
   CefRefPtr<CefListValue> extra_info_;
 
   SimpleApp();
+  ~SimpleApp() {
+
+  }
+
+  bool GetAfxEnabled(int frameId) {
+    std::unique_lock<std::mutex> lock(m_InteropMutex);
+    return m_Interops.find(frameId) != m_Interops.end();
+  }
 
   // CefApp methods:
   virtual CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler()
@@ -58,7 +69,7 @@ class SimpleApp : public CefApp,
   virtual void OnBrowserCreated( CefRefPtr< CefBrowser > browser, CefRefPtr< CefDictionaryValue > _extra_info ) OVERRIDE {
     extra_info = _extra_info->Copy(false);
   }*/
-
+  
   // CefRenderProcessHandler methods:
 
   virtual void OnRenderThreadCreated(CefRefPtr<CefListValue> extra_info) OVERRIDE {
@@ -79,7 +90,8 @@ class SimpleApp : public CefApp,
       CefRefPtr<CefCommandLine> command_line) OVERRIDE;
 
  private:
-  CefRefPtr<class advancedfx::interop::CInterop> m_Interop;
+  std::map<int,CefRefPtr<class advancedfx::interop::CInterop>> m_Interops;
+  std::mutex m_InteropMutex;
 
   // Include the default reference counting implementation.
   IMPLEMENT_REFCOUNTING(SimpleApp);
