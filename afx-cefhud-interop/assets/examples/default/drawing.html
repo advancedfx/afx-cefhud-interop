@@ -161,8 +161,6 @@ function AfxDrawingInterop(interop,args) {
 			
 			var requestAnimationFramePromise =  new Promise((resolve,reject)=>{
 				window.requestAnimationFrame((timestamp)=>{
-					console.log("requestAnimationFrame: "+timestamp);
-					
 					//
 					// >>>>
 					
@@ -187,13 +185,7 @@ function AfxDrawingInterop(interop,args) {
 				cefResult = await oldDrawingPromise;
 			}
 			
-			console.log("onPaint1");
-			
 			async function doPaintGameToCef(rootTextureHandle) {
-			
-				console.log("doPaintGameToCef");
-				
-				console.log("HANDLE: "+rootTextureHandle.invalid);
 			
 				if(rootTextureHandle.invalid) throw Utils.toSoftError(new Error("rootTextureHandle.invalid"));
 
@@ -234,11 +226,9 @@ function AfxDrawingInterop(interop,args) {
 				var gameSurfaceRef = [undefined];
 
 				try {
-					console.log("B1");
 					var hr = await Utils.toPromise(cefTexture, "getSurfaceLevel", 0, cefTextureSuraceLevel0Ref);
 					if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
 
-					console.log("B2");
 					var hr = await Utils.toPromise(self.interop, "getRenderTarget", 0, gameSurfaceRef);
 					if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
 					
@@ -253,15 +243,12 @@ function AfxDrawingInterop(interop,args) {
 								"maxZ": 1.0
 					});
 					
-					console.log("B3");
 					var hr = await Utils.toPromise(self.interop, "d3d9StretchRect", gameSurfaceRef[0], null, cefTextureSuraceLevel0Ref[0], null, D3d9.D3DTEXTUREFILTERTYPE.D3DTEXF_NONE);
 					if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
 					
 					await Utils.toPromise(self.interop, "waitForClientGpu");
 					
 					await Utils.toPromise(self.interop, "endCleanState");
-					
-					console.log("B4");
 				}
 				catch(e) {
 					if(e && e.soft) {
@@ -272,11 +259,8 @@ function AfxDrawingInterop(interop,args) {
 					throw e;
 				}
 
-				console.log("A1");
 				if(gameSurfaceRef[0]) await Utils.toPromise(gameSurfaceRef[0], "release");
-				console.log("A2");
 				if(cefTextureSuraceLevel0Ref[0]) await Utils.toPromise(cefTextureSuraceLevel0Ref[0], "release");
-				console.log("A3");
 			}
 			
 			await Utils.toPromise(self.interop, "pumpBegin", frameCount, pass);
@@ -284,15 +268,13 @@ function AfxDrawingInterop(interop,args) {
 			try {
 				await doPaintGameToCef(cefResult.bgHandle);
 				await requestAnimationFramePromise;
-
-				console.log("onPaint2");
-			
+				
 				async function doPaintCefToGame(cefTextureHandle) {
 
 					if(cefTextureHandle.invalid) throw Utils.toSoftError(new Error("cefTextureHandle.invalid"));
 
 					var cefTexture = self.getCefTexture(cefTextureHandle);
-								
+					
 					if(!cefTexture) {
 						console.log("Creating new texture for cefTextureHandle: ("+cefTextureHandle.hi+", "+cefTextureHandle.lo+")");
 
@@ -306,19 +288,11 @@ function AfxDrawingInterop(interop,args) {
 						self.setCefTexture(cefTextureHandle, cefTexture);
 					}
 					
-					console.log("H2");
-					
 					if(!cefTexture) throw Utils.toSoftError(new Error("!cefTexture"));
-					
-					console.log("H3");
 					
 					await self.drawRect2d(cefTexture, self.renderInfo.view.x, self.renderInfo.view.y, self.renderInfo.view.width, self.renderInfo.view.height, 0, 0, 1, 1);
 					
-					console.log("H4");
-					
 					await Utils.toPromise(self.interop, "waitForClientGpu");
-					
-					console.log("H5");
 				}
 				
 				await doPaintCefToGame(cefResult.shareHandle);
