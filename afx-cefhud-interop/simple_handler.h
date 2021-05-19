@@ -498,6 +498,7 @@ class SimpleHandler : public CefClient,
   std::condition_variable m_DrawingCv;
   bool m_DrawingDone = false;
   bool m_DrawingResult = false;
+  bool m_Creating = true;
 
   // Platform-specific implementation.
   void PlatformTitleChange(CefRefPtr<CefBrowser> browser,

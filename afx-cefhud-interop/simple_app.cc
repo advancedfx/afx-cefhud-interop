@@ -157,24 +157,24 @@ void SimpleApp::OnContextInitialized() {
                     command_line->GetCommandLineString());
   argStr->SetDictionary(argCmd);
 
-  extra_info_ = CefListValue::Create();
-  extra_info_->SetSize(3);
-  extra_info_->SetString(0,"index");
-  extra_info_->SetInt(1, GetCurrentProcessId());
-  extra_info_->SetString(2, CefWriteJSON(argStr, JSON_WRITER_DEFAULT));
+  auto extra_info = CefDictionaryValue::Create();
+  extra_info->SetString("interopType", "index");
+  extra_info->SetInt("handlerProcessId", GetCurrentProcessId());
+  extra_info->SetString("argStr", CefWriteJSON(argStr, JSON_WRITER_DEFAULT));
 
   // Create the first browser window.
   CefBrowserHost::CreateBrowser(window_info, handler, argUrl, browser_settings,
-                                nullptr, nullptr);
+                                extra_info, nullptr);
 }
 
 void SimpleApp::OnContextCreated(CefRefPtr<CefBrowser> browser,
                                  CefRefPtr<CefFrame> frame,
                                  CefRefPtr<CefV8Context> context) {
-  if (extra_info_ && 3 == extra_info_->GetSize()) {
-    auto interopType = extra_info_->GetString(0);
-    auto handlerProcessId = extra_info_->GetInt(1);
-    auto argStr = extra_info_->GetString(2);
+
+  if (nullptr != extra_info_) {
+    auto interopType = extra_info_->GetString("interopType");
+    auto handlerProcessId = extra_info_->GetInt("handlerProcessId");
+    auto argStr = extra_info_->GetString("argStr");
 
     if (frame->IsMain()) {
       if (interopType.compare("drawing") == 0) {

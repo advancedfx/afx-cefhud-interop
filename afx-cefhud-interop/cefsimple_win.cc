@@ -15,6 +15,8 @@
 #include "afx-cefhud-interop/simple_app.h"
 #include "AfxInterop.h"
 
+//#include <include/cef_client.h>
+
 #include <map>
 
 #include <d3d11_1.h>
@@ -80,10 +82,10 @@ struct TextureMapElem {
   ~TextureMapElem() {
     if (nullptr != TempTextureView)
       TempTextureView->Release();
-    if (ShareHandle != INVALID_HANDLE_VALUE)
-      CloseHandle(ShareHandle);
-    if (TempTextureShareHandle != INVALID_HANDLE_VALUE)
-      CloseHandle(TempTextureShareHandle);
+    //if (ShareHandle != INVALID_HANDLE_VALUE)
+    //  CloseHandle(ShareHandle);
+    // if (TempTextureShareHandle != INVALID_HANDLE_VALUE)
+    //  CloseHandle(TempTextureShareHandle);
   }
 };
 
@@ -861,6 +863,45 @@ MyD3D11CreateDevice(_In_opt_ IDXGIAdapter* pAdapter,
   return result;
 }
 
+/*
+class TestClient : public CefClient, public CefLifeSpanHandler {
+  IMPLEMENT_REFCOUNTING(TestClient);
+
+  public:
+  virtual CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() OVERRIDE {
+    return this;
+  }
+
+  virtual bool DoClose(CefRefPtr<CefBrowser> browser) OVERRIDE { return false; }
+  virtual void OnBeforeClose(CefRefPtr<CefBrowser> browser) OVERRIDE {
+  
+      CefQuitMessageLoop();
+  }
+};
+
+class TestApp : public CefApp, public CefBrowserProcessHandler {
+  IMPLEMENT_REFCOUNTING(TestApp);
+
+ public:
+  virtual CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler()
+      OVERRIDE {
+    return this;
+  }
+
+  void OnContextInitialized() OVERRIDE {
+    CefWindowInfo window_info;
+    window_info.SetAsPopup(NULL, "cefsimple");
+
+    CefBrowserSettings browser_settings;
+    browser_settings.windowless_frame_rate = 60;
+
+    CefBrowserHost::CreateBrowser(window_info, new TestClient(),
+                                  "http://www.matrixstorm.com/",
+                                  browser_settings, nullptr, nullptr);
+  };
+};
+*/
+
 // Entry point function for all processes.
 int APIENTRY wWinMain(HINSTANCE hInstance,
                       HINSTANCE hPrevInstance,
@@ -895,8 +936,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
   DetourAttach(&(PVOID&)TrueD3D11CreateDevice, MyD3D11CreateDevice);
   g_detours_error = DetourTransactionCommit();
   //
-
-
+  
   // Enable High-DPI support on Windows 7 or newer.
   CefEnableHighDPISupport();
 

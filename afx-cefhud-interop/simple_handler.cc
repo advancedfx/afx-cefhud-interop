@@ -106,6 +106,7 @@ bool SimpleHandler::DoClose(CefRefPtr<CefBrowser> browser) {
 
   // Allow the close. For windowed browsers this will result in the OS close
   // event being sent.
+
   return false;
 }
 
@@ -221,12 +222,12 @@ bool SimpleHandler::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
   std::string url = request->GetURL();
 
   if(0 == url.find("afx://")) {
-    bool afx_enabled =
-        simple_app_->extra_info_ && 3 == simple_app_->extra_info_->GetSize() ||
-        simple_app_->GetAfxEnabled(frame->GetIdentifier());
+    bool afx_enabled = m_Creating || simple_app_->GetAfxEnabled(frame->GetIdentifier());
 
     if(!afx_enabled) return true; // cancel request, not allowed.
   }
+
+  m_Creating = false; // Maybe this can be exploited with some kind of race condition :thinking:.
 
   return false;
 }
@@ -243,14 +244,14 @@ void SimpleHandler::DoCreateDrawing(const std::string& argStr, const std::string
   window_info.width = 640;
   window_info.height = 360;
 
-  simple_app_->extra_info_ = CefListValue::Create();
-  simple_app_->extra_info_->SetSize(3);
-  simple_app_->extra_info_->SetString(0,"drawing");
-  simple_app_->extra_info_->SetInt(1, GetCurrentProcessId());
-  simple_app_->extra_info_->SetString(2, argStr);
+  auto extra_info = CefDictionaryValue::Create();
+  extra_info->SetString("interopType", "drawing");
+  extra_info->SetInt("handlerProcessId", GetCurrentProcessId());
+  extra_info->SetString("argStr", argStr);
 
+  m_Creating = true;
   CefBrowserHost::CreateBrowser(window_info, this, argUrl, browser_settings,
-                                nullptr, nullptr);
+                                extra_info, nullptr);
 }
 
 void SimpleHandler::DoCreateEngine(const std::string& argStr, const std::string& argUrl) {
@@ -265,12 +266,12 @@ void SimpleHandler::DoCreateEngine(const std::string& argStr, const std::string&
   window_info.width = 640;
   window_info.height = 360;
 
-  simple_app_->extra_info_ = CefListValue::Create();
-  simple_app_->extra_info_->SetSize(3);
-  simple_app_->extra_info_->SetString(0,"engine");
-  simple_app_->extra_info_->SetInt(1, GetCurrentProcessId());
-  simple_app_->extra_info_->SetString(2, argStr);
+  auto extra_info = CefDictionaryValue::Create();
+  extra_info->SetString("interopType", "engine");
+  extra_info->SetInt("handlerProcessId", GetCurrentProcessId());
+  extra_info->SetString("argStr", argStr);
 
+  m_Creating = true;
   CefBrowserHost::CreateBrowser(window_info, this, argUrl, browser_settings,
-                                nullptr, nullptr);
+                                extra_info, nullptr);
 }
