@@ -331,9 +331,9 @@ public:
 
 enum class ClientMessage : int {
   Message = 1,
-  OnPainted = 2,
-  WaitedForGpu = 3,
-  ReleaseTextureHandle = 4
+  ReleaseTextureHandle = 2,
+  OnAfterClear = 3,
+  OnAfterRender = 4
 };
 
 enum class HostMessage : int {
@@ -342,7 +342,10 @@ enum class HostMessage : int {
   CreateEngine = 3,
   Message = 4,
   GpuRelaseShareHandle = 5,
-  MapHandle = 6
+  OnAfterClear = 6,
+  OnAfterRender = 7,
+  OnAfterClearDone = 8,
+  OnAfterRenderDone = 9
 };
 
 class CInterop : public virtual CefBaseRefCounted {

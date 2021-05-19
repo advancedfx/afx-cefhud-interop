@@ -92,11 +92,11 @@ std::string GetDataURI(const std::string& data, const std::string& mime_type) {
 SimpleApp::SimpleApp() {}
 
   void SimpleApp::OnRegisterCustomSchemes(
-      CefRawPtr<CefSchemeRegistrar> registrar) {
+    CefRawPtr<CefSchemeRegistrar> registrar) {
 
-     // Register the custom scheme as standard and secure.
-     // Must be the same implementation in all processes.
-     //registrar->AddCustomScheme("afx", true, false, false, true, true, false);
+    // Register the custom scheme as standard and secure.
+    // Must be the same implementation in all processes.
+    //registrar->AddCustomScheme("afx", true, false, false, true, true, false);
     registrar->AddCustomScheme("afx", CEF_SCHEME_OPTION_STANDARD |
                                              CEF_SCHEME_OPTION_SECURE |
                                          CEF_SCHEME_OPTION_CORS_ENABLED);
@@ -238,7 +238,7 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     // disable creation of a GPUCache/ folder on disk
     command_line->AppendSwitch("disable-gpu-shader-disk-cache");
 
-    //command_line->AppendSwitch("disable-accelerated-video-decode");
+    command_line->AppendSwitch("disable-accelerated-video-decode");
 
     // un-comment to show the built-in Chromium fps meter
     //command_line->AppendSwitch("show-fps-counter");

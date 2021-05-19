@@ -6363,14 +6363,38 @@ CAfxObject::AddFunction(
             int width = arguments[2]->GetIntValue();
             int height = arguments[3]->GetIntValue();
 
-            self->m_OnPaintedQueue.push(arguments[0]);
+            CefRefPtr<CefV8Value> onAfterClearFn = nullptr;
+            CefRefPtr<CefV8Value> onAfterRenderFn = nullptr;
 
-              self->m_InteropQueue.Queue([self, fn_reject = arguments[1], width, height]() {
+            if (5 <= arguments.size() && arguments[4]->IsObject()) {
+              auto onAfterClear = arguments[4]->GetValue("onAfterClear");
+              auto onAfterRender = arguments[4]->GetValue("onAfterRender");
+
+              if (nullptr != onAfterClear && onAfterClear->IsFunction()) onAfterClearFn = onAfterClear;
+              if (nullptr != onAfterRender && onAfterRender->IsFunction())
+                onAfterRenderFn = onAfterRender;
+            }
+
+            self->m_OnAfterClearQueue.push(onAfterClearFn);
+            self->m_OnAfterRenderQueue.push(onAfterRenderFn);
+
+              self->m_InteropQueue.Queue([self, fn_resolve = arguments[0], fn_reject = arguments[1], width, height]() {
               try {
                 self->WriteInt32((int) HostMessage::RenderFrame);
                 self->WriteInt32((int)width);
                 self->WriteInt32((int)height);
                 self->Flush();    
+
+                CefPostTask(
+                    TID_RENDERER,
+                    new CAfxTask([self, fn_resolve]() {
+                          if (nullptr == self->m_Context)
+                            return;
+
+                          self->m_Context->Enter();
+                          fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                          self->m_Context->Exit();
+                        }));
               } catch (const std::exception& e) {
                 CefPostTask(
                     TID_RENDERER,
@@ -6572,17 +6596,6 @@ CAfxObject::AddFunction(
  private:
   int m_BrowserId;
 
-  struct Waiter_s {
-    CefRefPtr<CefV8Value> fn_resolve;
-    CefRefPtr<CefV8Value> fn_reject;
-
-    Waiter_s(CefRefPtr<CefV8Value> fn_resolve, CefRefPtr<CefV8Value> fn_reject) : fn_resolve(fn_resolve), fn_reject(fn_reject) {
-
-    }
-  };
-
-  std::queue<Waiter_s> m_Waiters;
-
  protected:
   CDrawingInteropImpl(int browserId)
       : CAfxObject(AfxObjectType::DrawingInteropImpl)
@@ -6627,11 +6640,8 @@ CAfxObject::AddFunction(
 
     public:
     CAfxResolveReject(CefRefPtr<CDrawingInteropImpl> impl,
-                           bool resolve,
                            HostMessage message)
-      : m_Impl(impl)
-      , m_Resolve(resolve)
-        , m_Message(message)
+      : m_Impl(impl), m_Message(message)
     {
 
     }
@@ -6641,10 +6651,15 @@ CAfxObject::AddFunction(
                          const CefV8ValueList& arguments,
                          CefRefPtr<CefV8Value>& retval,
                          CefString& exception) override {
-      m_Impl->m_InteropQueue.Queue([this]() {
+
+        bool bValue = 1 <= arguments.size() && arguments[0]->IsBool()
+          ? arguments[0]
+                ->GetBoolValue() : false;
+
+      m_Impl->m_InteropQueue.Queue([this,bValue]() {
         try {
               m_Impl->WriteInt32((int)m_Message);
-          m_Impl->WriteBoolean(m_Resolve);
+          m_Impl->WriteBoolean(bValue);
           m_Impl->Flush();
         } catch (const std::exception& e) {
           DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": " << e.what();
@@ -6657,39 +6672,97 @@ CAfxObject::AddFunction(
 
     private:
       CefRefPtr<CDrawingInteropImpl> m_Impl;
-      bool m_Resolve;
       HostMessage m_Message;
    };
 
-   void OnClientMessage_OnPainted(HANDLE sharedTextureHandle, HANDLE dstHandle) {
-     if (nullptr == m_Context)
-       return;
+   void OnClientMessage_OnAfterClear(HANDLE share_handle) {
+     bool bHandled = false;
 
-     m_Context->Enter();
+     if (nullptr != m_Context) {
+       m_Context->Enter();
 
-     if (!m_OnPaintedQueue.empty()) {
-       auto fn = m_OnPaintedQueue.front();
-       m_OnPaintedQueue.pop();
+       if (!m_OnAfterClearQueue.empty()) {
+         auto fn = m_OnAfterClearQueue.front();
+         m_OnAfterClearQueue.pop();
 
-                               CefRefPtr<CefV8Value> result =
-           CefV8Value::CreateObject(nullptr, nullptr);
-       result->SetValue("shareHandle", CAfxHandle::Create(sharedTextureHandle),
-                        V8_PROPERTY_ATTRIBUTE_NONE);
-                               result->SetValue("bgHandle",
-                                                CAfxHandle::Create(dstHandle),
-                        V8_PROPERTY_ATTRIBUTE_NONE);
-           
-       CefV8ValueList execArgs;
-       execArgs.push_back(result);
+         if (nullptr != fn) {
+           CefV8ValueList execArgs;
+           execArgs.push_back(CefV8Value::CreateFunction(
+               "resolve",
+               new CAfxResolveReject(this, HostMessage::OnAfterClearDone)));
+           execArgs.push_back(CefV8Value::CreateFunction(
+               "reject",
+               new CAfxResolveReject(this, HostMessage::OnAfterClearDone)));
+           execArgs.push_back(CAfxHandle::Create(share_handle));
 
-       fn->ExecuteFunction(NULL, execArgs);
+           fn->ExecuteFunction(NULL, execArgs);
 
+           bHandled = true;
+         }
+
+       m_Context->Exit();
+       }
      }
 
-     m_Context->Exit();
+     if (!bHandled) {
+       m_InteropQueue.Queue([this]() {
+         try {
+           WriteInt32((int)HostMessage::OnAfterClearDone);
+           WriteBoolean(false);
+           Flush();
+         } catch (const std::exception& e) {
+           DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                       << e.what();
+           DebugBreak();
+         }
+       });
+     }
    }
 
-  void OnClientMessage_ReleaseShareHandle(HANDLE sharedTextureHandle) {
+   void OnClientMessage_OnAfterRender(HANDLE share_handle) {
+     bool bHandled = false;
+
+     if (nullptr != m_Context) {
+       m_Context->Enter();
+
+       if (!m_OnAfterRenderQueue.empty()) {
+         auto fn = m_OnAfterRenderQueue.front();
+         m_OnAfterRenderQueue.pop();
+
+         if (nullptr != fn) {
+           CefV8ValueList execArgs;
+           execArgs.push_back(CefV8Value::CreateFunction(
+               "resolve",
+               new CAfxResolveReject(this, HostMessage::OnAfterRenderDone)));
+           execArgs.push_back(CefV8Value::CreateFunction(
+               "reject",
+               new CAfxResolveReject(this, HostMessage::OnAfterRenderDone)));
+           execArgs.push_back(CAfxHandle::Create(share_handle));
+
+           fn->ExecuteFunction(NULL, execArgs);
+
+           bHandled = true;
+         }
+       }
+
+       m_Context->Exit();
+     }
+
+     if (!bHandled) {
+       m_InteropQueue.Queue([this]() {
+         try {
+           WriteInt32((int)HostMessage::OnAfterRenderDone);
+           Flush();
+         } catch (const std::exception& e) {
+           DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                       << e.what();
+           DebugBreak();
+         }
+       });
+     }
+   }
+
+   void OnClientMessage_ReleaseShareHandle(HANDLE sharedTextureHandle) {
    if (nullptr == m_Context)
      return;
 
@@ -6700,29 +6773,6 @@ CAfxObject::AddFunction(
 
     if (m_OnReleaseShareHandle->IsValid()) {
       m_OnReleaseShareHandle->ExecuteCallback(execArgs);
-    }
-
-    m_Context->Exit();
- } 
-
-
-  void OnClientMessage_WaitedForGpu(bool bOk) {
-   if (nullptr == m_Context)
-     return;
-
-    m_Context->Enter();
-
-    if(bOk && 0 < m_Waiters.size())
-    {
-      m_Waiters.front().fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
-    }
-    else
-    {
-      while(0 < m_Waiters.size())
-      {
-        m_Waiters.front().fn_reject->ExecuteFunction(NULL, CefV8ValueList());
-        m_Waiters.pop();
-      }
     }
 
     m_Context->Exit();
@@ -6757,21 +6807,20 @@ CAfxObject::AddFunction(
                  base::Bind(&CDrawingInteropImpl::OnClientMessage_Message,
                             m_Host, senderId, argMessage));
            } break;
-           case ClientMessage::OnPainted: {
+           case ClientMessage::OnAfterClear: {
              HANDLE shared_handle = ReadHandle();
-             HANDLE dst_handle = ReadHandle();
              CefPostTask(
                  TID_RENDERER,
                  base::Bind(
-                     &CDrawingInteropImpl::OnClientMessage_OnPainted,
-                            m_Host, shared_handle, dst_handle));
+                     &CDrawingInteropImpl::OnClientMessage_OnAfterClear,
+                            m_Host, shared_handle));
            } break;
-           case ClientMessage::WaitedForGpu: {
-             bool bOk = ReadBoolean();
+           case ClientMessage::OnAfterRender: {
+             HANDLE shared_handle = ReadHandle();
              CefPostTask(
                  TID_RENDERER,
-                 base::Bind(&CDrawingInteropImpl::OnClientMessage_WaitedForGpu,
-                            m_Host, bOk));
+                 base::Bind(&CDrawingInteropImpl::OnClientMessage_OnAfterRender,
+                            m_Host, shared_handle));
            } break;
            case ClientMessage::ReleaseTextureHandle: {
              HANDLE shared_handle = (HANDLE)ReadUInt64();
@@ -8136,8 +8185,8 @@ private:
   CefRefPtr<CAfxCallback> m_OnError;
   CefRefPtr<CAfxCallback> m_OnDeviceLost;
   CefRefPtr<CAfxCallback> m_OnDeviceReset;
-  std::queue<CefRefPtr<CefV8Value>> m_OnPaintedQueue;
-  std::queue<CefRefPtr<CefV8Value>> m_OnRootTextureHandleQueue;
+  std::queue<CefRefPtr<CefV8Value>> m_OnAfterClearQueue;
+  std::queue<CefRefPtr<CefV8Value>> m_OnAfterRenderQueue;
   CefRefPtr<CAfxCallback> m_OnReleaseShareHandle;
 
    bool m_WaitConnectionQuit = false;
@@ -9842,12 +9891,32 @@ __5 : {
                  base::Bind(&CEngineInteropImpl::OnClientMessage_Message,
                             m_Host, senderId, argMessage));
            } break;
-           case ClientMessage::OnPainted: {
+           case ClientMessage::OnAfterClear: {
              ReadHandle();
-             ReadHandle();
+             m_Host->m_InteropQueue.Queue([this]() {
+               try {
+                   m_Host->WriteInt32((int)HostMessage::OnAfterClearDone);
+                   m_Host->WriteBoolean(false);
+                   m_Host->Flush();
+               } catch (const std::exception& e) {
+                 DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__
+                             << ": " << e.what();
+                 DebugBreak();
+               }
+             });
            } break;
-           case ClientMessage::WaitedForGpu: {
-             ReadBoolean();
+           case ClientMessage::OnAfterRender: {
+             ReadHandle();
+             m_Host->m_InteropQueue.Queue([this]() {
+               try {
+                 m_Host->WriteInt32((int)HostMessage::OnAfterRenderDone);
+                 m_Host->Flush();
+               } catch (const std::exception& e) {
+                 DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__
+                             << ": " << e.what();
+                 DebugBreak();
+               }
+             });
            } break;
            case ClientMessage::ReleaseTextureHandle: {
              (HANDLE)ReadUInt64();
@@ -11016,12 +11085,32 @@ bool m_WaitConnectionQuit = false;
                          base::Bind(&CInteropImpl::OnClientMessage_Message,
                                     m_Host, senderId, argMessage));
            } break;
-           case ClientMessage::OnPainted: {
+           case ClientMessage::OnAfterClear: {
              ReadHandle();
-             ReadHandle();
+             m_Host->m_InteropQueue.Queue([this]() {
+               try {
+                 m_Host->WriteInt32((int)HostMessage::OnAfterClearDone);
+                 m_Host->WriteBoolean(false);
+                 m_Host->Flush();
+               } catch (const std::exception& e) {
+                 DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__
+                             << ": " << e.what();
+                 DebugBreak();
+               }
+             });
            } break;
-           case ClientMessage::WaitedForGpu: {
-             ReadBoolean();
+           case ClientMessage::OnAfterRender: {
+             ReadHandle();
+             m_Host->m_InteropQueue.Queue([this]() {
+               try {
+                 m_Host->WriteInt32((int)HostMessage::OnAfterRenderDone);
+                 m_Host->Flush();
+               } catch (const std::exception& e) {
+                 DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__
+                             << ": " << e.what();
+                 DebugBreak();
+               }
+             });
            } break;
            case ClientMessage::ReleaseTextureHandle: {
              (HANDLE)ReadUInt64();

@@ -131,6 +131,14 @@ void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
 
     // Delete the fake 0 browser:
 
+    // avoid deadlock on shutdown:
+    {
+      std::unique_lock<std::mutex> lock2(m_DrawingMutex);
+      m_DrawingResult = false;
+      m_DrawingDone = true;
+      m_DrawingCv.notify_one();
+    }
+
     auto it = m_Browsers.begin();
     it->second.Connection->DeleteExternal(lock);
     m_Browsers.erase(it);
@@ -190,8 +198,6 @@ void SimpleHandler::OnLoadError(CefRefPtr<CefBrowser> browser,
 
 void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
   std::unique_lock<std::mutex> lock(m_BrowserMutex);
-  
-  m_LastBrowserId = browser->GetIdentifier();
 
   auto it = m_Browsers.find(browser->GetIdentifier());
   if (it != m_Browsers.end()) {
@@ -202,49 +208,6 @@ void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
   }
 
   rect.Set(0, 0, 640, 480);
-}
-
-void SimpleHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
-                                       PaintElementType type,
-                                       const RectList& dirtyRects,
-                                       void* share_handle) {
-  if (PET_VIEW == type) {
-    std::unique_lock<std::mutex> lock(m_BrowserMutex);
-
-    auto emplaced =
-        m_Browsers.emplace(std::piecewise_construct,
-                           std::forward_as_tuple(browser->GetIdentifier()),
-                           std::forward_as_tuple(browser));
-//    if (emplaced.second) {
-
-//    } else
-      emplaced.first->second.Browser = browser;
-
-    CefPostTask(TID_FILE_USER_BLOCKING,
-                base::Bind(&SimpleHandler::DoPainted, this,
-                           browser->GetIdentifier(), share_handle));
-
-    //lock.unlock();
-    //DoPainted(browser->GetIdentifier(), share_handle);
-  }
-}
-
-void SimpleHandler::DoPainted(int browserId, void* share_handle) {
-  std::unique_lock<std::mutex> lock(m_BrowserMutex);
-  auto it = m_Browsers.find(browserId);
-  if (it != m_Browsers.end()) {
-    m_HandleToBrowserId[share_handle] = browserId;
-    it->second.ShareHandles.emplace(share_handle);
-    if (CHostPipeServerConnectionThread* connection = it->second.Connection) {
-      try {
-        connection->OnPainted(share_handle);
-      } catch (const std::exception & e) {
-        DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
-                    << e.what();
-        DebugBreak();
-      }
-    }
-  }
 }
 
 bool SimpleHandler::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,

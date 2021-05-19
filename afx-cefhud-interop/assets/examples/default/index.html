@@ -159,9 +159,10 @@ AfxInterop.prototype.reconnect = async function(senderId, message) {
 ////////////////////////////////////////////////////////////////////////////////
 
 window.addEventListener('load', function(){
-
+	
 	console.log(window.afxInterop.args);
 	new AfxInterop(window.afxInterop, JSON.parse(window.afxInterop.args))
+	
 }, false);
 
 </script>
