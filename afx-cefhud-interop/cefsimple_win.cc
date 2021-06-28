@@ -836,7 +836,7 @@ MyD3D11CreateDevice(_In_opt_ IDXGIAdapter* pAdapter,
 
     DWORD oldProtect;  
 
-    MessageBoxA(0, std::to_string(GetParentProcessId()).c_str(), "LOL", MB_OK);
+    //MessageBoxA(0, std::to_string(GetParentProcessId()).c_str(), "LOL", MB_OK);
 
     /*
     HRESULT hr;
