@@ -285,7 +285,9 @@ struct CWinApiException : public std::exception {
   std::string What;
   DWORD LastError;
 
-  CWinApiException(const char * what, DWORD lastError) : What(what), LastError(lastError) {}
+  CWinApiException(const char * what, DWORD lastError) : What(what), LastError(lastError) {
+    //DebugBreak();
+  }
 
   const char* what() const throw() { return What.c_str(); }
 };
@@ -341,11 +343,15 @@ enum class HostMessage : int {
   CreateDrawing = 2,
   CreateEngine = 3,
   Message = 4,
-  GpuRelaseShareHandle = 5,
-  OnAfterClear = 6,
-  OnAfterRender = 7,
   OnAfterClearDone = 8,
   OnAfterRenderDone = 9
+};
+
+enum class HostGpuMessage : int {
+  ReleaseShareHandle = 1,
+  OnAfterClear = 2,
+  OnAfterRender = 3,
+  GetActiveBrowser = 4
 };
 
 class CInterop : public virtual CefBaseRefCounted {

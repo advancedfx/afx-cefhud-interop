@@ -96,9 +96,9 @@ function AfxEngineInterop(interop, args) {
 			const port = jMessage.port || "0";
 			
 			var promise = self.messagePromises[port];
-			if(undefined === promise) promise = Promise.resolve();
+			if(undefined === promise) self.messagePromises[port] = Promise.resolve();
 			
-			self.messagePromises[port] = promise.finally(()=>processMessage(jMessage));
+			self.messagePromises[port] = self.messagePromises[port].then(()=>{return processMessage(jMessage);});
 		}
 		
 		queueMessage(jMessage);
@@ -368,14 +368,14 @@ AfxEngineInterop.prototype.connect = async function() {
 
 		async function doConnect() {
 			self.drawingConnectRequested = true;
-
+			
 			await Utils.toPromise(self.interop, "sendMessage", self.args.drawingInteropId, JSON.stringify({
 				"id": "connect",
 				"args": [self.interop.id]
 			}));
-
+			
 			await Utils.toPromise(self.interop, "connect");
-				
+			
 			await Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
 					"id": "engineConnected",
 					"args": [self.interop.id]
@@ -383,7 +383,6 @@ AfxEngineInterop.prototype.connect = async function() {
 		}
 
 		doConnect()
-		.then(()=>this)
 		.then(()=>Utils.toPromise(self.interop, "pump",  self.pumpEvents));
 	});
 }

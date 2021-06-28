@@ -25,6 +25,8 @@
 #include <third_party/Detours/src/detours.h>
 #include <tlhelp32.h>
 
+#include <mutex>
+
 // When generating projects with CMake the CEF_USE_SANDBOX value will be defined
 // automatically if using the required compiler version. Pass -DUSE_SANDBOX=OFF
 // to the CMake command-line to disable use of the sandbox.
@@ -46,12 +48,14 @@ typedef ULONG(STDMETHODCALLTYPE* Release_t)(IUnknown* This);
 ID3D11Device* g_pDevice = NULL;
 ID3D11DeviceContext* pContext = NULL;
 ID3D11Query* pQuery = NULL;
-ID3D11Texture2D* pLastGoodTexture2d = NULL;
 
 ID3D11VertexShader* pVertexShader = NULL;
 ID3D11PixelShader* pPixelShader = NULL;
 ID3D11InputLayout* pInputLayout = NULL;
 ID3D11Buffer* pVertexBuffer = NULL;
+
+ID3D11Texture2D* pLastGoodTexture2d = NULL;
+
 
 UINT vertex_stride = 5 * sizeof(float);
 UINT vertex_offset = 0;
@@ -63,18 +67,22 @@ struct TextureMapElem {
   HANDLE ShareHandle;
   HANDLE TempTextureShareHandle;
   ID3D11ShaderResourceView* TempTextureView;
+  int ActiveBrowser;
+  bool FirstClear = true;
+  int FlushCount = 0;
 
-  TextureMapElem(bool isSharedTexture,
-                 HANDLE shareHandle,
+  TextureMapElem(HANDLE shareHandle,
                  HANDLE tempTextureShareHandle,
                  ID3D11ShaderResourceView* tempTextureView,
                  UINT width,
-                 UINT height)
+                 UINT height,
+                 int activeBrowser)
       : ShareHandle(shareHandle),
         TempTextureShareHandle(tempTextureShareHandle),
         TempTextureView(tempTextureView),
         Width(width),
-        Height(height) {
+        Height(height),
+        ActiveBrowser(activeBrowser) {
     if (nullptr != TempTextureView)
       TempTextureView->AddRef();
   }
@@ -82,7 +90,7 @@ struct TextureMapElem {
   ~TextureMapElem() {
     if (nullptr != TempTextureView)
       TempTextureView->Release();
-    //if (ShareHandle != INVALID_HANDLE_VALUE)
+    // if (ShareHandle != INVALID_HANDLE_VALUE)
     //  CloseHandle(ShareHandle);
     // if (TempTextureShareHandle != INVALID_HANDLE_VALUE)
     //  CloseHandle(TempTextureShareHandle);
@@ -90,6 +98,7 @@ struct TextureMapElem {
 };
 
 
+std::mutex g_TexturesMutex;
 std::map<ID3D11Texture2D*, TextureMapElem> g_Textures;
 
 const char* g_szVertexShaderCode =
@@ -145,8 +154,10 @@ const char* g_szPixelShaderCode =
     {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12,
      D3D11_INPUT_PER_VERTEX_DATA, 0}};
 
+
 ID3D11DeviceContext* g_ActiveContext = nullptr;
-    HANDLE g_ActiveShareHandle = INVALID_HANDLE_VALUE;
+HANDLE g_ActiveShareHandle = INVALID_HANDLE_VALUE;
+int g_ActiveBrowser = 0;
 
 bool AfxWaitForGPU(ID3D11DeviceContext* pCtx) {
   if(!g_pDevice) return false;
@@ -171,43 +182,98 @@ class CGpuPipeClient : public advancedfx::interop::CPipeClient
 public:
 } g_GpuPipeClient;
 
+std::mutex g_GpuPipeClientMutex;
+
 
 typedef void(STDMETHODCALLTYPE* Flush_t)(ID3D11DeviceContext* This);
 
 Flush_t g_Org_Flush = nullptr;
 
+
+typedef void(STDMETHODCALLTYPE* ClearRenderTargetView_t)(
+    ID3D11DeviceContext* This,
+    /* [annotation] */
+    _In_ ID3D11RenderTargetView* pRenderTargetView,
+    /* [annotation] */
+    _In_ const FLOAT ColorRGBA[4]);
+
+ClearRenderTargetView_t g_Org_ClearRenderTargetView;
+
+void STDMETHODCALLTYPE
+My_ClearRenderTargetView(ID3D11DeviceContext* This,
+                         /* [annotation] */
+                         _In_ ID3D11RenderTargetView* pRenderTargetView,
+                         /* [annotation] */
+                         _In_ const FLOAT ColorRGBA[4]);
+
+        
+typedef void(STDMETHODCALLTYPE * OMSetRenderTargets_t)(
+    ID3D11DeviceContext* This,
+    /* [annotation] */
+_In_range_(0, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT) UINT NumViews,
+/* [annotation] */
+_In_reads_opt_(NumViews) ID3D11RenderTargetView* const* ppRenderTargetViews,
+/* [annotation] */
+_In_opt_ ID3D11DepthStencilView* pDepthStencilView);
+
+OMSetRenderTargets_t g_Org_OMSetRenderTargets;
+
+int g_ClearCount = 0;
+
+void STDMETHODCALLTYPE My_OMSetRenderTargets(
+    ID3D11DeviceContext* This,
+    /* [annotation] */
+    _In_range_(0, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT) UINT NumViews,
+    /* [annotation] */
+    _In_reads_opt_(NumViews) ID3D11RenderTargetView* const* ppRenderTargetViews,
+    /* [annotation] */
+    _In_opt_ ID3D11DepthStencilView* pDepthStencilView) {
+
+  g_Org_OMSetRenderTargets(This, NumViews, ppRenderTargetViews,
+                           pDepthStencilView);
+}
+
 void STDMETHODCALLTYPE My_Flush(ID3D11DeviceContext* This) {
   g_Org_Flush(This);
 
-  if (This == g_ActiveContext && g_ActiveShareHandle != INVALID_HANDLE_VALUE) {
+  if (This == g_ActiveContext && g_ActiveShareHandle != INVALID_HANDLE_VALUE || true) {
+    ID3D11RenderTargetView* oldRenderTarget[1] = {nullptr};
+    pContext->OMGetRenderTargets(1, &oldRenderTarget[0], NULL);
 
-    AfxWaitForGPU(This);
+    if (oldRenderTarget[0]) {
+      ID3D11Resource* resource = nullptr;
 
-    try {
-      g_GpuPipeClient.WriteInt32(
-          (INT32)advancedfx::interop::HostMessage::OnAfterRender);
-      g_GpuPipeClient.WriteHandle(g_ActiveShareHandle);
-      g_GpuPipeClient.Flush();
+      oldRenderTarget[0]->GetResource(&resource);
 
-      g_GpuPipeClient.ReadBoolean();
-    } catch (const std::exception& e) {
-      DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
-                  << e.what();
+      if (resource) {
+        auto it = g_Textures.find((ID3D11Texture2D*)resource);
+        if (it != g_Textures.end()) {
+          it->second.FirstClear = true;
+
+          AfxWaitForGPU(This);
+
+          try {
+            g_GpuPipeClient.WriteInt32(
+                (INT32)advancedfx::interop::HostGpuMessage::OnAfterRender);
+            g_GpuPipeClient.WriteHandle(g_ActiveShareHandle);
+            g_GpuPipeClient.WriteInt32(g_ActiveBrowser);
+            g_GpuPipeClient.Flush();
+
+            g_GpuPipeClient.ReadBoolean();
+          } catch (const std::exception& e) {
+            DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                        << e.what();
+          }
+          g_ActiveContext = nullptr;
+          g_ActiveShareHandle = INVALID_HANDLE_VALUE;
+        }
+
+        resource->Release();
+      }
+      oldRenderTarget[0]->Release();
     }
-    g_ActiveContext = nullptr;
-    g_ActiveShareHandle = INVALID_HANDLE_VALUE;
   }
 }
-        
-
-typedef void (STDMETHODCALLTYPE * ClearRenderTargetView_t)( 
-            ID3D11DeviceContext * This,
-            /* [annotation] */ 
-            _In_  ID3D11RenderTargetView *pRenderTargetView,
-            /* [annotation] */ 
-            _In_  const FLOAT ColorRGBA[ 4 ]);
-
-ClearRenderTargetView_t g_Org_ClearRenderTargetView;
 
 void STDMETHODCALLTYPE
 My_ClearRenderTargetView(ID3D11DeviceContext* This,
@@ -224,136 +290,169 @@ My_ClearRenderTargetView(ID3D11DeviceContext* This,
 
     if (resource) {
       auto it = g_Textures.find((ID3D11Texture2D*)resource);
-      if (it != g_Textures.end()) {
-        // This->CopyResource(it->first, it->second);
+      if (it != g_Textures.end() && it->second.FirstClear) {
+        ++g_ClearCount;
+
+        FLOAT color[4] = {((g_ClearCount << 0) % 256) / 255.0f,
+                          ((g_ClearCount << 8) % 256) / 255.0f,
+                          ((g_ClearCount << 16) % 256) / 255.0f, 1.0f};
+        g_Org_ClearRenderTargetView(pContext, pRenderTargetView, color);
+
+        it->second.FirstClear = false;
+        it->second.FlushCount = 0;
 
         if (pInputLayout && pVertexBuffer && pVertexShader && pPixelShader) {
 
-            g_ActiveContext = This;
-            g_ActiveShareHandle = it->second.ShareHandle; 
+          g_ActiveContext = This;
+          g_ActiveShareHandle = it->second.ShareHandle;
+          g_ActiveBrowser = it->second.ActiveBrowser;
 
-            try {
+          bool paintFromTempGameTexture = false;
+
+          try {
+            std::unique_lock<std::mutex> lock(g_GpuPipeClientMutex);
+
             g_GpuPipeClient.WriteInt32(
-                (INT32)advancedfx::interop::HostMessage::OnAfterClear);
+                (INT32)advancedfx::interop::HostGpuMessage::OnAfterClear);
             g_GpuPipeClient.WriteHandle(it->second.TempTextureShareHandle);
+            g_GpuPipeClient.WriteInt32(it->second.ActiveBrowser);
             g_GpuPipeClient.Flush();
 
-            bool paintFromTempGameTexture = g_GpuPipeClient.ReadBoolean();
+            paintFromTempGameTexture = g_GpuPipeClient.ReadBoolean();
 
-            if (paintFromTempGameTexture) {
-              D3D11_RENDER_TARGET_VIEW_DESC desc;
-              pRenderTargetView->GetDesc(&desc);
+          } catch (const std::exception& e) {
+            DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                        << e.what();
+            DebugBreak();
+          }
 
-              UINT oldNumViewPorts = 1;
-              D3D11_VIEWPORT oldviewport;
-              pContext->RSGetViewports(&oldNumViewPorts, &oldviewport);
+          if (paintFromTempGameTexture) {
+            D3D11_RENDER_TARGET_VIEW_DESC desc;
+            pRenderTargetView->GetDesc(&desc);
 
-              ID3D11RenderTargetView* oldRenderTarget[1] = {nullptr};
-              pContext->OMGetRenderTargets(1, &oldRenderTarget[0], NULL);
+            UINT oldNumViewPorts = 1;
+            D3D11_VIEWPORT oldviewport;
+            pContext->RSGetViewports(&oldNumViewPorts, &oldviewport);
 
-              D3D11_PRIMITIVE_TOPOLOGY oldInputTopology;
-              pContext->IAGetPrimitiveTopology(&oldInputTopology);
+            ID3D11RenderTargetView* oldRenderTarget[1] = {nullptr};
+            pContext->OMGetRenderTargets(1, &oldRenderTarget[0], NULL);
 
-              ID3D11InputLayout* oldInputLayout = nullptr;
-              pContext->IAGetInputLayout(&oldInputLayout);
+            D3D11_PRIMITIVE_TOPOLOGY oldInputTopology;
+            pContext->IAGetPrimitiveTopology(&oldInputTopology);
 
-              ID3D11Buffer* oldBuffers[1] = {nullptr};
-              UINT oldStrides[1] = {0};
-              UINT oldOffsets[1] = {0};
-              pContext->IAGetVertexBuffers(0, 1, &oldBuffers[0], &oldStrides[0],
-                                           &oldOffsets[0]);
+            ID3D11InputLayout* oldInputLayout = nullptr;
+            pContext->IAGetInputLayout(&oldInputLayout);
 
-              ID3D11VertexShader* oldVertexShader = nullptr;
-              pContext->VSGetShader(&oldVertexShader, NULL, 0);
+            ID3D11Buffer* oldBuffers[1] = {nullptr};
+            UINT oldStrides[1] = {0};
+            UINT oldOffsets[1] = {0};
+            pContext->IAGetVertexBuffers(0, 1, &oldBuffers[0], &oldStrides[0],
+                                         &oldOffsets[0]);
 
-              ID3D11PixelShader* oldPixelShader = nullptr;
-              pContext->PSGetShader(&oldPixelShader, NULL, 0);
+            ID3D11VertexShader* oldVertexShader = nullptr;
+            pContext->VSGetShader(&oldVertexShader, NULL, 0);
 
-              ID3D11ShaderResourceView* oldShaderResources[1] = {nullptr};
-              pContext->PSGetShaderResources(0, 1, &oldShaderResources[0]);
+            ID3D11PixelShader* oldPixelShader = nullptr;
+            pContext->PSGetShader(&oldPixelShader, NULL, 0);
 
-              //
+            ID3D11ShaderResourceView* oldShaderResources[1] = {nullptr};
+            pContext->PSGetShaderResources(0, 1, &oldShaderResources[0]);
 
-              D3D11_VIEWPORT viewport = {0.0f,
-                                         0.0f,
-                                         (FLOAT)(it->second.Width),
-                                         (FLOAT)(it->second.Height),
-                                         0.0f,
-                                         1.0f};
-              pContext->RSSetViewports(1, &viewport);
+            //
 
-              /*
-              D3D11_RECT rect = {0, 0, (LONG)it->second.Width * 3 / 4,
-                                 (LONG)it->second.Height};
+            D3D11_VIEWPORT viewport = {0.0f,
+                                       0.0f,
+                                       (FLOAT)(it->second.Width),
+                                       (FLOAT)(it->second.Height),
+                                       0.0f,
+                                       1.0f};
+            pContext->RSSetViewports(1, &viewport);
 
-              pContext->RSSetScissorRects(1, &rect);
-              */
+            /*
+            D3D11_RECT rect = {0, 0, (LONG)it->second.Width * 3 / 4,
+                               (LONG)it->second.Height};
 
-              ID3D11RenderTargetView* views[1] = {pRenderTargetView};
+            pContext->RSSetScissorRects(1, &rect);
+            */
 
-              pContext->OMSetRenderTargets(1, &views[0], NULL);
+            ID3D11RenderTargetView* views[1] = {pRenderTargetView};
+            g_Org_OMSetRenderTargets(This, 1, &views[0], NULL);
 
-              pContext->IASetPrimitiveTopology(
-                  D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-              pContext->IASetInputLayout(pInputLayout);
-              pContext->IASetVertexBuffers(0, 1, &pVertexBuffer, &vertex_stride,
-                                           &vertex_offset);
+            pContext->IASetPrimitiveTopology(
+                D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+            pContext->IASetInputLayout(pInputLayout);
+            pContext->IASetVertexBuffers(0, 1, &pVertexBuffer, &vertex_stride,
+                                         &vertex_offset);
 
-              pContext->VSSetShader(pVertexShader, NULL, 0);
-              pContext->PSSetShader(pPixelShader, NULL, 0);
+            pContext->VSSetShader(pVertexShader, NULL, 0);
+            pContext->PSSetShader(pPixelShader, NULL, 0);
 
-              ID3D11ShaderResourceView* res[1] = {it->second.TempTextureView};
+            ID3D11ShaderResourceView* res[1] = {it->second.TempTextureView};
 
-              pContext->PSSetShaderResources(0, 1, &res[0]);
-              /*
-              D3D11_RASTERIZER_DESC sd = {};
-              ID3D11RasterizerState* state = nullptr;
-              pContext->RSGetState(&state);
-              if (state) {
-                state->GetDesc(&sd);
-                state->Release();
-                state = nullptr;
-              }
-              sd.ScissorEnable = TRUE;
+            pContext->PSSetShaderResources(0, 1, &res[0]);
 
-              g_pDevice->CreateRasterizerState(&sd, &state);
-              pContext->RSSetState(state);
+            /*
+            D3D11_RASTERIZER_DESC sd = {};
+            ID3D11RasterizerState* state = nullptr;
+            pContext->RSGetState(&state);
+            if (state) {
+              state->GetDesc(&sd);
               state->Release();
-              */
-              pContext->Draw(vertex_count, 0);
-
-              //
-
-              pContext->PSSetShaderResources(0, 1, &oldShaderResources[0]);
-              pContext->PSSetShader(oldPixelShader, NULL, 0);
-              pContext->VSSetShader(oldVertexShader, NULL, 0);
-              pContext->IASetVertexBuffers(0, 1, &oldBuffers[0], &oldStrides[0],
-                                           &oldOffsets[0]);
-              pContext->IASetInputLayout(oldInputLayout);
-              pContext->IASetPrimitiveTopology(oldInputTopology);
-              pContext->OMSetRenderTargets(1, &oldRenderTarget[0], NULL);
-              if (1 <= oldNumViewPorts)
-                pContext->RSSetViewports(1, &oldviewport);
-
-              /*
-              sd.ScissorEnable = FALSE;
-              g_pDevice->CreateRasterizerState(&sd, &state);
-              pContext->RSSetState(state);
-              state->Release();
-              */
+              state = nullptr;
             }
 
-        }
-        catch (const std::exception& e) {
-          DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
-                      << e.what();
-        }
+            BOOL oldScissorEnable = sd.ScissorEnable;
+            sd.ScissorEnable = TRUE;
+            g_pDevice->CreateRasterizerState(&sd, &state);
+            pContext->RSSetState(state);
+            state->Release();
+            state = nullptr;*/
 
+            //
+
+            pContext->Draw(vertex_count, 0);
+
+            /*
+            sd.ScissorEnable = oldScissorEnable;
+            g_pDevice->CreateRasterizerState(&sd, &state);
+            pContext->RSSetState(state);
+            state->Release();
+            state = nullptr;
+            */
+
+            //
+
+            pContext->PSSetShaderResources(0, 1, &oldShaderResources[0]);
+            pContext->PSSetShader(oldPixelShader, NULL, 0);
+            pContext->VSSetShader(oldVertexShader, NULL, 0);
+            pContext->IASetVertexBuffers(0, 1, &oldBuffers[0], &oldStrides[0],
+                                         &oldOffsets[0]);
+            pContext->IASetInputLayout(oldInputLayout);
+            pContext->IASetPrimitiveTopology(oldInputTopology);
+            g_Org_OMSetRenderTargets(This, 1, &oldRenderTarget[0], NULL);
+            if (1 <= oldNumViewPorts)
+              pContext->RSSetViewports(1, &oldviewport);
+
+            if (oldShaderResources[0])
+              oldShaderResources[0]->Release();
+            if (oldPixelShader)
+              oldPixelShader->Release();
+            if (oldVertexShader)
+              oldVertexShader->Release();
+            if (oldBuffers[0])
+              oldBuffers[0]->Release();
+            if (oldInputLayout)
+              oldInputLayout->Release();
+            if (oldRenderTarget[0])
+              oldRenderTarget[0]->Release();
+          }
         }
       }
+
       resource->Release();
     }
   }
+
 }
 
 HANDLE AfxInteropGetSharedHandle(ID3D11Resource* pD3D11Resource) {
@@ -382,24 +481,27 @@ ULONG STDMETHODCALLTYPE My_ID3D11Texture2D_Release(ID3D11Texture2D* This) {
 
   if (0 == count) {
 
-    if (pLastGoodTexture2d == This)
+    if (This == pLastGoodTexture2d)
       pLastGoodTexture2d = NULL;
 
     auto it = g_Textures.find(This);
     if(it != g_Textures.end())
     {
       try {
+        std::unique_lock<std::mutex> lock(g_GpuPipeClientMutex);
+
         g_GpuPipeClient.WriteInt32(
-            (INT32)advancedfx::interop::HostMessage::GpuRelaseShareHandle);
+            (INT32)advancedfx::interop::HostGpuMessage::ReleaseShareHandle);
         g_GpuPipeClient.WriteHandle(it->second.TempTextureShareHandle);
         g_GpuPipeClient.Flush();
         g_GpuPipeClient.WriteInt32(
-            (INT32)advancedfx::interop::HostMessage::GpuRelaseShareHandle);
+            (INT32)advancedfx::interop::HostGpuMessage::ReleaseShareHandle);
         g_GpuPipeClient.WriteHandle(it->second.ShareHandle);
         g_GpuPipeClient.Flush();
       } catch (const std::exception& e) {
         DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
                     << e.what();
+        DebugBreak();
       }
 
       g_Textures.erase(it);
@@ -448,8 +550,33 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
         const D3D11_SUBRESOURCE_DATA* pInitialData,
     /* [annotation] */
     _COM_Outptr_opt_ ID3D11Texture2D** ppTexture2D) {
-  if (pDesc) {
-    if (pDesc->Width > 1 && pDesc->Height > 1 && pDesc->MipLevels == 1 &&
+  if (pDesc && ppTexture2D) {
+    // if (pDesc->Width > 1 &&
+    //    pDesc->Height > 1 && pDesc->Usage == D3D11_USAGE_STAGING)
+    //  return E_ABORT;
+    
+    /* if (pDesc->Width > 1 && pDesc->Height > 1) {
+    MessageBoxA(
+        0,
+        (std::to_string((UINT64)This) + ", " + std::to_string(pDesc->Width) +
+        ", " + std::to_string(pDesc->Height) + ", " +
+        std::to_string(pDesc->Format) + ", " +
+        std::to_string(pDesc->MipLevels) + ", " +
+        std::to_string(pDesc->ArraySize) + ", " +
+        std::to_string(pDesc->SampleDesc.Count) + ", " +
+        std::to_string(pDesc->SampleDesc.Quality) + ", " +
+        std::to_string(pDesc->Usage) + ", " +
+        std::to_string(pDesc->BindFlags) + ", " +
+        std::to_string(pDesc->CPUAccessFlags) + ", " +
+        std::to_string(pDesc->MiscFlags) + ", " +
+        std::to_string(0 != pInitialData))
+            .c_str(),
+        "My_CreateTexture2D", MB_OK);
+    }*/
+
+    static D3D11_TEXTURE2D_DESC Desc;
+
+    if (pDesc->Width>1 && pDesc->Height>1 && pDesc->MipLevels == 1 &&
         pDesc->ArraySize == 1 && pDesc->Format == DXGI_FORMAT_B8G8R8A8_UNORM &&
         pDesc->SampleDesc.Count == 1 && pDesc->SampleDesc.Quality == 0 &&
         pDesc->Usage == D3D11_USAGE_DEFAULT &&
@@ -457,100 +584,126 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
             (D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE) &&
         pDesc->CPUAccessFlags == 0 && pDesc->MiscFlags == 0) {
 
-      HRESULT result =
-          True_CreateTexture2D(This, pDesc, pInitialData, ppTexture2D);
-      if (SUCCEEDED(result) && *ppTexture2D)
-        InstallTextureHooks(*ppTexture2D);
-
-      if (pContext && ppTexture2D && SUCCEEDED(result)) {
-        ID3D11RenderTargetView* views[1] = {nullptr};
-        pContext->OMGetRenderTargets(1, views, NULL);
-
-        if (views[0])
-          views[0]->Release();
-        else {
-        }
-        pLastGoodTexture2d = *ppTexture2D;
-        /*MessageBoxA(0,
-                    (+", " + std::to_string(pDesc->Width) + ", " +
-                     std::to_string(pDesc->Height) + ", " +
-                     std::to_string(pDesc->MipLevels) + ", " +
-                     std::to_string(pDesc->ArraySize) + ", " +
-                     std::to_string(pDesc->SampleDesc.Count) + ", " +
-                     std::to_string(pDesc->SampleDesc.Quality) + ", " +
-                     std::to_string(pDesc->Usage) + ", " +
-                     std::to_string(pDesc->BindFlags) + ", " +
-                     std::to_string(pDesc->CPUAccessFlags) + ", " +
-                     std::to_string(pDesc->MiscFlags) + ", " +
-                     std::to_string(0 != pInitialData))
-                        .c_str(),
-                    "LOL", MB_OK);*/
-      }
-
-      return result;
-    } else if (pDesc->Width > 1 && pDesc->Height > 1 && pDesc->MipLevels == 1 &&
-               pDesc->ArraySize == 1 &&
-               pDesc->Format == DXGI_FORMAT_B8G8R8A8_UNORM &&
-               pDesc->SampleDesc.Count == 1 && pDesc->SampleDesc.Quality == 0 &&
-               pDesc->Usage == D3D11_USAGE_DEFAULT &&
-               pDesc->BindFlags == D3D11_BIND_SHADER_RESOURCE &&
-               pDesc->CPUAccessFlags == 0 &&
-               pDesc->MiscFlags == D3D11_RESOURCE_MISC_SHARED) {
-      D3D11_TEXTURE2D_DESC Desc = *pDesc;
+      Desc = *pDesc;
+      Desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
 
       // Desc.Width = Width;
       // Desc.Height = Height;
-      Desc.MipLevels = 1;
-      Desc.ArraySize = 1;
-      Desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-      Desc.SampleDesc.Count = 1;
-      Desc.SampleDesc.Quality = 0;
-      Desc.Usage = D3D11_USAGE_DEFAULT;
-      Desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-      Desc.CPUAccessFlags = 0;
+      // Desc.MipLevels = 1;
+      // Desc.ArraySize = 1;
+      // Desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+      // Desc.SampleDesc.Count = 1;
+      // Desc.SampleDesc.Quality = 0;
+      // Desc.Usage = D3D11_USAGE_DEFAULT;
+      // Desc.CPUAccessFlags = 0;
       Desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 
       HRESULT result =
           True_CreateTexture2D(This, &Desc, pInitialData, ppTexture2D);
+
+      if (SUCCEEDED(result) && *ppTexture2D) {
+
+        InstallTextureHooks(*ppTexture2D);
+        pLastGoodTexture2d = *ppTexture2D;
+      } else {
+        pLastGoodTexture2d = NULL;
+      }
+
+      return result;
+    } else if (pLastGoodTexture2d && pDesc->Width == Desc.Width &&
+               pDesc->Height == Desc.Height &&
+               pDesc->MipLevels == 1 &&
+        pDesc->ArraySize == 1 && pDesc->Format == DXGI_FORMAT_B8G8R8A8_UNORM &&
+        pDesc->SampleDesc.Count == 1 && pDesc->SampleDesc.Quality == 0 &&
+        pDesc->Usage == D3D11_USAGE_DEFAULT &&
+        pDesc->BindFlags ==
+            (D3D11_BIND_SHADER_RESOURCE) &&
+               pDesc->CPUAccessFlags == 0 &&
+               pDesc->MiscFlags == D3D11_RESOURCE_MISC_SHARED) {
+    
+    HRESULT result =
+          True_CreateTexture2D(This, &Desc, pInitialData, ppTexture2D);
+
       if (SUCCEEDED(result) && *ppTexture2D) {
         InstallTextureHooks(*ppTexture2D);
 
-        if (pLastGoodTexture2d) {
-          ID3D11Texture2D* tempTexture = nullptr;
-          
-          if(SUCCEEDED(True_CreateTexture2D(This, &Desc, pInitialData, &tempTexture))) {
-            // MessageBoxA(0, "OK", "OK", MB_OK);
-            ID3D11ShaderResourceView* view = nullptr;
-            if (SUCCEEDED(g_pDevice->CreateShaderResourceView(tempTexture, NULL,
-                                                            &view))) {
-              HANDLE shareHandle = AfxInteropGetSharedHandle(*ppTexture2D);
-              HANDLE tempTextureShareHandle = AfxInteropGetSharedHandle(tempTexture);
+          /* int activeBrowser = 0;
+          try {
+            std::unique_lock<std::mutex> lock(g_GpuPipeClientMutex);
 
-              g_Textures.emplace(std::piecewise_construct,
-                                 std::make_tuple(pLastGoodTexture2d),
-                                 std::make_tuple(false, shareHandle,
-                                                 tempTextureShareHandle, view,
-                                                 Desc.Width, Desc.Height));
+            g_GpuPipeClient.WriteInt32(
+                (INT32)advancedfx::interop::HostGpuMessage::GetActiveBrowser);
+            g_GpuPipeClient.Flush();
+            activeBrowser = g_GpuPipeClient.ReadInt32();
+          } catch (const std::exception& e) {
+            DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                        << e.what();
+            DebugBreak();
+            activeBrowser = 0;
+          }*/
 
-              view->Release();
-            }
+          if (true) {
+            //ID3D11Texture2D* tempTexture = nullptr;
 
-            tempTexture->Release();
+            //if (SUCCEEDED(True_CreateTexture2D(This, &Desc, nullptr,
+            //                                   &tempTexture))) {
+              ID3D11ShaderResourceView* view = nullptr;
+            if (SUCCEEDED(g_pDevice->CreateShaderResourceView(*ppTexture2D,
+                                                                NULL, &view))) {
+                HANDLE shareHandle =
+                    AfxInteropGetSharedHandle(pLastGoodTexture2d);
+                HANDLE tempTextureShareHandle =
+                    AfxInteropGetSharedHandle(*ppTexture2D);
+
+              //MessageBoxA(0, "OK", "OK", MB_OK);
+                g_Textures.emplace(
+                    std::piecewise_construct, std::make_tuple(pLastGoodTexture2d),
+                    std::make_tuple(shareHandle, tempTextureShareHandle, view,
+                                    Desc.Width, Desc.Height, 0));
+
+                view->Release();
+              }
+
+            //  tempTexture->Release();
+            //}
           }
           pLastGoodTexture2d = NULL;
-        }
       }
 
       return result;
     }
-
-    return True_CreateTexture2D(This, pDesc, pInitialData, ppTexture2D);
   }
 
   return True_CreateTexture2D(This, pDesc, pInitialData, ppTexture2D);
 }
 
-Release_t g_Old_ID3D11Device_Release;
+typedef HRESULT(STDMETHODCALLTYPE* CreateRenderTargetView_t)(
+    ID3D11Device* This,
+    /* [annotation] */
+    _In_ ID3D11Resource* pResource,
+    /* [annotation] */
+    _In_opt_ const D3D11_RENDER_TARGET_VIEW_DESC* pDesc,
+    /* [annotation] */
+    _COM_Outptr_opt_ ID3D11RenderTargetView** ppRTView);
+
+CreateRenderTargetView_t g_Old_CreateRenderTargetView = nullptr;
+
+HRESULT STDMETHODCALLTYPE
+My_CreateRenderTargetView(ID3D11Device* This,
+                          /* [annotation] */
+                          _In_ ID3D11Resource* pResource,
+                          /* [annotation] */
+                          _In_opt_ const D3D11_RENDER_TARGET_VIEW_DESC* pDesc,
+                          /* [annotation] */
+                          _COM_Outptr_opt_ ID3D11RenderTargetView** ppRTView) {
+
+  HRESULT result =
+      g_Old_CreateRenderTargetView(This, pResource, pDesc, ppRTView);
+
+  return result;
+}
+
+Release_t g_Old_ID3D11Device_Release = nullptr;
 
 ULONG STDMETHODCALLTYPE My_ID3D11Device_Release(ID3D11Device* This) {
 
@@ -558,12 +711,15 @@ ULONG STDMETHODCALLTYPE My_ID3D11Device_Release(ID3D11Device* This) {
 
   if (0 == count) {
     try {
+      std::unique_lock<std::mutex> lock(g_GpuPipeClientMutex);
       g_GpuPipeClient.Flush();
     } catch (const std::exception &) {
     }    
     try {
+      std::unique_lock<std::mutex> lock(g_GpuPipeClientMutex);
       g_GpuPipeClient.ClosePipe();
     } catch (const std::exception &) {
+      DebugBreak();
     }
 
     if (pQuery) {
@@ -604,6 +760,7 @@ ULONG STDMETHODCALLTYPE My_ID3D11Device_Release(ID3D11Device* This) {
     DetourUpdateThread(GetCurrentThread());
     DetourDetach(&(PVOID&)g_Old_ID3D11Device_Release, My_ID3D11Device_Release);
     DetourDetach(&(PVOID&)True_CreateTexture2D, My_CreateTexture2D);
+    //DetourDetach(&(PVOID&)g_Old_CreateRenderTargetView, My_CreateRenderTargetView);
     DetourTransactionCommit();    
   }
 
@@ -675,7 +832,9 @@ MyD3D11CreateDevice(_In_opt_ IDXGIAdapter* pAdapter,
   if (NULL == g_Old_ID3D11Device_Release) {
     g_pDevice = *ppDevice;
 
-    DWORD oldProtect;
+    DWORD oldProtect;  
+
+    MessageBoxA(0, std::to_string(GetParentProcessId()).c_str(), "LOL", MB_OK);
 
     /*
     HRESULT hr;
@@ -716,20 +875,25 @@ MyD3D11CreateDevice(_In_opt_ IDXGIAdapter* pAdapter,
 
     */
 
-    VirtualProtect(*ppDevice, sizeof(void*) * 8, PAGE_EXECUTE_READWRITE,
+    VirtualProtect(*ppDevice, sizeof(void*) * 10, PAGE_EXECUTE_READWRITE,
                    &oldProtect);
 
     g_Old_ID3D11Device_Release =
         (Release_t) * (void**)((*(char**)(*ppDevice)) + sizeof(void*) * 2);
     True_CreateTexture2D = (CreateTexture2D_t) *
                            (void**)((*(char**)(*ppDevice)) + sizeof(void*) * 5);
+    /* g_Old_CreateRenderTargetView =
+        (CreateRenderTargetView_t) *
+                           (void**)((*(char**)(*ppDevice)) + sizeof(void*) * 9);*/
 
-    VirtualProtect(*ppDevice, sizeof(void*) * 8, oldProtect, NULL);
+    VirtualProtect(*ppDevice, sizeof(void*) * 10, oldProtect, NULL);
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
     DetourAttach(&(PVOID&)g_Old_ID3D11Device_Release, My_ID3D11Device_Release);
     DetourAttach(&(PVOID&)True_CreateTexture2D, My_CreateTexture2D);
+    /* DetourAttach(&(PVOID&)g_Old_CreateRenderTargetView,
+                 My_CreateRenderTargetView);*/
     DetourTransactionCommit();
 
     if (nullptr == pQuery) {
@@ -742,8 +906,13 @@ MyD3D11CreateDevice(_In_opt_ IDXGIAdapter* pAdapter,
 
     g_pDevice->GetImmediateContext(&pContext);
     if (pContext) {
-      VirtualProtect(pContext, sizeof(void*) * 12, PAGE_EXECUTE_READWRITE,
+      VirtualProtect(pContext, sizeof(void*) * 112, PAGE_EXECUTE_READWRITE,
                      &oldProtect);
+      
+     g_Org_OMSetRenderTargets =
+          (OMSetRenderTargets_t) *
+          (void**)((*(char**)(pContext)) + sizeof(void*) * 33);
+
 
      g_Org_ClearRenderTargetView =
           (ClearRenderTargetView_t) *
@@ -757,6 +926,7 @@ MyD3D11CreateDevice(_In_opt_ IDXGIAdapter* pAdapter,
 
       DetourTransactionBegin();
       DetourUpdateThread(GetCurrentThread());
+      DetourAttach(&(PVOID&)g_Org_OMSetRenderTargets, My_OMSetRenderTargets);
       DetourAttach(&(PVOID&)g_Org_ClearRenderTargetView,
                    My_ClearRenderTargetView);
       DetourAttach(&(PVOID&)g_Org_Flush,
@@ -830,11 +1000,13 @@ MyD3D11CreateDevice(_In_opt_ IDXGIAdapter* pAdapter,
     sr_data.pSysMem = vertex_data_array;
     g_pDevice->CreateBuffer(&vertex_buff_descr, &sr_data, &pVertexBuffer);
 
-    std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_handler_");
+    std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_gpu_handler_");
     strPipeName.append(std::to_string(GetParentProcessId()));
 
     try {
-      while(true)
+      std::unique_lock<std::mutex> lock(g_GpuPipeClientMutex);
+
+      while (true)
       {
         bool bError = false;
         try {
@@ -852,11 +1024,11 @@ MyD3D11CreateDevice(_In_opt_ IDXGIAdapter* pAdapter,
       //MessageBoxA(0, strPipeName.c_str(), "CLIENT", MB_OK);
 
       g_GpuPipeClient.WriteUInt32(GetCurrentProcessId());
-      g_GpuPipeClient.WriteInt32(0);
       g_GpuPipeClient.Flush();
     } catch (const std::exception& e) {
       DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
                   << e.what();
+      DebugBreak();
     }
   }
 

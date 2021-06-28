@@ -258,4 +258,6 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     // requiring the muted attribute or user interaction
     command_line->AppendSwitchWithValue("autoplay-policy",
                                         "no-user-gesture-required");
-  }
+
+    //
+}

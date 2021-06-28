@@ -35,33 +35,24 @@ std::string GetDataURI(const std::string& data, const std::string& mime_type) {
 }  // namespace
 
 
-SimpleHandler::SimpleHandler(class SimpleApp * simpleApp) : simple_app_(simpleApp) {
-
-  // Create fake browser for GPU process communication:
-  // TODO: This is a bit stupid, but okay for now.
-  {
-    std::unique_lock<std::mutex> lock(m_BrowserMutex);
-    m_Browsers.emplace(std::piecewise_construct, std::forward_as_tuple(0),
-                       std::forward_as_tuple(nullptr));
-  }
-
-  m_WaitConnectionThread =
-      std::thread(&SimpleHandler::WaitConnectionThreadHandler, this);
+SimpleHandler::SimpleHandler(class SimpleApp * simpleApp) : simple_app_(simpleApp), g_GpuPipeServer(this) {
+    m_BrowserWaitConnectionThread =
+      std::thread(&SimpleHandler::BrowserWaitConnectionThreadHandler, this);
 }
 
 SimpleHandler::~SimpleHandler() {
-  m_WaitConnectionQuit = true;
-  CancelSynchronousIo(m_WaitConnectionThread.native_handle());
-  if (m_WaitConnectionThread.joinable())
-    m_WaitConnectionThread.join();
+  m_BrowserWaitConnectionQuit = true;
+  CancelSynchronousIo(m_BrowserWaitConnectionThread.native_handle());
+  if (m_BrowserWaitConnectionThread.joinable())
+    m_BrowserWaitConnectionThread.join();
 }
 
 
-void SimpleHandler::WaitConnectionThreadHandler(void) {
+void SimpleHandler::BrowserWaitConnectionThreadHandler(void) {
   std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_handler_");
   strPipeName.append(std::to_string(GetCurrentProcessId()));
 
-   while (!m_WaitConnectionQuit) {
+   while (!m_BrowserWaitConnectionQuit) {
     try {
       this->WaitForConnection(strPipeName.c_str(), 500);
     } catch (const std::exception& e) {
@@ -128,21 +119,7 @@ void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     }
   }
 
-  if (m_Browsers.size() == 1) {
-
-    // Delete the fake 0 browser:
-
-    // avoid deadlock on shutdown:
-    {
-      std::unique_lock<std::mutex> lock2(m_DrawingMutex);
-      m_DrawingResult = false;
-      m_DrawingDone = true;
-      m_DrawingCv.notify_one();
-    }
-
-    auto it = m_Browsers.begin();
-    it->second.Connection->DeleteExternal(lock);
-    m_Browsers.erase(it);
+  if (m_Browsers.size() == 0) {
 
     browser = nullptr;
     simple_app_ = nullptr;
@@ -203,11 +180,13 @@ void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
   auto it = m_Browsers.find(browser->GetIdentifier());
   if (it != m_Browsers.end()) {
     if (CHostPipeServerConnectionThread* connection = it->second.Connection) {
+      m_NextBrowserId = browser->GetIdentifier();
       rect.Set(0, 0, connection->GetWidth(), connection->GetHeight());
       return;
     }
   }
 
+  m_NextBrowserId = 0;
   rect.Set(0, 0, 640, 480);
 }
 
@@ -240,6 +219,7 @@ void SimpleHandler::DoCreateDrawing(const std::string& argStr, const std::string
   CefWindowInfo window_info;
   window_info.SetAsWindowless(NULL);
   window_info.shared_texture_enabled = true;
+   //true;
   window_info.external_begin_frame_enabled = true;
   window_info.width = 640;
   window_info.height = 360;

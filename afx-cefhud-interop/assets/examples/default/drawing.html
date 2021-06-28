@@ -33,6 +33,7 @@ html,body,div {
 <div id="indicator" class="indicator"></div>
 <div id="indicator2" class="indicator"></div>
 <div class="main">
+<img src="https://media1.tenor.com/images/74a87da6760e119fdfbb1ee9d2914871/tenor.gif?itemid=5437251" width="320" height="auto" />
 <h1 style="color: #00ff00">Hello World from afx-cefhud-interop</h1>
 <p>Client time: <span id="clientTime"></span></p>
 <h2>Last game events:</h2>
@@ -69,7 +70,6 @@ function AfxDrawingInterop(interop,args) {
 	this.messagePromises = {};
 	
 	self.resized = false;
-	this.drawingPromises = null;
 
 	this.shaderData = {
 		"afx_drawtexture_vs20": this.compileShader(this.stringToAfxData(`
@@ -198,6 +198,8 @@ function AfxDrawingInterop(interop,args) {
 				
 				async function doPaintGameToCef(rootTextureHandle) {
 				
+					console.log("doPaintGameToCef BEGIN");
+				
 					if(rootTextureHandle.invalid) throw Utils.toSoftError(new Error("rootTextureHandle.invalid"));
 
 					var cefTexture = self.getCefTexture(rootTextureHandle);
@@ -207,6 +209,7 @@ function AfxDrawingInterop(interop,args) {
 						var refTexture = [undefined];
 						const D3DFMT_A8R8G8B8 = 21;
 						var hr = await Utils.toPromise(self.interop, "d3d9CreateTexture", self.width, self.height, 1, D3d9.D3DUSAGE.D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3d9.D3DPOOL.D3DPOOL_DEFAULT, refTexture, [rootTextureHandle]);
+						console.log("doPaintGameToCef BEGIN 1");
 						if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr, "CreateTexture failed for rootTextureHandle: ("+rootTextureHandle.hi+", "+rootTextureHandle.lo+")"));
 						cefTexture = refTexture[0];
 						self.setCefTexture(rootTextureHandle, cefTexture);
@@ -214,22 +217,36 @@ function AfxDrawingInterop(interop,args) {
 					
 					var cefTextureSuraceLevel0Ref = [undefined];
 					var gameSurfaceRef = [undefined];
+					
+					console.log("doPaintGameToCef BEGIN 2");
 
 					try {
 						var hr = await Utils.toPromise(cefTexture, "getSurfaceLevel", 0, cefTextureSuraceLevel0Ref);
 						if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
+						
+						console.log("doPaintGameToCef BEGIN 3");
 
 						var hr = await Utils.toPromise(self.interop, "getRenderTarget", 0, gameSurfaceRef);
 						if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
 						
+						console.log("doPaintGameToCef BEGIN 4");
+						
 						await Utils.toPromise(self.interop, "beginCleanState");
+						
+						console.log("doPaintGameToCef BEGIN 5");
 						
 						var hr = await Utils.toPromise(self.interop, "d3d9StretchRect", gameSurfaceRef[0], null, cefTextureSuraceLevel0Ref[0], null, D3d9.D3DTEXTUREFILTERTYPE.D3DTEXF_NONE);
 						if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
 						
+						console.log("doPaintGameToCef BEGIN 6");
+						
 						await Utils.toPromise(self.interop, "endCleanState");
 						
+						console.log("doPaintGameToCef BEGIN 7");
+						
 						await Utils.toPromise(self.interop, "waitForClientGpu");
+						
+						console.log("doPaintGameToCef BEGIN 8");
 					}
 					catch(e) {
 						if(e && e.soft) {
@@ -240,11 +257,22 @@ function AfxDrawingInterop(interop,args) {
 						throw e;
 					}
 
+					console.log("doPaintGameToCef BEGIN 9");
+
 					if(gameSurfaceRef[0]) await Utils.toPromise(gameSurfaceRef[0], "release");
+
+					console.log("doPaintGameToCef BEGIN 10");
+
 					if(cefTextureSuraceLevel0Ref[0]) await Utils.toPromise(cefTextureSuraceLevel0Ref[0], "release");
+					
+					console.log("doPaintGameToCef END");
+					
+					return true;
 				}
 				
 				async function doPaintCefToGame(cefTextureHandle) {
+				
+					console.log("doPaintCefToGame BEGIN");
 
 					if(cefTextureHandle.invalid) throw Utils.toSoftError(new Error("cefTextureHandle.invalid"));
 
@@ -265,34 +293,22 @@ function AfxDrawingInterop(interop,args) {
 					
 					if(!cefTexture) throw Utils.toSoftError(new Error("!cefTexture"));
 					
+					console.log("doPaintCefToGame BEGIN B");
+					
 					await self.drawRect2d(cefTexture, self.renderInfo.view.x, self.renderInfo.view.y, self.renderInfo.view.width, self.renderInfo.view.height, 0, 0, 1, 1);
 					
-					await Utils.toPromise(self.interop, "endCleanState");
+					console.log("doPaintCefToGame BEGIN D");
 					
 					await Utils.toPromise(self.interop, "waitForClientGpu");
+					
+					console.log("doPaintCefToGame END");
+					
+					return true;
 				}
 				
-				await new Promise((mainResolve,mainReject)=>{
-				
-					var error;
-					
-					Utils.toPromise(self.interop, "cefBeginFrame", self.width, self.height, {
-						"onAfterClear": function(resolve, reject, cefTextureHandle) {
-							doPaintGameToCef(cefTextureHandle)
-							.then(()=>{resolve(true);})
-							.catch((e)=>{Utils.logError(e);error=e;reject();});
-						},
-						"onAfterRender": function(resolve, reject, cefTextureHandle){
-							if(error) {
-								reject();
-								mainReject(error);
-								return;
-							}
-							doPaintCefToGame(cefTextureHandle)
-							.then(()=>{resolve();mainResolve();})
-							.catch((e)=>{reject();mainReject(e);});
-						}
-					});
+				await self.cefBeginFrame( self.width, self.height, {
+					"onAfterClear":  doPaintGameToCef,
+					"onAfterRender": doPaintCefToGame
 				});
 				
 				await Utils.toPromise(self.interop, "pumpEnd");
@@ -305,6 +321,8 @@ function AfxDrawingInterop(interop,args) {
 				}
 				throw e;
 			}
+			
+			return true;
 		}
 	};
 	
@@ -314,6 +332,8 @@ function AfxDrawingInterop(interop,args) {
 		
 		async function processMessage(jMessage)
 		{
+			console.log(JSON.stringify(jMessage));
+		
 			try {
 				await self.messageHandlers[jMessage.id].apply(self, jMessage.args);
 			}
@@ -326,12 +346,12 @@ function AfxDrawingInterop(interop,args) {
 		
 		function queueMessage(jMessage)
 		{
-			const port = jMessage.port || 0;
+			const port = jMessage.port || "0";
 			
 			var promise = self.messagePromises[port];
-			if(undefined === promise) promise = Promise.resolve();
+			if(undefined === promise) self.messagePromises[port] = Promise.resolve();
 			
-			self.messagePromises[port] = promise.finally(()=>processMessage(jMessage));
+			self.messagePromises[port] = self.messagePromises[port].then(()=>{return processMessage(jMessage);});
 		}
 		
 		queueMessage(jMessage);
@@ -401,7 +421,7 @@ function AfxDrawingInterop(interop,args) {
 		"rect": null
 	};
 	
-	Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
+	return Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
 		"id": "drawingCreated",
 		"args": [interop.id]
 	}));
@@ -767,13 +787,61 @@ AfxDrawingInterop.prototype.removeCefTexture = function(cefTextureHandle) {
 	}
 }
 
+AfxDrawingInterop.prototype.cefBeginFrame = async function(width, height, options) {
+	var self = this;
+	
+	await new Promise((mainResolve,mainReject)=>{
+	
+		var error;
+		
+		var renderOptions = {
+			"onAfterRender": function(resolve, reject, cefTextureHandle) {
+			
+				console.log("onAfterRender");
+				
+				if(error) {
+					reject();
+					mainReject(error);
+					return;
+				}
+					
+				if(options && options["onAfterRender"]) {
+					options["onAfterRender"](cefTextureHandle)
+					.then(()=>{
+						console.log("resolve");
+						resolve();mainResolve();
+					})
+					.catch((e)=>{
+						Utils.logError(e);
+						reject();mainReject(e);
+					});
+				}
+				else mainResolve();
+			}
+		};
+		
+		if(options && options["onAfterClear"]) {
+			renderOptions["onAfterClear"] = function(resolve, reject, cefTextureHandle) {
+				options["onAfterClear"](cefTextureHandle)
+				.then(()=>{resolve(true);})
+				.catch((e)=>{Utils.logError(e);error=e;reject();});
+			};
+		}
+		
+		Utils.toPromise(self.interop, "cefBeginFrame", width, height, renderOptions);
+	});
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 window.addEventListener('load', function(){
-
+	
 	console.log(window.afxInterop.args);
-	new AfxDrawingInterop(window.afxInterop, JSON.parse(window.afxInterop.args))
-
+	new AfxDrawingInterop(window.afxInterop, JSON.parse(window.afxInterop.args));
+	
+	//setInterval(function(){
+	//	console.log("HI");
+	//}, 500);
 }, false);
 
 </script>

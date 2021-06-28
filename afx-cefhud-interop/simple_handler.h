@@ -66,17 +66,16 @@ class SimpleHandler : public CefClient,
                        int width,
                        int height) OVERRIDE {
 
-     std::unique_lock<std::mutex> lock(m_BrowserMutex);
-     m_LastBrowserId = browser->GetIdentifier();
-  }
+   }
 
    virtual void OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
        PaintElementType type,
        const RectList& dirtyRects,
        void* shared_handle) OVERRIDE {
-
-     std::unique_lock<std::mutex> lock(m_BrowserMutex);
-     m_LastBrowserId = browser->GetIdentifier();
+     {
+       std::unique_lock<std::mutex> lock(m_BrowserMutex);
+       m_NextBrowserId = browser->GetIdentifier();
+     }
    }
 
   virtual void GetViewRect(CefRefPtr<CefBrowser> browser,
@@ -110,6 +109,7 @@ class SimpleHandler : public CefClient,
   class CHostPipeServerConnectionThread;
 
   advancedfx::interop::CPipeServerConnectionThread * OnNewConnection(HANDLE handle) override {
+    //MessageBoxA(NULL, "A", "NEW", MB_OK);
     return new CHostPipeServerConnectionThread(handle, this);
   }
 
@@ -164,48 +164,46 @@ class SimpleHandler : public CefClient,
   /**
    * @throws exception
    */
-  bool OnAfterClear(HANDLE shareHandle) {
-    bool bHandled = false;
+  bool OnAfterClear(INT32 browserId, HANDLE shareHandle) {
+    bool bResult = false;
 
     std::unique_lock<std::mutex> lock(m_BrowserMutex);
 
-    if (0 != m_LastBrowserId) {
-      m_HandleToBrowserId[shareHandle] = m_LastBrowserId;
+    if (0 != browserId) {
+      m_HandleToBrowserId[shareHandle] = browserId;
 
-      auto it2 = m_Browsers.find(m_LastBrowserId);
+      auto it2 = m_Browsers.find(browserId);
       if (it2 != m_Browsers.end() && it2->second.Connection) {
-        it2->second.Connection->OnAfterClear(shareHandle);
-        bHandled = true;
+        lock.unlock();
+        bResult = it2->second.Connection->OnAfterClear(shareHandle);
       }
     }
 
-    return bHandled;
+    return bResult;
   }
 
   /**
    * @throws exception
    */
-  bool OnAfterRender(HANDLE shareHandle) {
-    bool bHandled = false;
+  bool OnAfterRender(INT32 browserId, HANDLE shareHandle) {
+    bool bResult = false;
 
     std::unique_lock<std::mutex> lock(m_BrowserMutex);
 
-    if (0 != m_LastBrowserId) {
-      m_HandleToBrowserId[shareHandle] = m_LastBrowserId;
+    if (0 != browserId) {
+      m_HandleToBrowserId[shareHandle] = browserId;
 
-      auto it2 = m_Browsers.find(m_LastBrowserId);
+      auto it2 = m_Browsers.find(browserId);
       if (it2 != m_Browsers.end() && it2->second.Connection) {
-        it2->second.Connection->OnAfterRender(shareHandle);
-        bHandled = true;
+        lock.unlock();
+        bResult = it2->second.Connection->OnAfterRender(shareHandle);
       }
     }
 
-    return bHandled;
+    return bResult;
   }
 
   void DoDrawingResized(CefRefPtr<CefBrowser> browser, int width, int height) {
-
-
     browser->GetHost()->WasResized();
   }
 
@@ -240,23 +238,41 @@ class SimpleHandler : public CefClient,
     /**
      * @throws exception
      */
-    void OnAfterClear(void* share_handle) {
-      std::unique_lock<std::mutex> lock(m_ClientConnectionMutex);
-      m_ClientConnection.WriteInt32(
-          (int)advancedfx::interop::ClientMessage::OnAfterClear);
-      m_ClientConnection.WriteHandle(share_handle);
-      m_ClientConnection.Flush();
+    bool OnAfterClear(void* share_handle) {
+      std::unique_lock<std::mutex> lock2(m_DrawingMutex);
+      m_DrawingDone = false;
+
+      {
+        std::unique_lock<std::mutex> lock(m_ClientConnectionMutex);
+        m_ClientConnection.WriteInt32(
+            (int)advancedfx::interop::ClientMessage::OnAfterClear);
+        m_ClientConnection.WriteHandle(share_handle);
+        m_ClientConnection.Flush();
+      }
+
+      m_DrawingCv.wait(lock2, [this] { return m_DrawingDone; });
+
+      return m_DrawingResult;
     }
 
     /**
      * @throws exception
      */
-    void OnAfterRender(void* share_handle) {
-      std::unique_lock<std::mutex> lock(m_ClientConnectionMutex);
-      m_ClientConnection.WriteInt32(
-          (int)advancedfx::interop::ClientMessage::OnAfterRender);
-      m_ClientConnection.WriteHandle(share_handle);
-      m_ClientConnection.Flush();
+    bool OnAfterRender(void* share_handle) {
+      std::unique_lock<std::mutex> lock2(m_DrawingMutex);
+      m_DrawingDone = false;
+
+      {
+        std::unique_lock<std::mutex> lock(m_ClientConnectionMutex);
+        m_ClientConnection.WriteInt32(
+            (int)advancedfx::interop::ClientMessage::OnAfterRender);
+        m_ClientConnection.WriteHandle(share_handle);
+        m_ClientConnection.Flush();
+      }
+
+      m_DrawingCv.wait(lock2, [this] { return m_DrawingDone; });
+
+      return m_DrawingResult;
     }
 
     /**
@@ -392,54 +408,20 @@ class SimpleHandler : public CefClient,
               ReadStringUTF8(argMessage);
               m_Host->Message(browserId, targetId, argMessage);
             } break;
-            case advancedfx::interop::HostMessage::GpuRelaseShareHandle:
-            {
-              HANDLE shareHandle= ReadHandle();
-              m_Host->ReleaseShareHandle(shareHandle);
-            } break;
-            case advancedfx::interop::HostMessage::OnAfterClear: {
-              HANDLE sharedHandle = ReadHandle();
-              bool bHandled = m_Host->OnAfterClear(sharedHandle);
-
-              if (bHandled) {
-                std::unique_lock<std::mutex> lock(m_Host->m_DrawingMutex);
-                m_Host->m_DrawingDone = false;
-                m_Host->m_DrawingCv.wait(lock, [this] { return m_Host->m_DrawingDone; });
-              } else {
-                m_Host->m_DrawingResult = false;
-              }
-
-              WriteBoolean(m_Host->m_DrawingResult);
-
-            } break;
-            case advancedfx::interop::HostMessage::OnAfterRender: {
-              HANDLE sharedHandle = ReadHandle();
-              bool bHandled = m_Host->OnAfterRender(sharedHandle);
-
-              if (bHandled) {
-                std::unique_lock<std::mutex> lock(m_Host->m_DrawingMutex);
-                m_Host->m_DrawingDone = false;
-                m_Host->m_DrawingCv.wait(lock, [this] { return m_Host->m_DrawingDone; });
-              } else {
-                m_Host->m_DrawingResult = false;
-              }
-
-              WriteBoolean(m_Host->m_DrawingResult);
-            } break;
             case advancedfx::interop::HostMessage::OnAfterClearDone: {
-              m_Host->m_DrawingResult = ReadBoolean();
+              m_DrawingResult = ReadBoolean();
               {
-                std::unique_lock<std::mutex> lock(m_Host->m_DrawingMutex);
-                m_Host->m_DrawingDone = true;
-                m_Host->m_DrawingCv.notify_one();
+                std::unique_lock<std::mutex> lock(m_DrawingMutex);
+                m_DrawingDone = true;
+                m_DrawingCv.notify_one();
               }
             } break;
             case advancedfx::interop::HostMessage::OnAfterRenderDone: {
-              m_Host->m_DrawingResult = ReadBoolean();
+              m_DrawingResult = ReadBoolean();
               {
-                std::unique_lock<std::mutex> lock(m_Host->m_DrawingMutex);
-                m_Host->m_DrawingDone = true;
-                m_Host->m_DrawingCv.notify_one();
+                std::unique_lock<std::mutex> lock(m_DrawingMutex);
+                m_DrawingDone = true;
+                m_DrawingCv.notify_one();
               }
 
             } break;
@@ -451,6 +433,14 @@ class SimpleHandler : public CefClient,
         DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
                     << e.what();
         DebugBreak();
+      }
+
+    // avoid deadlock on shutdown:
+      {
+        std::unique_lock<std::mutex> lock2(m_DrawingMutex);
+        m_DrawingResult = false;
+        m_DrawingDone = true;
+        m_DrawingCv.notify_one();
       }
 
       m_Owner->Connection = nullptr;
@@ -480,24 +470,199 @@ class SimpleHandler : public CefClient,
     advancedfx::interop::CPipeClient m_ClientConnection;
     std::mutex m_ClientConnectionMutex;
 
+    std::mutex m_DrawingMutex;
+    std::condition_variable m_DrawingCv;
+    bool m_DrawingDone = false;
+    bool m_DrawingResult = false;
   };
+
+  class CGpuPipeServer : public advancedfx::interop::CPipeServer {
+   public:
+    CGpuPipeServer(SimpleHandler* host) : m_Host(host) {
+      m_GpuWaitConnectionThread =
+          std::thread(&CGpuPipeServer::GpuWaitConnectionThreadHandler, this);
+    }
+      
+    ~CGpuPipeServer() {
+      m_GpuWaitConnectionQuit = true;
+      CancelSynchronousIo(m_GpuWaitConnectionThread.native_handle());
+      if (m_GpuWaitConnectionThread.joinable())
+        m_GpuWaitConnectionThread.join();
+    }
+   protected:
+    class CGpuPipeServerConnectionThread;
+
+    advancedfx::interop::CPipeServerConnectionThread* OnNewConnection(
+        HANDLE handle) override {
+      //MessageBoxA(NULL, "B", "NEW", MB_OK);
+      return new CGpuPipeServerConnectionThread(handle, this, 0);
+    }
+
+  class CGpuPipeServerConnectionThread
+         : public advancedfx::interop::CPipeServerConnectionThread {
+      public:
+    CGpuPipeServerConnectionThread(HANDLE handle, CGpuPipeServer* host, int browserId)
+           : advancedfx::interop::CPipeServerConnectionThread(handle),
+             m_Host(host),
+             m_BrowserId(browserId) {}
+
+       void DeleteExternal(std::unique_lock<std::mutex>& lock) {
+         m_ExternalAbort = true;
+         lock.unlock();
+
+         m_Quit = true;
+         Cancel();
+         Join();
+
+         delete this;
+
+         lock.lock();
+       }
+
+      protected:
+       virtual void ConnectionThread() override {
+         DWORD processId;
+
+         processId = ReadUInt32();
+
+         {
+           std::unique_lock<std::mutex> lock(m_Host->m_ConnectionsMutex);
+
+           auto emplaced = m_Host->m_Connections.emplace(
+               std::piecewise_construct, std::forward_as_tuple(processId),
+               std::forward_as_tuple(this));
+         }
+
+         try {
+           while (!m_Quit) {
+             advancedfx::interop::HostGpuMessage message =
+                 (advancedfx::interop::HostGpuMessage)ReadInt32();
+             switch (message) {
+               case advancedfx::interop::HostGpuMessage::ReleaseShareHandle: {
+                 HANDLE shareHandle = ReadHandle();
+                 m_Host->m_Host->ReleaseShareHandle(shareHandle);
+               } break;
+               case advancedfx::interop::HostGpuMessage::OnAfterClear: {
+                 int activeBrowser;
+                 {
+                   std::unique_lock<std::mutex> lock(
+                       m_Host->m_Host->m_BrowserMutex);
+                   activeBrowser = m_Host->m_Host->m_NextBrowserId;
+                 }
+
+                 HANDLE sharedHandle = ReadHandle();
+                 ReadInt32();
+                 bool bResult =
+                     m_Host->m_Host->OnAfterClear(activeBrowser, sharedHandle);
+                 WriteBoolean(bResult);
+                 Flush();
+               } break;
+               case advancedfx::interop::HostGpuMessage::OnAfterRender: {
+                 int activeBrowser;
+                 {
+                   std::unique_lock<std::mutex> lock(
+                       m_Host->m_Host->m_BrowserMutex);
+                   activeBrowser = m_Host->m_Host->m_NextBrowserId;
+                   m_Host->m_Host->m_NextBrowserId = 0;
+                 }
+
+                 HANDLE sharedHandle = ReadHandle();
+                 ReadInt32();
+                 bool bResult =
+                     m_Host->m_Host->OnAfterRender(activeBrowser, sharedHandle);
+                 WriteBoolean(bResult);
+                 Flush();
+               } break;
+               case advancedfx::interop::HostGpuMessage::GetActiveBrowser: {
+                 WriteInt32(0);
+                 Flush();
+               } break;
+               default:
+                 throw "CGpuPipeServerConnectionThread::HandleConnection: Unknown message.";
+             }
+           }
+         } catch (const std::exception& e) {
+           DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                       << e.what();
+           DebugBreak();
+         }
+
+         // avoid deadlock on shutdown:
+         {
+           std::unique_lock<std::mutex> lock2(m_DrawingMutex);
+           m_DrawingResult = false;
+           m_DrawingDone = true;
+           m_DrawingCv.notify_one();
+         }
+
+         {
+           std::unique_lock<std::mutex> lock(m_Host->m_ConnectionsMutex);
+
+           m_Host->m_Connections.erase(processId);
+         }
+
+         ClosePipe();
+
+         if (!m_ExternalAbort) {
+           Detach();
+
+           delete this;
+         }
+       }
+
+      private:
+       bool m_Quit = false;
+       bool m_ExternalAbort = false;
+       CGpuPipeServer* m_Host;
+
+       std::mutex m_DrawingMutex;
+       std::condition_variable m_DrawingCv;
+       bool m_DrawingDone = false;
+       bool m_DrawingResult = false;
+
+       int m_BrowserId;
+     };
+
+     SimpleHandler* m_Host;
+     
+     std::map<INT32, CGpuPipeServerConnectionThread *> m_Connections;
+     std::mutex m_ConnectionsMutex;
+
+  bool m_GpuWaitConnectionQuit = false;
+     std::thread m_GpuWaitConnectionThread;
+
+     void GpuWaitConnectionThreadHandler(void) {
+       std::string strPipeName("\\\\.\\pipe\\afx-cefhud-interop_gpu_handler_");
+       strPipeName.append(std::to_string(GetCurrentProcessId()));
+
+       while (!m_GpuWaitConnectionQuit) {
+         try {
+           this->WaitForConnection(strPipeName.c_str(), 500);
+         } catch (const std::exception& e) {
+           DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                       << e.what();
+           DebugBreak();
+         }
+       }
+     }
+
+  };
+
+private:
+  CGpuPipeServer g_GpuPipeServer;
 
   class SimpleApp * simple_app_;
   bool is_closing_;
 
-  bool m_WaitConnectionQuit = false;
-  std::thread m_WaitConnectionThread;
-  void WaitConnectionThreadHandler(void);
+  bool m_BrowserWaitConnectionQuit = false;
+  std::thread m_BrowserWaitConnectionThread;
+  void BrowserWaitConnectionThreadHandler(void);
 
   std::mutex m_BrowserMutex;
   std::map<int, BrowserMapElem> m_Browsers;
   std::map<HANDLE, int> m_HandleToBrowserId;
-  int m_LastBrowserId = 0;
+  int m_NextBrowserId = 0;
 
-    std::mutex m_DrawingMutex;
-  std::condition_variable m_DrawingCv;
-  bool m_DrawingDone = false;
-  bool m_DrawingResult = false;
   bool m_Creating = true;
 
   // Platform-specific implementation.

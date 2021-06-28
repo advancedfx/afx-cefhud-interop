@@ -1,3 +1,4 @@
 [submodule "third_party/Detours"]
 	path = third_party/Detours
 	url = https://github.com/advancedfx/Detours.git
+	branch = upstream

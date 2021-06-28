@@ -721,7 +721,9 @@ CPipeServerConnectionThread* CPipeServer::WaitForConnection(
  hPipe = CreateNamedPipeA(pipeName, PIPE_ACCESS_DUPLEX,
                            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
                                PIPE_REJECT_REMOTE_CLIENTS,
-                           PIPE_UNLIMITED_INSTANCES, 0, 0, pipeTimeOut, NULL);
+                           PIPE_UNLIMITED_INSTANCES, 0,0,
+                           pipeTimeOut,
+                           NULL);
 
     if (hPipe == INVALID_HANDLE_VALUE) {
       throw CWinApiException("CreateNamedPipeA failed", GetLastError());
@@ -779,7 +781,7 @@ class CNamedPipeServer {
     m_PipeHandle = CreateNamedPipeA(strPipeName.c_str(), PIPE_ACCESS_DUPLEX,
                                     PIPE_READMODE_BYTE | PIPE_TYPE_BYTE |
                                         PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                                    1, 0, 0, TEN_MINUTES_IN_MILLISECONDS, NULL);
+                         1, 0, 0, TEN_MINUTES_IN_MILLISECONDS, NULL);
 
     return m_PipeHandle != INVALID_HANDLE_VALUE;
   }
@@ -2233,7 +2235,7 @@ CAfxObject::AddFunction(
                   try {
                     self->WriteInt32((int)HostMessage::Message);
                     self->WriteInt32(id);
-                    self->WriteStringUTF8(str.ToString().c_str());
+                    self->WriteStringUTF8(str.ToString());
                     self->Flush();
 
                     CefPostTask(
@@ -6658,7 +6660,7 @@ CAfxObject::AddFunction(
 
       m_Impl->m_InteropQueue.Queue([this,bValue]() {
         try {
-              m_Impl->WriteInt32((int)m_Message);
+          m_Impl->WriteInt32((int)m_Message);
           m_Impl->WriteBoolean(bValue);
           m_Impl->Flush();
         } catch (const std::exception& e) {
@@ -6752,6 +6754,7 @@ CAfxObject::AddFunction(
        m_InteropQueue.Queue([this]() {
          try {
            WriteInt32((int)HostMessage::OnAfterRenderDone);
+           WriteBoolean(false);
            Flush();
          } catch (const std::exception& e) {
            DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
@@ -6823,7 +6826,7 @@ CAfxObject::AddFunction(
                             m_Host, shared_handle));
            } break;
            case ClientMessage::ReleaseTextureHandle: {
-             HANDLE shared_handle = (HANDLE)ReadUInt64();
+             HANDLE shared_handle = ReadHandle();
              CefPostTask(
                  TID_RENDERER,
                  base::Bind(
@@ -8491,7 +8494,7 @@ class CEngineInteropImpl : public CAfxObject,
              try {
                self->WriteInt32((int)HostMessage::Message);
                self->WriteInt32(id);
-               self->WriteStringUTF8(str.ToString().c_str());
+               self->WriteStringUTF8(str.ToString());
                self->Flush();
 
                CefPostTask(TID_RENDERER, new CAfxTask([self, fn_resolve]() {
@@ -8671,9 +8674,6 @@ CAfxObject::AddFunction(
 
           if (self->GetConnected() &&
               0 == (errorLine = self->DoPump(filter, obj))) {
-            if (nullptr == self->m_Context)
-              return;
-
               CefPostTask(TID_RENDERER, new CAfxTask([self, fn_resolve]() {
                           if (nullptr == self->m_Context)
                             return;
@@ -9910,6 +9910,7 @@ __5 : {
              m_Host->m_InteropQueue.Queue([this]() {
                try {
                  m_Host->WriteInt32((int)HostMessage::OnAfterRenderDone);
+                 m_Host->WriteBoolean(false);
                  m_Host->Flush();
                } catch (const std::exception& e) {
                  DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__
@@ -9919,7 +9920,7 @@ __5 : {
              });
            } break;
            case ClientMessage::ReleaseTextureHandle: {
-             (HANDLE)ReadUInt64();
+             ReadHandle();
            } break;
            default:
              throw "CEngineInteropImplConnectionThread::ConnectionThread: Unknown message.";
@@ -10805,7 +10806,7 @@ class CInteropImpl : public CAfxObject,
                   try {
                     self->WriteInt32((int)HostMessage::Message);
                     self->WriteInt32(id);
-                    self->WriteStringUTF8(str.ToString().c_str());
+                    self->WriteStringUTF8(str.ToString());
                     self->Flush();
 
                     CefPostTask(
@@ -11104,6 +11105,7 @@ bool m_WaitConnectionQuit = false;
              m_Host->m_InteropQueue.Queue([this]() {
                try {
                  m_Host->WriteInt32((int)HostMessage::OnAfterRenderDone);
+                 m_Host->WriteBoolean(false);
                  m_Host->Flush();
                } catch (const std::exception& e) {
                  DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__
@@ -11113,7 +11115,7 @@ bool m_WaitConnectionQuit = false;
              });
            } break;
            case ClientMessage::ReleaseTextureHandle: {
-             (HANDLE)ReadUInt64();
+            ReadHandle();
            } break;
            default:
              throw "CInteropImplConnectionThread::ConnectionThread: Unknown message.";
