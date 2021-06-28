@@ -198,7 +198,7 @@ function AfxDrawingInterop(interop,args) {
 				
 				async function doPaintGameToCef(rootTextureHandle) {
 				
-					console.log("doPaintGameToCef BEGIN");
+					//console.log("doPaintGameToCef BEGIN");
 				
 					if(rootTextureHandle.invalid) throw Utils.toSoftError(new Error("rootTextureHandle.invalid"));
 
@@ -209,7 +209,7 @@ function AfxDrawingInterop(interop,args) {
 						var refTexture = [undefined];
 						const D3DFMT_A8R8G8B8 = 21;
 						var hr = await Utils.toPromise(self.interop, "d3d9CreateTexture", self.width, self.height, 1, D3d9.D3DUSAGE.D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3d9.D3DPOOL.D3DPOOL_DEFAULT, refTexture, [rootTextureHandle]);
-						console.log("doPaintGameToCef BEGIN 1");
+						//console.log("doPaintGameToCef BEGIN 1");
 						if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr, "CreateTexture failed for rootTextureHandle: ("+rootTextureHandle.hi+", "+rootTextureHandle.lo+")"));
 						cefTexture = refTexture[0];
 						self.setCefTexture(rootTextureHandle, cefTexture);
@@ -218,35 +218,35 @@ function AfxDrawingInterop(interop,args) {
 					var cefTextureSuraceLevel0Ref = [undefined];
 					var gameSurfaceRef = [undefined];
 					
-					console.log("doPaintGameToCef BEGIN 2");
+					//console.log("doPaintGameToCef BEGIN 2");
 
 					try {
 						var hr = await Utils.toPromise(cefTexture, "getSurfaceLevel", 0, cefTextureSuraceLevel0Ref);
 						if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
 						
-						console.log("doPaintGameToCef BEGIN 3");
+						//console.log("doPaintGameToCef BEGIN 3");
 
 						var hr = await Utils.toPromise(self.interop, "getRenderTarget", 0, gameSurfaceRef);
 						if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
 						
-						console.log("doPaintGameToCef BEGIN 4");
+						//console.log("doPaintGameToCef BEGIN 4");
 						
 						await Utils.toPromise(self.interop, "beginCleanState");
 						
-						console.log("doPaintGameToCef BEGIN 5");
+						//console.log("doPaintGameToCef BEGIN 5");
 						
 						var hr = await Utils.toPromise(self.interop, "d3d9StretchRect", gameSurfaceRef[0], null, cefTextureSuraceLevel0Ref[0], null, D3d9.D3DTEXTUREFILTERTYPE.D3DTEXF_NONE);
 						if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
 						
-						console.log("doPaintGameToCef BEGIN 6");
+						//console.log("doPaintGameToCef BEGIN 6");
 						
 						await Utils.toPromise(self.interop, "endCleanState");
 						
-						console.log("doPaintGameToCef BEGIN 7");
+						//console.log("doPaintGameToCef BEGIN 7");
 						
 						await Utils.toPromise(self.interop, "waitForClientGpu");
 						
-						console.log("doPaintGameToCef BEGIN 8");
+						//console.log("doPaintGameToCef BEGIN 8");
 					}
 					catch(e) {
 						if(e && e.soft) {
@@ -257,22 +257,22 @@ function AfxDrawingInterop(interop,args) {
 						throw e;
 					}
 
-					console.log("doPaintGameToCef BEGIN 9");
+					//console.log("doPaintGameToCef BEGIN 9");
 
 					if(gameSurfaceRef[0]) await Utils.toPromise(gameSurfaceRef[0], "release");
 
-					console.log("doPaintGameToCef BEGIN 10");
+					//console.log("doPaintGameToCef BEGIN 10");
 
 					if(cefTextureSuraceLevel0Ref[0]) await Utils.toPromise(cefTextureSuraceLevel0Ref[0], "release");
 					
-					console.log("doPaintGameToCef END");
+					//console.log("doPaintGameToCef END");
 					
 					return true;
 				}
 				
 				async function doPaintCefToGame(cefTextureHandle) {
 				
-					console.log("doPaintCefToGame BEGIN");
+					//console.log("doPaintCefToGame BEGIN");
 
 					if(cefTextureHandle.invalid) throw Utils.toSoftError(new Error("cefTextureHandle.invalid"));
 
@@ -293,15 +293,15 @@ function AfxDrawingInterop(interop,args) {
 					
 					if(!cefTexture) throw Utils.toSoftError(new Error("!cefTexture"));
 					
-					console.log("doPaintCefToGame BEGIN B");
+					//console.log("doPaintCefToGame BEGIN B");
 					
 					await self.drawRect2d(cefTexture, self.renderInfo.view.x, self.renderInfo.view.y, self.renderInfo.view.width, self.renderInfo.view.height, 0, 0, 1, 1);
 					
-					console.log("doPaintCefToGame BEGIN D");
+					//console.log("doPaintCefToGame BEGIN D");
 					
 					await Utils.toPromise(self.interop, "waitForClientGpu");
 					
-					console.log("doPaintCefToGame END");
+					//console.log("doPaintCefToGame END");
 					
 					return true;
 				}
@@ -332,7 +332,7 @@ function AfxDrawingInterop(interop,args) {
 		
 		async function processMessage(jMessage)
 		{
-			console.log(JSON.stringify(jMessage));
+			//console.log(JSON.stringify(jMessage));
 		
 			try {
 				await self.messageHandlers[jMessage.id].apply(self, jMessage.args);
@@ -797,7 +797,7 @@ AfxDrawingInterop.prototype.cefBeginFrame = async function(width, height, option
 		var renderOptions = {
 			"onAfterRender": function(resolve, reject, cefTextureHandle) {
 			
-				console.log("onAfterRender");
+				//console.log("onAfterRender");
 				
 				if(error) {
 					reject();
@@ -808,7 +808,7 @@ AfxDrawingInterop.prototype.cefBeginFrame = async function(width, height, option
 				if(options && options["onAfterRender"]) {
 					options["onAfterRender"](cefTextureHandle)
 					.then(()=>{
-						console.log("resolve");
+						//console.log("resolve");
 						resolve();mainResolve();
 					})
 					.catch((e)=>{

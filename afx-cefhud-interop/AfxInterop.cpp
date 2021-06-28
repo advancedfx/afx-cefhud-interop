@@ -8276,7 +8276,7 @@ private:
 
       INT32 frameDiff = frameCount - clientFrameCount;
 
-      if (frameDiff < 0 || frameDiff == 0 && pass < clientPass) {
+      if (frameDiff < 0) {
         // Error: client is ahead, otherwise we would have correct
         // data by now.
 

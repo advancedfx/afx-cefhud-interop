@@ -208,6 +208,7 @@ class SimpleHandler : public CefClient,
   }
 
   void DoRenderFrame(CefRefPtr<CefBrowser> browser) {
+    Sleep(5); // CEF hates it if we go too fast, so no more than 1000 FPS (sorry).
     browser->GetHost()->SendExternalBeginFrame();
   }
   void DoCreateDrawing(const std::string& argStr, const std::string& argUrl);

@@ -159,6 +159,7 @@ ID3D11DeviceContext* g_ActiveContext = nullptr;
 HANDLE g_ActiveShareHandle = INVALID_HANDLE_VALUE;
 int g_ActiveBrowser = 0;
 
+/* BUGGED DON'T USE.
 bool AfxWaitForGPU(ID3D11DeviceContext* pCtx) {
   if(!g_pDevice) return false;
 
@@ -176,6 +177,7 @@ bool AfxWaitForGPU(ID3D11DeviceContext* pCtx) {
 
 	return bOk;
 }
+*/
 
 class CGpuPipeClient : public advancedfx::interop::CPipeClient 
 {
@@ -250,7 +252,7 @@ void STDMETHODCALLTYPE My_Flush(ID3D11DeviceContext* This) {
         if (it != g_Textures.end()) {
           it->second.FirstClear = true;
 
-          AfxWaitForGPU(This);
+          //AfxWaitForGPU(This);
 
           try {
             g_GpuPipeClient.WriteInt32(
