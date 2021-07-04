@@ -33,7 +33,7 @@ html,body,div {
 <div id="indicator" class="indicator"></div>
 <div id="indicator2" class="indicator"></div>
 <div class="main">
-<img src="https://media1.tenor.com/images/74a87da6760e119fdfbb1ee9d2914871/tenor.gif?itemid=5437251" width="320" height="auto" />
+<!-- This makes it freeze for sure: <img src="https://media1.tenor.com/images/74a87da6760e119fdfbb1ee9d2914871/tenor.gif?itemid=5437251" width="320" height="auto" /> -->
 <h1 style="color: #00ff00">Hello World from afx-cefhud-interop</h1>
 <p>Client time: <span id="clientTime"></span></p>
 <h2>Last game events:</h2>
@@ -306,9 +306,19 @@ function AfxDrawingInterop(interop,args) {
 					return true;
 				}
 				
-				await self.cefBeginFrame( self.width, self.height, {
-					"onAfterClear":  doPaintGameToCef,
-					"onAfterRender": doPaintCefToGame
+				await Utils.toPromise(self.interop, "cefBeginFrame", self.width, self.height, {
+					"onAfterClear": function(resolve,reject,shareHandle) {
+						doPaintGameToCef(shareHandle).then(()=>{resolve(true)}).catch((e)=>{
+							Utils.logError(e);
+							reject(e);
+						});
+					}
+					, "onAfterRender": function(resolve,reject,shareHandle) {
+						doPaintCefToGame(shareHandle).then(()=>{resolve(true)}).catch((e)=>{
+							Utils.logError(e);
+							reject(e);
+						});
+					}
 				});
 				
 				await Utils.toPromise(self.interop, "pumpEnd");
@@ -421,7 +431,7 @@ function AfxDrawingInterop(interop,args) {
 		"rect": null
 	};
 	
-	return Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
+	Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
 		"id": "drawingCreated",
 		"args": [interop.id]
 	}));
@@ -785,51 +795,6 @@ AfxDrawingInterop.prototype.removeCefTexture = function(cefTextureHandle) {
 	{
 		delete this.cefTextures[cefTextureHandle.hi];
 	}
-}
-
-AfxDrawingInterop.prototype.cefBeginFrame = async function(width, height, options) {
-	var self = this;
-	
-	await new Promise((mainResolve,mainReject)=>{
-	
-		var error;
-		
-		var renderOptions = {
-			"onAfterRender": function(resolve, reject, cefTextureHandle) {
-			
-				//console.log("onAfterRender");
-				
-				if(error) {
-					reject();
-					mainReject(error);
-					return;
-				}
-					
-				if(options && options["onAfterRender"]) {
-					options["onAfterRender"](cefTextureHandle)
-					.then(()=>{
-						//console.log("resolve");
-						resolve();mainResolve();
-					})
-					.catch((e)=>{
-						Utils.logError(e);
-						reject();mainReject(e);
-					});
-				}
-				else mainResolve();
-			}
-		};
-		
-		if(options && options["onAfterClear"]) {
-			renderOptions["onAfterClear"] = function(resolve, reject, cefTextureHandle) {
-				options["onAfterClear"](cefTextureHandle)
-				.then(()=>{resolve(true);})
-				.catch((e)=>{Utils.logError(e);error=e;reject();});
-			};
-		}
-		
-		Utils.toPromise(self.interop, "cefBeginFrame", width, height, renderOptions);
-	});
 }
 
 ////////////////////////////////////////////////////////////////////////////////

@@ -6377,35 +6377,28 @@ CAfxObject::AddFunction(
                 onAfterRenderFn = onAfterRender;
             }
 
-            self->m_OnAfterClearQueue.push(onAfterClearFn);
-            self->m_OnAfterRenderQueue.push(onAfterRenderFn);
+            self->m_RenderQueue.emplace(onAfterClearFn, onAfterRenderFn, arguments[0],
+                                  arguments[1]);
 
-              self->m_InteropQueue.Queue([self, fn_resolve = arguments[0], fn_reject = arguments[1], width, height]() {
+              self->m_InteropQueue.Queue([self, width, height]() {
               try {
                 self->WriteInt32((int) HostMessage::RenderFrame);
                 self->WriteInt32((int)width);
                 self->WriteInt32((int)height);
-                self->Flush();    
-
-                CefPostTask(
-                    TID_RENDERER,
-                    new CAfxTask([self, fn_resolve]() {
-                          if (nullptr == self->m_Context)
-                            return;
-
-                          self->m_Context->Enter();
-                          fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
-                          self->m_Context->Exit();
-                        }));
+                self->Flush();
               } catch (const std::exception& e) {
                 CefPostTask(
                     TID_RENDERER,
                     new CAfxTask(
-                        [self, fn_reject, error_msg = std::string(e.what())]() {
+                        [self, error_msg = std::string(e.what())]() {
                           if (nullptr == self->m_Context)
                             return;
 
                           self->m_Context->Enter();
+
+                          CefRefPtr<CefV8Value> fn_reject = self->m_RenderQueue.front().OnReject;
+                          self->m_RenderQueue.pop();
+
                           CefV8ValueList args;
                           args.push_back(CefV8Value::CreateString(error_msg));
                           fn_reject->ExecuteFunction(NULL, args);
@@ -6642,8 +6635,8 @@ CAfxObject::AddFunction(
 
     public:
     CAfxResolveReject(CefRefPtr<CDrawingInteropImpl> impl,
-                           HostMessage message)
-      : m_Impl(impl), m_Message(message)
+                           HostMessage message, bool reject)
+         : m_Impl(impl), m_Message(message), m_Reject(reject)
     {
 
     }
@@ -6654,7 +6647,14 @@ CAfxObject::AddFunction(
                          CefRefPtr<CefV8Value>& retval,
                          CefString& exception) override {
 
-        bool bValue = 1 <= arguments.size() && arguments[0]->IsBool()
+        if (m_Reject)
+        m_Impl->m_RenderQueue.front().Reject =
+            1 <= arguments.size() ? arguments[0]
+                                  : CefV8Value::CreateUndefined();
+
+        bool bValue = nullptr == m_Impl->m_RenderQueue.front().Reject &&
+                              1 <= arguments.size() &&
+                      arguments[0]->IsBool()
           ? arguments[0]
                 ->GetBoolValue() : false;
 
@@ -6664,8 +6664,22 @@ CAfxObject::AddFunction(
           m_Impl->WriteBoolean(bValue);
           m_Impl->Flush();
         } catch (const std::exception& e) {
-          DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": " << e.what();
-          DebugBreak();
+          CefPostTask(TID_RENDERER,
+                      new CAfxTask([this, error_msg = std::string(e.what())]() {
+                        if (nullptr == m_Impl->m_Context)
+                          return;
+
+                        m_Impl->m_Context->Enter();
+
+                        CefRefPtr<CefV8Value> fn_reject =
+                            m_Impl->m_RenderQueue.front().OnReject;
+                        m_Impl->m_RenderQueue.pop();
+
+                        CefV8ValueList args;
+                        args.push_back(CefV8Value::CreateString(error_msg));
+                        fn_reject->ExecuteFunction(NULL, args);
+                        m_Impl->m_Context->Exit();
+                      }));
         }
       });
 
@@ -6675,6 +6689,7 @@ CAfxObject::AddFunction(
     private:
       CefRefPtr<CDrawingInteropImpl> m_Impl;
       HostMessage m_Message;
+      bool m_Reject;
    };
 
    void OnClientMessage_OnAfterClear(HANDLE share_handle) {
@@ -6683,18 +6698,17 @@ CAfxObject::AddFunction(
      if (nullptr != m_Context) {
        m_Context->Enter();
 
-       if (!m_OnAfterClearQueue.empty()) {
-         auto fn = m_OnAfterClearQueue.front();
-         m_OnAfterClearQueue.pop();
+       if (!m_RenderQueue.empty() && !m_RenderQueue.front().Reject) {
+         auto fn = m_RenderQueue.front().OnClear;
 
          if (nullptr != fn) {
            CefV8ValueList execArgs;
            execArgs.push_back(CefV8Value::CreateFunction(
                "resolve",
-               new CAfxResolveReject(this, HostMessage::OnAfterClearDone)));
+               new CAfxResolveReject(this, HostMessage::OnAfterClearDone, false)));
            execArgs.push_back(CefV8Value::CreateFunction(
                "reject",
-               new CAfxResolveReject(this, HostMessage::OnAfterClearDone)));
+               new CAfxResolveReject(this, HostMessage::OnAfterClearDone, true)));
            execArgs.push_back(CAfxHandle::Create(share_handle));
 
            fn->ExecuteFunction(NULL, execArgs);
@@ -6727,18 +6741,16 @@ CAfxObject::AddFunction(
      if (nullptr != m_Context) {
        m_Context->Enter();
 
-       if (!m_OnAfterRenderQueue.empty()) {
-         auto fn = m_OnAfterRenderQueue.front();
-         m_OnAfterRenderQueue.pop();
-
+       if (!m_RenderQueue.empty() && !m_RenderQueue.front().Reject) {
+         auto fn = m_RenderQueue.front().OnRender;
          if (nullptr != fn) {
            CefV8ValueList execArgs;
            execArgs.push_back(CefV8Value::CreateFunction(
                "resolve",
-               new CAfxResolveReject(this, HostMessage::OnAfterRenderDone)));
+               new CAfxResolveReject(this, HostMessage::OnAfterRenderDone, false)));
            execArgs.push_back(CefV8Value::CreateFunction(
                "reject",
-               new CAfxResolveReject(this, HostMessage::OnAfterRenderDone)));
+               new CAfxResolveReject(this, HostMessage::OnAfterRenderDone, true)));
            execArgs.push_back(CAfxHandle::Create(share_handle));
 
            fn->ExecuteFunction(NULL, execArgs);
@@ -6762,6 +6774,29 @@ CAfxObject::AddFunction(
            DebugBreak();
          }
        });
+     }
+   }
+
+
+   void OnClientMessage_OnAfterRenderFinished() {
+     if (nullptr != m_Context) {
+       m_Context->Enter();
+
+       if (!m_RenderQueue.empty()) {
+         CefV8ValueList args;
+         if (nullptr != m_RenderQueue.front().Reject)
+           args.push_back(m_RenderQueue.front().Reject);
+         auto fn =
+               nullptr != m_RenderQueue.front().Reject
+                       ? m_RenderQueue.front().OnReject
+                       : m_RenderQueue.front().OnResolve;
+         m_RenderQueue.pop();
+         if (nullptr != fn) {
+           fn->ExecuteFunction(NULL, args);
+         }
+       }
+
+       m_Context->Exit();
      }
    }
 
@@ -6824,6 +6859,12 @@ CAfxObject::AddFunction(
                  TID_RENDERER,
                  base::Bind(&CDrawingInteropImpl::OnClientMessage_OnAfterRender,
                             m_Host, shared_handle));
+           } break;
+           case ClientMessage::OnAfterRenderFinished: {
+             CefPostTask(
+                 TID_RENDERER,
+                 base::Bind(&CDrawingInteropImpl::OnClientMessage_OnAfterRenderFinished,
+                            m_Host));
            } break;
            case ClientMessage::ReleaseTextureHandle: {
              HANDLE shared_handle = ReadHandle();
@@ -8188,8 +8229,23 @@ private:
   CefRefPtr<CAfxCallback> m_OnError;
   CefRefPtr<CAfxCallback> m_OnDeviceLost;
   CefRefPtr<CAfxCallback> m_OnDeviceReset;
-  std::queue<CefRefPtr<CefV8Value>> m_OnAfterClearQueue;
-  std::queue<CefRefPtr<CefV8Value>> m_OnAfterRenderQueue;
+
+  struct RenderQueueElement {
+    CefRefPtr<CefV8Value> OnClear;
+    CefRefPtr<CefV8Value> OnRender;
+    CefRefPtr<CefV8Value> OnReject;
+    CefRefPtr<CefV8Value> OnResolve;
+    CefRefPtr<CefV8Value> Reject = nullptr;
+
+    RenderQueueElement(CefRefPtr<CefV8Value> onClear,
+        CefRefPtr<CefV8Value> onRender,
+        CefRefPtr<CefV8Value> onResolve,
+        CefRefPtr<CefV8Value> onReject) : OnClear(onClear), OnRender(onRender), OnResolve(onResolve), OnReject(onReject) {
+
+    }
+  };
+
+  std::queue<RenderQueueElement> m_RenderQueue;
   CefRefPtr<CAfxCallback> m_OnReleaseShareHandle;
 
    bool m_WaitConnectionQuit = false;
@@ -9919,6 +9975,8 @@ __5 : {
                }
              });
            } break;
+           case ClientMessage::OnAfterRenderFinished: {
+           } break;
            case ClientMessage::ReleaseTextureHandle: {
              ReadHandle();
            } break;
@@ -11113,6 +11171,8 @@ bool m_WaitConnectionQuit = false;
                  DebugBreak();
                }
              });
+           } break;
+           case ClientMessage::OnAfterRenderFinished: {
            } break;
            case ClientMessage::ReleaseTextureHandle: {
             ReadHandle();

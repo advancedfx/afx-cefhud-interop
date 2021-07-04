@@ -74,7 +74,15 @@ void SimpleHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
 
   std::unique_lock<std::mutex> lock(m_BrowserMutex);
 
-  auto emplaced = m_Browsers.emplace(std::piecewise_construct, std::forward_as_tuple(browser->GetIdentifier()), std::forward_as_tuple(browser));
+  m_NextBrowserId = browser->GetIdentifier() + 1;
+
+  if (NULL == browser->GetHost()->GetWindowHandle() &&
+      60 == browser->GetHost()->GetWindowlessFrameRate()) {
+  }
+
+  auto emplaced = m_Browsers.emplace(
+      std::piecewise_construct, std::forward_as_tuple(browser->GetIdentifier()),
+      std::forward_as_tuple(browser));
   if (emplaced.second) {
 
   }
@@ -90,7 +98,7 @@ bool SimpleHandler::DoClose(CefRefPtr<CefBrowser> browser) {
   // Closing the main window requires special handling. See the DoClose()
   // documentation in the CEF header for a detailed destription of this
   // process.
-  if (m_Browsers.size() == 2) {
+  if (m_Browsers.size() == 1) {
     // Set a flag to indicate that the window close should be allowed.
     is_closing_ = true;
   }
@@ -180,13 +188,11 @@ void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
   auto it = m_Browsers.find(browser->GetIdentifier());
   if (it != m_Browsers.end()) {
     if (CHostPipeServerConnectionThread* connection = it->second.Connection) {
-      m_NextBrowserId = browser->GetIdentifier();
       rect.Set(0, 0, connection->GetWidth(), connection->GetHeight());
       return;
     }
   }
 
-  m_NextBrowserId = 0;
   rect.Set(0, 0, 640, 480);
 }
 

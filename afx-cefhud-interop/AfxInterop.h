@@ -335,7 +335,8 @@ enum class ClientMessage : int {
   Message = 1,
   ReleaseTextureHandle = 2,
   OnAfterClear = 3,
-  OnAfterRender = 4
+  OnAfterRender = 4,
+  OnAfterRenderFinished = 5
 };
 
 enum class HostMessage : int {
@@ -351,7 +352,8 @@ enum class HostGpuMessage : int {
   ReleaseShareHandle = 1,
   OnAfterClear = 2,
   OnAfterRender = 3,
-  GetActiveBrowser = 4
+  GetActiveBrowser = 4,
+  SupplyShareHandle =2
 };
 
 class CInterop : public virtual CefBaseRefCounted {

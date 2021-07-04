@@ -220,7 +220,7 @@ _In_opt_ ID3D11DepthStencilView* pDepthStencilView);
 
 OMSetRenderTargets_t g_Org_OMSetRenderTargets;
 
-int g_ClearCount = 0;
+//int g_ClearCount = 0;
 
 void STDMETHODCALLTYPE My_OMSetRenderTargets(
     ID3D11DeviceContext* This,
@@ -238,7 +238,7 @@ void STDMETHODCALLTYPE My_OMSetRenderTargets(
 void STDMETHODCALLTYPE My_Flush(ID3D11DeviceContext* This) {
   g_Org_Flush(This);
 
-  if (This == g_ActiveContext && g_ActiveShareHandle != INVALID_HANDLE_VALUE || true) {
+  if (This == g_ActiveContext && g_ActiveShareHandle != INVALID_HANDLE_VALUE) {
     ID3D11RenderTargetView* oldRenderTarget[1] = {nullptr};
     pContext->OMGetRenderTargets(1, &oldRenderTarget[0], NULL);
 
@@ -249,10 +249,11 @@ void STDMETHODCALLTYPE My_Flush(ID3D11DeviceContext* This) {
 
       if (resource) {
         auto it = g_Textures.find((ID3D11Texture2D*)resource);
-        if (it != g_Textures.end()) {
+        if (it != g_Textures.end() && it->second.FlushCount < 1) {
           it->second.FirstClear = true;
+          ++it->second.FlushCount;
 
-          //AfxWaitForGPU(This);
+          // AfxWaitForGPU(This);
 
           try {
             g_GpuPipeClient.WriteInt32(
@@ -293,18 +294,17 @@ My_ClearRenderTargetView(ID3D11DeviceContext* This,
     if (resource) {
       auto it = g_Textures.find((ID3D11Texture2D*)resource);
       if (it != g_Textures.end() && it->second.FirstClear) {
-        ++g_ClearCount;
 
+        /*
         FLOAT color[4] = {((g_ClearCount << 0) % 256) / 255.0f,
                           ((g_ClearCount << 8) % 256) / 255.0f,
                           ((g_ClearCount << 16) % 256) / 255.0f, 1.0f};
-        g_Org_ClearRenderTargetView(pContext, pRenderTargetView, color);
+        g_Org_ClearRenderTargetView(pContext, pRenderTargetView, color);*/
 
         it->second.FirstClear = false;
         it->second.FlushCount = 0;
 
         if (pInputLayout && pVertexBuffer && pVertexShader && pPixelShader) {
-
           g_ActiveContext = This;
           g_ActiveShareHandle = it->second.ShareHandle;
           g_ActiveBrowser = it->second.ActiveBrowser;
@@ -454,7 +454,6 @@ My_ClearRenderTargetView(ID3D11DeviceContext* This,
       resource->Release();
     }
   }
-
 }
 
 HANDLE AfxInteropGetSharedHandle(ID3D11Resource* pD3D11Resource) {
@@ -556,7 +555,7 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
     // if (pDesc->Width > 1 &&
     //    pDesc->Height > 1 && pDesc->Usage == D3D11_USAGE_STAGING)
     //  return E_ABORT;
-    
+
     /* if (pDesc->Width > 1 && pDesc->Height > 1) {
     MessageBoxA(
         0,
@@ -578,14 +577,13 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
 
     static D3D11_TEXTURE2D_DESC Desc;
 
-    if (pDesc->Width>1 && pDesc->Height>1 && pDesc->MipLevels == 1 &&
+    if (pDesc->Width > 1 && pDesc->Height > 1 && pDesc->MipLevels == 1 &&
         pDesc->ArraySize == 1 && pDesc->Format == DXGI_FORMAT_B8G8R8A8_UNORM &&
         pDesc->SampleDesc.Count == 1 && pDesc->SampleDesc.Quality == 0 &&
         pDesc->Usage == D3D11_USAGE_DEFAULT &&
         pDesc->BindFlags ==
             (D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE) &&
         pDesc->CPUAccessFlags == 0 && pDesc->MiscFlags == 0) {
-
       Desc = *pDesc;
       Desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
 
@@ -604,7 +602,6 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
           True_CreateTexture2D(This, &Desc, pInitialData, ppTexture2D);
 
       if (SUCCEEDED(result) && *ppTexture2D) {
-
         InstallTextureHooks(*ppTexture2D);
         pLastGoodTexture2d = *ppTexture2D;
       } else {
@@ -613,63 +610,60 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
 
       return result;
     } else if (pLastGoodTexture2d && pDesc->Width == Desc.Width &&
-               pDesc->Height == Desc.Height &&
-               pDesc->MipLevels == 1 &&
-        pDesc->ArraySize == 1 && pDesc->Format == DXGI_FORMAT_B8G8R8A8_UNORM &&
-        pDesc->SampleDesc.Count == 1 && pDesc->SampleDesc.Quality == 0 &&
-        pDesc->Usage == D3D11_USAGE_DEFAULT &&
-        pDesc->BindFlags ==
-            (D3D11_BIND_SHADER_RESOURCE) &&
+               pDesc->Height == Desc.Height && pDesc->MipLevels == 1 &&
+               pDesc->ArraySize == 1 &&
+               pDesc->Format == DXGI_FORMAT_B8G8R8A8_UNORM &&
+               pDesc->SampleDesc.Count == 1 && pDesc->SampleDesc.Quality == 0 &&
+               pDesc->Usage == D3D11_USAGE_DEFAULT &&
+               pDesc->BindFlags == (D3D11_BIND_SHADER_RESOURCE) &&
                pDesc->CPUAccessFlags == 0 &&
                pDesc->MiscFlags == D3D11_RESOURCE_MISC_SHARED) {
-    
-    HRESULT result =
+      HRESULT result =
           True_CreateTexture2D(This, &Desc, pInitialData, ppTexture2D);
 
       if (SUCCEEDED(result) && *ppTexture2D) {
         InstallTextureHooks(*ppTexture2D);
 
-          /* int activeBrowser = 0;
-          try {
-            std::unique_lock<std::mutex> lock(g_GpuPipeClientMutex);
+        /* int activeBrowser = 0;
+        try {
+          std::unique_lock<std::mutex> lock(g_GpuPipeClientMutex);
 
-            g_GpuPipeClient.WriteInt32(
-                (INT32)advancedfx::interop::HostGpuMessage::GetActiveBrowser);
-            g_GpuPipeClient.Flush();
-            activeBrowser = g_GpuPipeClient.ReadInt32();
-          } catch (const std::exception& e) {
-            DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
-                        << e.what();
-            DebugBreak();
-            activeBrowser = 0;
-          }*/
+          g_GpuPipeClient.WriteInt32(
+              (INT32)advancedfx::interop::HostGpuMessage::GetActiveBrowser);
+          g_GpuPipeClient.Flush();
+          activeBrowser = g_GpuPipeClient.ReadInt32();
+        } catch (const std::exception& e) {
+          DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                      << e.what();
+          DebugBreak();
+          activeBrowser = 0;
+        }*/
 
-          if (true) {
-            //ID3D11Texture2D* tempTexture = nullptr;
+        if (true) {
+          // ID3D11Texture2D* tempTexture = nullptr;
 
-            //if (SUCCEEDED(True_CreateTexture2D(This, &Desc, nullptr,
-            //                                   &tempTexture))) {
-              ID3D11ShaderResourceView* view = nullptr;
-            if (SUCCEEDED(g_pDevice->CreateShaderResourceView(*ppTexture2D,
-                                                                NULL, &view))) {
-                HANDLE shareHandle =
-                    AfxInteropGetSharedHandle(pLastGoodTexture2d);
-                HANDLE tempTextureShareHandle =
-                    AfxInteropGetSharedHandle(*ppTexture2D);
+          // if (SUCCEEDED(True_CreateTexture2D(This, &Desc, nullptr,
+          //                                   &tempTexture))) {
+          ID3D11ShaderResourceView* view = nullptr;
+          if (SUCCEEDED(g_pDevice->CreateShaderResourceView(*ppTexture2D, NULL,
+                                                            &view))) {
+            HANDLE shareHandle = AfxInteropGetSharedHandle(pLastGoodTexture2d);
+            HANDLE tempTextureShareHandle =
+                AfxInteropGetSharedHandle(*ppTexture2D);
 
-              //MessageBoxA(0, "OK", "OK", MB_OK);
-                g_Textures.emplace(
-                    std::piecewise_construct, std::make_tuple(pLastGoodTexture2d),
-                    std::make_tuple(shareHandle, tempTextureShareHandle, view,
-                                    Desc.Width, Desc.Height, 0));
+            // MessageBoxA(0, "OK", "OK", MB_OK);
+            g_Textures.emplace(
+                std::piecewise_construct, std::make_tuple(pLastGoodTexture2d),
+                std::make_tuple(shareHandle, tempTextureShareHandle, view,
+                                Desc.Width, Desc.Height, 0));
 
-                view->Release();
-              }
-
-            //  tempTexture->Release();
-            //}
+            view->Release();
           }
-          pLastGoodTexture2d = NULL;
+
+          //  tempTexture->Release();
+          //}
+        }
+        pLastGoodTexture2d = NULL;
       }
 
       return result;
