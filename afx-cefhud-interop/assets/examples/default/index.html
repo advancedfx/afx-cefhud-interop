@@ -4,13 +4,13 @@
 ## Usage:
 
 Launch CS:GO from HLAE with -afxInteropLight.
-The game must run with at least 2 queues (which is the case for mat_queueu_mode 2, and on almost all CPUs also for mat_queue_mode -1 (recommended))!g
+The game must run with at least 2 queues (which is the case for mat_queueu_mode 2, and on almost all CPUs also for mat_queue_mode -1 (recommended))!
 
 Execute (will log warings / errors to debug.log in current directoy):
-afx-cefhud-interop.exe "--url=afx://file/C:/source/afx-cefhud-interop/afx-cefhud-interop/assets/examples/default/index.html" "--disable-frame-rate-limit" "--enable-experimental-web-platform-features" "--enable-logging" "--v=1"
+afx-cefhud-interop.exe "--url=afx://file/C:/source/afx-cefhud-interop/afx-cefhud-interop/assets/examples/default/index.html" "--enable-experimental-web-platform-features" "--enable-logging" "--v=1"
 
 For live execute:
-afx-cefhud-interop.exe "--url=afx://file/C:/source/afx-cefhud-interop/afx-cefhud-interop/assets/examples/default/index.html" "--deterministic-mode" "--deadline-to-synchronize-surfaces=0" "--disable-frame-rate-limit" "--enable-experimental-web-platform-features" "--disable-gpu-watchdog" "--disable-hang-monitor" "--enable-logging" "--log-severity=error"
+afx-cefhud-interop.exe "--url=afx://file/C:/source/afx-cefhud-interop/afx-cefhud-interop/assets/examples/default/index.html" "--enable-experimental-web-platform-features" "--enable-logging" "--log-severity=error"
 
 Optional arguments:
 --afx-no-window

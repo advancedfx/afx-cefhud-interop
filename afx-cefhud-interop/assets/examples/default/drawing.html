@@ -27,13 +27,16 @@ html,body,div {
 .indicator.white {
 	background: #fff;
 }
+.hidden {
+	display: none;
+}
 </style>
 
-<body>
+<body id="body">
 <div id="indicator" class="indicator"></div>
 <div id="indicator2" class="indicator"></div>
 <div class="main">
-<!-- This makes it freeze for sure: <img src="https://media1.tenor.com/images/74a87da6760e119fdfbb1ee9d2914871/tenor.gif?itemid=5437251" width="320" height="auto" /> -->
+<!-- This makes it freeze for sure: <img id="gif" src="https://media1.tenor.com/images/74a87da6760e119fdfbb1ee9d2914871/tenor.gif?itemid=5437251" width="320" height="auto" class="" /> -->
 <h1 style="color: #00ff00">Hello World from afx-cefhud-interop</h1>
 <p>Client time: <span id="clientTime"></span></p>
 <h2>Last game events:</h2>
@@ -61,8 +64,9 @@ function AfxDrawingInterop(interop,args) {
 	this.cefTextures =  {};
 	this.elIndicator = document.getElementById('indicator');
 	this.elIndicator2 = document.getElementById('indicator2');
-	this.divGameEvents = document.getElementById('gameEvents');
+	this.elGameEvents = document.getElementById('gameEvents');
 	this.elClientTime = document.getElementById('clientTime');
+	this.elGif = document.getElementById('gif');
 	
 	this.engineInteropId = null;
 
@@ -129,6 +133,8 @@ function AfxDrawingInterop(interop,args) {
 		"connect": async function(senderId) {
 			this.engineInteropId = senderId;
 			await this.connect(senderId);
+			
+			var self = this;
 		},
 		"disconnect": async function(senderId) {
 			await Utils.toPromise(this, "disconnect");
@@ -148,11 +154,11 @@ function AfxDrawingInterop(interop,args) {
 			this.elClientTime.innerText = renderInfo.curTime;
 		},
 		"onGameEvent": async function(e){
-			while(this.divGameEvents.childNodes.length > 10) this.divGameEvents.lastElementChild.remove();
+			while(this.elGameEvents.childNodes.length > 10) this.elGameEvents.lastElementChild.remove();
 
 			var docP = document.createElement('p');
 			docP.appendChild(document.createTextNode(JSON.stringify(e)));
-			this.divGameEvents.insertBefore(docP, this.divGameEvents.firstElementChild);
+			this.elGameEvents.insertBefore(docP, this.elGameEvents.firstElementChild);
 		},
 		"onHudEnd": async function(frameCount, pass){
 			this.elIndicator.classList.toggle("white",(frameCount % 2) == 0);
@@ -320,6 +326,8 @@ function AfxDrawingInterop(interop,args) {
 						});
 					}
 				});
+				
+				//await requestAnimationFramePromise;
 				
 				await Utils.toPromise(self.interop, "pumpEnd");
 			}

@@ -297,14 +297,12 @@ class SimpleHandler : public CefClient,
 
     int GetHeight() { return m_Owner->Height; }
 
-    void OnRenderDone() {
-    }
+    void OnRenderDone() { }
 
     /**
      * @throws exception
      */
     bool OnAfterClear(void* share_handle) {
-
       std::unique_lock<std::mutex> lock2(m_DrawingMutex);
       m_DrawingDone = false;
 
@@ -326,7 +324,6 @@ class SimpleHandler : public CefClient,
      * @throws exception
      */
     bool OnAfterRender(void* share_handle) {
-
         std::unique_lock<std::mutex> lock2(m_DrawingMutex);
       m_DrawingDone = false;
 
@@ -457,7 +454,6 @@ class SimpleHandler : public CefClient,
 
                 m_Owner->Browser->GetHost()->WasResized();
               }
-                
               m_Owner->Browser->GetHost()->SendExternalBeginFrame();
             } break;
             case advancedfx::interop::HostMessage::CreateDrawing: {
@@ -555,8 +551,6 @@ class SimpleHandler : public CefClient,
     bool m_DrawingDone = false;
     bool m_DrawingResult = false;
 
-    bool m_FirstRender = true;
-
     std::mutex m_RenderMutex;
     std::condition_variable m_RenderCv;
     bool m_RenderDone = false;
@@ -582,18 +576,15 @@ class SimpleHandler : public CefClient,
         HANDLE handle) override {
       //MessageBoxA(NULL, "B", "NEW", MB_OK);
 
-      int browserId = m_Host->m_NextBrowserId;
-
-      return new CGpuPipeServerConnectionThread(handle, this, browserId);
+      return new CGpuPipeServerConnectionThread(handle, this);
     }
 
   class CGpuPipeServerConnectionThread
          : public advancedfx::interop::CPipeServerConnectionThread {
       public:
-    CGpuPipeServerConnectionThread(HANDLE handle, CGpuPipeServer* host, int browserId)
+    CGpuPipeServerConnectionThread(HANDLE handle, CGpuPipeServer* host)
            : advancedfx::interop::CPipeServerConnectionThread(handle),
-             m_Host(host),
-             m_BrowserId(browserId) {}
+             m_Host(host) {}
 
        void DeleteExternal(std::unique_lock<std::mutex>& lock) {
          m_ExternalAbort = true;
@@ -618,7 +609,7 @@ class SimpleHandler : public CefClient,
            std::unique_lock<std::mutex> lock(m_Host->m_ConnectionsMutex);
 
            auto emplaced = m_Host->m_Connections.emplace(
-               std::piecewise_construct, std::forward_as_tuple(m_BrowserId),
+               std::piecewise_construct, std::forward_as_tuple(processId),
                std::forward_as_tuple(this));
          }
 
@@ -632,23 +623,23 @@ class SimpleHandler : public CefClient,
                  m_Host->m_Host->ReleaseShareHandle(shareHandle);
                } break;
                case advancedfx::interop::HostGpuMessage::OnAfterClear: {
-
                  HANDLE sharedHandle = ReadHandle();
-                 ReadInt32();
+                 INT32 browserId = ReadInt32();
                  bool bResult =
-                     m_Host->m_Host->OnAfterClear(m_BrowserId, sharedHandle);
+                     m_Host->m_Host->OnAfterClear(browserId, sharedHandle);
                  WriteBoolean(bResult);
                  Flush();
                } break;
                case advancedfx::interop::HostGpuMessage::OnAfterRender: {
                  HANDLE sharedHandle = ReadHandle();
-                 ReadInt32();
-                 bool bResult = m_Host->m_Host->OnAfterRender(m_BrowserId, sharedHandle);
+                 INT32 browserId = ReadInt32();
+                 bool bResult =
+                     m_Host->m_Host->OnAfterRender(browserId, sharedHandle);
                  WriteBoolean(bResult);
                  Flush();
                } break;
                case advancedfx::interop::HostGpuMessage::GetActiveBrowser: {
-                 WriteInt32(0);
+                 WriteInt32(m_Host->m_Host->m_NextBrowserId);
                  Flush();
                } break;
                default:
@@ -680,8 +671,6 @@ class SimpleHandler : public CefClient,
        bool m_Quit = false;
        bool m_ExternalAbort = false;
        CGpuPipeServer* m_Host;
-
-       int m_BrowserId;
      };
 
      SimpleHandler* m_Host;
@@ -722,7 +711,7 @@ private:
   std::mutex m_BrowserMutex;
   std::map<int, BrowserMapElem> m_Browsers;
   std::map<HANDLE, int> m_HandleToBrowserId;
-  int m_NextBrowserId = 1;
+  int m_NextBrowserId = 0;
 
   bool m_Creating = true;
 

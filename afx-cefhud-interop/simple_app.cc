@@ -260,4 +260,10 @@ void SimpleApp::OnBeforeCommandLineProcessing(
                                         "no-user-gesture-required");
 
     //
+
+    command_line->AppendSwitch("disable-gpu-watchdog");
+    command_line->AppendSwitch("disable-hang-monitor");
+    command_line->AppendSwitch("disable-frame-rate-limit");
+    command_line->AppendSwitchWithValue("deadline-to-synchronize-surfaces",
+                                        "0");
 }

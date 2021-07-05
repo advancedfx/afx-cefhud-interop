@@ -154,11 +154,6 @@ const char* g_szPixelShaderCode =
     {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12,
      D3D11_INPUT_PER_VERTEX_DATA, 0}};
 
-
-ID3D11DeviceContext* g_ActiveContext = nullptr;
-HANDLE g_ActiveShareHandle = INVALID_HANDLE_VALUE;
-int g_ActiveBrowser = 0;
-
 /* BUGGED DON'T USE.
 bool AfxWaitForGPU(ID3D11DeviceContext* pCtx) {
   if(!g_pDevice) return false;
@@ -238,7 +233,6 @@ void STDMETHODCALLTYPE My_OMSetRenderTargets(
 void STDMETHODCALLTYPE My_Flush(ID3D11DeviceContext* This) {
   g_Org_Flush(This);
 
-  if (This == g_ActiveContext && g_ActiveShareHandle != INVALID_HANDLE_VALUE) {
     ID3D11RenderTargetView* oldRenderTarget[1] = {nullptr};
     pContext->OMGetRenderTargets(1, &oldRenderTarget[0], NULL);
 
@@ -249,7 +243,7 @@ void STDMETHODCALLTYPE My_Flush(ID3D11DeviceContext* This) {
 
       if (resource) {
         auto it = g_Textures.find((ID3D11Texture2D*)resource);
-        if (it != g_Textures.end() && it->second.FlushCount < 1) {
+        if (it != g_Textures.end()) {
           it->second.FirstClear = true;
           ++it->second.FlushCount;
 
@@ -258,8 +252,8 @@ void STDMETHODCALLTYPE My_Flush(ID3D11DeviceContext* This) {
           try {
             g_GpuPipeClient.WriteInt32(
                 (INT32)advancedfx::interop::HostGpuMessage::OnAfterRender);
-            g_GpuPipeClient.WriteHandle(g_ActiveShareHandle);
-            g_GpuPipeClient.WriteInt32(g_ActiveBrowser);
+            g_GpuPipeClient.WriteHandle(it->second.ShareHandle);
+            g_GpuPipeClient.WriteInt32(it->second.ActiveBrowser);
             g_GpuPipeClient.Flush();
 
             g_GpuPipeClient.ReadBoolean();
@@ -267,15 +261,12 @@ void STDMETHODCALLTYPE My_Flush(ID3D11DeviceContext* This) {
             DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
                         << e.what();
           }
-          g_ActiveContext = nullptr;
-          g_ActiveShareHandle = INVALID_HANDLE_VALUE;
         }
 
         resource->Release();
       }
       oldRenderTarget[0]->Release();
     }
-  }
 }
 
 void STDMETHODCALLTYPE
@@ -293,7 +284,7 @@ My_ClearRenderTargetView(ID3D11DeviceContext* This,
 
     if (resource) {
       auto it = g_Textures.find((ID3D11Texture2D*)resource);
-      if (it != g_Textures.end() && it->second.FirstClear) {
+      if (it != g_Textures.end()) {
 
         /*
         FLOAT color[4] = {((g_ClearCount << 0) % 256) / 255.0f,
@@ -305,10 +296,6 @@ My_ClearRenderTargetView(ID3D11DeviceContext* This,
         it->second.FlushCount = 0;
 
         if (pInputLayout && pVertexBuffer && pVertexShader && pPixelShader) {
-          g_ActiveContext = This;
-          g_ActiveShareHandle = it->second.ShareHandle;
-          g_ActiveBrowser = it->second.ActiveBrowser;
-
           bool paintFromTempGameTexture = false;
 
           try {
@@ -624,7 +611,7 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
       if (SUCCEEDED(result) && *ppTexture2D) {
         InstallTextureHooks(*ppTexture2D);
 
-        /* int activeBrowser = 0;
+        int activeBrowser = 0;
         try {
           std::unique_lock<std::mutex> lock(g_GpuPipeClientMutex);
 
@@ -637,9 +624,9 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
                       << e.what();
           DebugBreak();
           activeBrowser = 0;
-        }*/
+        }
 
-        if (true) {
+        if (activeBrowser) {
           // ID3D11Texture2D* tempTexture = nullptr;
 
           // if (SUCCEEDED(True_CreateTexture2D(This, &Desc, nullptr,
@@ -655,7 +642,7 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
             g_Textures.emplace(
                 std::piecewise_construct, std::make_tuple(pLastGoodTexture2d),
                 std::make_tuple(shareHandle, tempTextureShareHandle, view,
-                                Desc.Width, Desc.Height, 0));
+                                Desc.Width, Desc.Height, activeBrowser));
 
             view->Release();
           }

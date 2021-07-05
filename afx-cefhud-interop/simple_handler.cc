@@ -74,8 +74,6 @@ void SimpleHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
 
   std::unique_lock<std::mutex> lock(m_BrowserMutex);
 
-  m_NextBrowserId = browser->GetIdentifier() + 1;
-
   if (NULL == browser->GetHost()->GetWindowHandle() &&
       60 == browser->GetHost()->GetWindowlessFrameRate()) {
   }
@@ -188,11 +186,14 @@ void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
   auto it = m_Browsers.find(browser->GetIdentifier());
   if (it != m_Browsers.end()) {
     if (CHostPipeServerConnectionThread* connection = it->second.Connection) {
+      m_NextBrowserId = browser->GetIdentifier();
+
       rect.Set(0, 0, connection->GetWidth(), connection->GetHeight());
       return;
     }
   }
 
+  m_NextBrowserId = 0;
   rect.Set(0, 0, 640, 480);
 }
 
