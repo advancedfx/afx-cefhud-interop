@@ -266,4 +266,8 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     command_line->AppendSwitch("disable-frame-rate-limit");
     command_line->AppendSwitchWithValue("deadline-to-synchronize-surfaces",
                                         "0");
+
+    command_line->AppendSwitch("disable-threaded-animation");
+    command_line->AppendSwitch("disable-threaded-scrolling");
+    command_line->AppendSwitch("disable-checker-imaging");
 }

@@ -36,7 +36,7 @@ html,body,div {
 <div id="indicator" class="indicator"></div>
 <div id="indicator2" class="indicator"></div>
 <div class="main">
-<!-- This makes it freeze for sure: <img id="gif" src="https://media1.tenor.com/images/74a87da6760e119fdfbb1ee9d2914871/tenor.gif?itemid=5437251" width="320" height="auto" class="" /> -->
+This makes it freeze for sure: <img id="gif" src="https://media1.tenor.com/images/74a87da6760e119fdfbb1ee9d2914871/tenor.gif?itemid=5437251" width="320" height="auto" class="" />
 <h1 style="color: #00ff00">Hello World from afx-cefhud-interop</h1>
 <p>Client time: <span id="clientTime"></span></p>
 <h2>Last game events:</h2>
@@ -73,8 +73,6 @@ function AfxDrawingInterop(interop,args) {
 	this.connected = false;
 	this.messagePromises = {};
 	
-	self.resized = false;
-
 	this.shaderData = {
 		"afx_drawtexture_vs20": this.compileShader(this.stringToAfxData(`
 			matrix World;
@@ -134,7 +132,7 @@ function AfxDrawingInterop(interop,args) {
 			this.engineInteropId = senderId;
 			await this.connect(senderId);
 			
-			var self = this;
+			this.lastRender = Promise.resolve(null);
 		},
 		"disconnect": async function(senderId) {
 			await Utils.toPromise(this, "disconnect");
@@ -143,13 +141,6 @@ function AfxDrawingInterop(interop,args) {
 
 			this.elIndicator2.classList.toggle("white");
 			
-			var width = renderInfo.view.width - renderInfo.view.x;
-			var height = renderInfo.view.height - renderInfo.view.y;
-			
-			self.resized = width != this.width || height != this.height;
-
-			this.width = width;
-			this.height = height;
 			this.renderInfo = renderInfo;
 			this.elClientTime.innerText = renderInfo.curTime;
 		},
@@ -163,184 +154,7 @@ function AfxDrawingInterop(interop,args) {
 		"onHudEnd": async function(frameCount, pass){
 			this.elIndicator.classList.toggle("white",(frameCount % 2) == 0);
 			
-			await Utils.toPromise(self.interop, "pumpBegin", frameCount, pass);
-			
-			try {
-				if(null === self.shaders["afx_drawtexture_vs20"]) {
-					var refVertexShader = [undefined];
-					var hr = await Utils.toPromise(self.interop, "d3d9CreateVertexShader", self.shaderData["afx_drawtexture_vs20"], refVertexShader);
-					if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
-					self.shaders["afx_drawtexture_vs20"] = refVertexShader[0];
-				}
-				
-				if(null === self.shaders["afx_drawtexture_ps20"]) {
-					var refPixelShader = [undefined];
-					var hr = await Utils.toPromise(self.interop, "d3d9CreatePixelShader", self.shaderData["afx_drawtexture_ps20"], refPixelShader);
-					if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
-					self.shaders["afx_drawtexture_ps20"] = refPixelShader[0];
-				}
-				
-				if(null === self.vertexDeclarations["pos3_uv2"]) {
-					var refVertexDeclaration = [undefined];
-					var hr = await Utils.toPromise(self.interop, "d3d9CreateVertexDeclaration", self.vertexElements["pos3_uv2"], refVertexDeclaration);
-					if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
-					self.vertexDeclarations["pos3_uv2"] = refVertexDeclaration[0];
-				}				
-
-				var requestAnimationFramePromise = new Promise((resolve,reject)=>{
-					window.requestAnimationFrame((timestamp)=>{
-						//console.log("requestAnimationFrame: "+timestamp);
-						//
-						// >>>>
-						
-						// TODO: Do your own painting preparations here.
-						
-						// <<<<
-						//
-
-						resolve();
-					});
-				});
-				
-				async function doPaintGameToCef(rootTextureHandle) {
-				
-					//console.log("doPaintGameToCef BEGIN");
-				
-					if(rootTextureHandle.invalid) throw Utils.toSoftError(new Error("rootTextureHandle.invalid"));
-
-					var cefTexture = self.getCefTexture(rootTextureHandle);
-
-					if(!cefTexture) {
-						console.log("New texture for rootTextureHandle: ("+rootTextureHandle.hi+", "+rootTextureHandle.lo+")");
-						var refTexture = [undefined];
-						const D3DFMT_A8R8G8B8 = 21;
-						var hr = await Utils.toPromise(self.interop, "d3d9CreateTexture", self.width, self.height, 1, D3d9.D3DUSAGE.D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3d9.D3DPOOL.D3DPOOL_DEFAULT, refTexture, [rootTextureHandle]);
-						//console.log("doPaintGameToCef BEGIN 1");
-						if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr, "CreateTexture failed for rootTextureHandle: ("+rootTextureHandle.hi+", "+rootTextureHandle.lo+")"));
-						cefTexture = refTexture[0];
-						self.setCefTexture(rootTextureHandle, cefTexture);
-					}
-					
-					var cefTextureSuraceLevel0Ref = [undefined];
-					var gameSurfaceRef = [undefined];
-					
-					//console.log("doPaintGameToCef BEGIN 2");
-
-					try {
-						var hr = await Utils.toPromise(cefTexture, "getSurfaceLevel", 0, cefTextureSuraceLevel0Ref);
-						if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
-						
-						//console.log("doPaintGameToCef BEGIN 3");
-
-						var hr = await Utils.toPromise(self.interop, "getRenderTarget", 0, gameSurfaceRef);
-						if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
-						
-						//console.log("doPaintGameToCef BEGIN 4");
-						
-						await Utils.toPromise(self.interop, "beginCleanState");
-						
-						//console.log("doPaintGameToCef BEGIN 5");
-						
-						var hr = await Utils.toPromise(self.interop, "d3d9StretchRect", gameSurfaceRef[0], null, cefTextureSuraceLevel0Ref[0], null, D3d9.D3DTEXTUREFILTERTYPE.D3DTEXF_NONE);
-						if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
-						
-						//console.log("doPaintGameToCef BEGIN 6");
-						
-						await Utils.toPromise(self.interop, "endCleanState");
-						
-						//console.log("doPaintGameToCef BEGIN 7");
-						
-						await Utils.toPromise(self.interop, "waitForClientGpu");
-						
-						//console.log("doPaintGameToCef BEGIN 8");
-					}
-					catch(e) {
-						if(e && e.soft) {
-							if(gameSurfaceRef[0]) await Utils.toPromise(gameSurfaceRef[0], "release");
-							if(cefTextureSuraceLevel0Ref[0]) await Utils.toPromise(cefTextureSuraceLevel0Ref[0], "release");
-						}
-						
-						throw e;
-					}
-
-					//console.log("doPaintGameToCef BEGIN 9");
-
-					if(gameSurfaceRef[0]) await Utils.toPromise(gameSurfaceRef[0], "release");
-
-					//console.log("doPaintGameToCef BEGIN 10");
-
-					if(cefTextureSuraceLevel0Ref[0]) await Utils.toPromise(cefTextureSuraceLevel0Ref[0], "release");
-					
-					//console.log("doPaintGameToCef END");
-					
-					return true;
-				}
-				
-				async function doPaintCefToGame(cefTextureHandle) {
-				
-					//console.log("doPaintCefToGame BEGIN");
-
-					if(cefTextureHandle.invalid) throw Utils.toSoftError(new Error("cefTextureHandle.invalid"));
-
-					var cefTexture = self.getCefTexture(cefTextureHandle);
-					
-					if(!cefTexture) {
-						console.log("Creating new texture for cefTextureHandle: ("+cefTextureHandle.hi+", "+cefTextureHandle.lo+")");
-
-						var refTexture = [undefined];
-						const D3DFMT_A8R8G8B8 = 21;
-						var hr = await Utils.toPromise(self.interop, "d3d9CreateTexture", self.width, self.height, 1, D3d9.D3DUSAGE.D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3d9.D3DPOOL.D3DPOOL_DEFAULT, refTexture, [cefTextureHandle]);
-						if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr, "CreateTexture failed for cefTextureHandle: ("+cefTextureHandle.hi+", "+cefTextureHandle.lo+")"));
-
-						cefTexture = refTexture[0];
-
-						self.setCefTexture(cefTextureHandle, cefTexture);
-					}
-					
-					if(!cefTexture) throw Utils.toSoftError(new Error("!cefTexture"));
-					
-					//console.log("doPaintCefToGame BEGIN B");
-					
-					await self.drawRect2d(cefTexture, self.renderInfo.view.x, self.renderInfo.view.y, self.renderInfo.view.width, self.renderInfo.view.height, 0, 0, 1, 1);
-					
-					//console.log("doPaintCefToGame BEGIN D");
-					
-					await Utils.toPromise(self.interop, "waitForClientGpu");
-					
-					//console.log("doPaintCefToGame END");
-					
-					return true;
-				}
-				
-				await Utils.toPromise(self.interop, "cefBeginFrame", self.width, self.height, {
-					"onAfterClear": function(resolve,reject,shareHandle) {
-						doPaintGameToCef(shareHandle).then(()=>{resolve(true)}).catch((e)=>{
-							Utils.logError(e);
-							reject(e);
-						});
-					}
-					, "onAfterRender": function(resolve,reject,shareHandle) {
-						doPaintCefToGame(shareHandle).then(()=>{resolve(true)}).catch((e)=>{
-							Utils.logError(e);
-							reject(e);
-						});
-					}
-				});
-				
-				//await requestAnimationFramePromise;
-				
-				await Utils.toPromise(self.interop, "pumpEnd");
-			}
-			catch(e) {
-				Utils.logError(e);
-				if(e && e.soft) {
-					await Utils.toPromise(self.interop, "pumpEnd");
-					return;
-				}
-				throw e;
-			}
-			
-			return true;
+			self.lastRender = self.renderScreen(await self.lastRender, frameCount, pass, self.renderInfo.view.x, self.renderInfo.view.y, self.renderInfo.view.width, self.renderInfo.view.height);
 		}
 	};
 	
@@ -803,6 +617,214 @@ AfxDrawingInterop.prototype.removeCefTexture = function(cefTextureHandle) {
 	{
 		delete this.cefTextures[cefTextureHandle.hi];
 	}
+}
+
+AfxDrawingInterop.prototype.renderScreen = function(lastRender, frameCount,pass,x,y,width,height) {
+	
+	let self = this;
+	
+	//
+	
+	return new Promise(function(resolve,reject){
+		
+		async function doPaintGameToCef(rootTextureHandle,width,height) {
+		
+			//console.log("doPaintGameToCef BEGIN");
+		
+			if(rootTextureHandle.invalid) throw Utils.toSoftError(new Error("rootTextureHandle.invalid"));
+
+			var cefTexture = self.getCefTexture(rootTextureHandle);
+
+			if(!cefTexture) {
+				console.log("New texture for rootTextureHandle: ("+rootTextureHandle.hi+", "+rootTextureHandle.lo+")");
+				var refTexture = [undefined];
+				const D3DFMT_A8R8G8B8 = 21;
+				var hr = await Utils.toPromise(self.interop, "d3d9CreateTexture", width, height, 1, D3d9.D3DUSAGE.D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3d9.D3DPOOL.D3DPOOL_DEFAULT, refTexture, [rootTextureHandle]);
+				//console.log("doPaintGameToCef BEGIN 1");
+				if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr, "CreateTexture failed for rootTextureHandle: ("+rootTextureHandle.hi+", "+rootTextureHandle.lo+")"));
+				cefTexture = refTexture[0];
+				self.setCefTexture(rootTextureHandle, cefTexture);
+			}
+			
+			var cefTextureSuraceLevel0Ref = [undefined];
+			var gameSurfaceRef = [undefined];
+			
+			//console.log("doPaintGameToCef BEGIN 2");
+
+			try {
+				var hr = await Utils.toPromise(cefTexture, "getSurfaceLevel", 0, cefTextureSuraceLevel0Ref);
+				if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
+				
+				//console.log("doPaintGameToCef BEGIN 3");
+
+				var hr = await Utils.toPromise(self.interop, "getRenderTarget", 0, gameSurfaceRef);
+				if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
+				
+				//console.log("doPaintGameToCef BEGIN 4");
+				
+				await Utils.toPromise(self.interop, "beginCleanState");
+				
+				//console.log("doPaintGameToCef BEGIN 5");
+				
+				var hr = await Utils.toPromise(self.interop, "d3d9StretchRect", gameSurfaceRef[0], null, cefTextureSuraceLevel0Ref[0], null, D3d9.D3DTEXTUREFILTERTYPE.D3DTEXF_NONE);
+				if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
+				
+				//console.log("doPaintGameToCef BEGIN 6");
+				
+				await Utils.toPromise(self.interop, "endCleanState");
+				
+				//console.log("doPaintGameToCef BEGIN 7");
+				
+				await Utils.toPromise(self.interop, "waitForClientGpu");
+				
+				//console.log("doPaintGameToCef BEGIN 8");
+			}
+			catch(e) {
+				if(e && e.soft) {
+					if(gameSurfaceRef[0]) await Utils.toPromise(gameSurfaceRef[0], "release");
+					if(cefTextureSuraceLevel0Ref[0]) await Utils.toPromise(cefTextureSuraceLevel0Ref[0], "release");
+				}
+				
+				throw e;
+			}
+
+			//console.log("doPaintGameToCef BEGIN 9");
+
+			if(gameSurfaceRef[0]) await Utils.toPromise(gameSurfaceRef[0], "release");
+
+			//console.log("doPaintGameToCef BEGIN 10");
+
+			if(cefTextureSuraceLevel0Ref[0]) await Utils.toPromise(cefTextureSuraceLevel0Ref[0], "release");
+			
+			//console.log("doPaintGameToCef END");
+			
+			return true;
+		}
+		
+		async function doPaintCefToGame(cefTextureHandle,x,y,width,height) {
+		
+			//console.log("doPaintCefToGame BEGIN");
+
+			if(cefTextureHandle.invalid) throw Utils.toSoftError(new Error("cefTextureHandle.invalid"));
+
+			var cefTexture = self.getCefTexture(cefTextureHandle);
+			
+			if(!cefTexture) {
+				console.log("Creating new texture for cefTextureHandle: ("+cefTextureHandle.hi+", "+cefTextureHandle.lo+")");
+
+				var refTexture = [undefined];
+				const D3DFMT_A8R8G8B8 = 21;
+				var hr = await Utils.toPromise(self.interop, "d3d9CreateTexture", width, height, 1, D3d9.D3DUSAGE.D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3d9.D3DPOOL.D3DPOOL_DEFAULT, refTexture, [cefTextureHandle]);
+				if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr, "CreateTexture failed for cefTextureHandle: ("+cefTextureHandle.hi+", "+cefTextureHandle.lo+")"));
+
+				cefTexture = refTexture[0];
+
+				self.setCefTexture(cefTextureHandle, cefTexture);
+			}
+			
+			if(!cefTexture) throw Utils.toSoftError(new Error("!cefTexture"));
+			
+			//console.log("doPaintCefToGame BEGIN B");
+			
+			await self.drawRect2d(cefTexture, x, y, width, height, 0, 0, 1, 1);
+			
+			//console.log("doPaintCefToGame BEGIN D");
+			
+			await Utils.toPromise(self.interop, "waitForClientGpu");
+			
+			//console.log("doPaintCefToGame END");
+			
+			return true;
+		}
+		
+		async function frame() {
+			
+			//
+			
+			let {frameCount: clientFrameCount, pass: clientPass} = await Utils.toPromise(self.interop, "pumpBegin");
+			
+			let lastFrameDiff = null === lastRender ? 0 : clientFrameCount - lastRender.frameCount;
+			let lastPassDiff = null === lastRender ? 0 : clientPass - lastRender.pass;
+		
+			if(lastFrameDiff < 0 || lastFrameDiff == 0 && lastPassDiff < 0) {
+				return "pumpRetry";
+			}
+			
+			if(lastFrameDiff > 0 || lastFrameDiff == 0 && lastPassDiff > 0) {
+				return "pumpSkip";
+			}
+			
+			// Ensure resources:
+			
+			if(null === self.shaders["afx_drawtexture_vs20"]) {
+				var refVertexShader = [undefined];
+				var hr = await Utils.toPromise(self.interop, "d3d9CreateVertexShader", self.shaderData["afx_drawtexture_vs20"], refVertexShader);
+				if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
+				self.shaders["afx_drawtexture_vs20"] = refVertexShader[0];
+			}
+			
+			if(null === self.shaders["afx_drawtexture_ps20"]) {
+				var refPixelShader = [undefined];
+				var hr = await Utils.toPromise(self.interop, "d3d9CreatePixelShader", self.shaderData["afx_drawtexture_ps20"], refPixelShader);
+				if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
+				self.shaders["afx_drawtexture_ps20"] = refPixelShader[0];
+			}
+			
+			if(null === self.vertexDeclarations["pos3_uv2"]) {
+				var refVertexDeclaration = [undefined];
+				var hr = await Utils.toPromise(self.interop, "d3d9CreateVertexDeclaration", self.vertexElements["pos3_uv2"], refVertexDeclaration);
+				if(Utils.FAILED(hr)) throw Utils.toSoftError(Utils.failedHResultToError(hr));
+				self.vertexDeclarations["pos3_uv2"] = refVertexDeclaration[0];
+			}
+			
+			// Weird stuff:
+			
+			await Utils.toPromise(self.interop, "cefBeginFrame", width, height, {
+				"onAfterClear": function(resolve,reject,shareHandle) {
+					if(null !== lastRender) {
+						doPaintGameToCef(shareHandle,lastRender.width,lastRender.height).then(()=>{resolve(true)}).catch((e)=>{
+							Utils.logError(e);
+							reject(e);
+						});
+						return;
+					}
+					resolve(false);
+				}
+				, "onAfterRender": function(resolve,reject,shareHandle) {
+					if(null !== lastRender) {
+						doPaintCefToGame(shareHandle,lastRender.x,lastRender.y,lastRender.width,lastRender.height).then(()=>{resolve(true)}).catch((e)=>{
+							Utils.logError(e);
+							reject(e);
+						});
+						return;
+					}
+					resolve(false);
+				}
+			});
+			
+			
+			return null === lastRender ? "pumpRetry" : "pumpFinish";
+		}
+		
+		frame().then((pumpAction)=>{
+			return Utils.toPromise(self.interop, pumpAction).then(()=>{
+				resolve({
+					"frameCount": frameCount,
+					"pass": pass,
+					"x": x,
+					"y": y,
+					"width": width,
+					"height": height
+				});
+			});
+		}).catch((e)=>{
+			Utils.logError(e);
+			if(e && e.soft) {
+				return Utils.toPromise(self.interop, "pumpFinish").then(()=>{resolve(null);});
+			}
+			reject(e);
+		});
+	});
 }
 
 ////////////////////////////////////////////////////////////////////////////////

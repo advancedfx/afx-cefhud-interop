@@ -2417,25 +2417,31 @@ CAfxObject::AddFunction(
             return true;
           }
 
-      if (4 <= arguments.size() && arguments[0]->IsFunction() &&
-          arguments[1]->IsFunction() && arguments[2]->IsInt() &&
-          arguments[3]->IsUInt()) {
+      if (2 <= arguments.size() && arguments[0]->IsFunction() &&
+          arguments[1]->IsFunction()) {
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
-                                 fn_reject = arguments[1], frameCount = arguments[2]->GetIntValue(),
-                                 pass = arguments[3]->GetIntValue()]() {
+                                 fn_reject = arguments[1]]() {
 
           int errorLine = __LINE__;
+          int frameCount = -1;
+          unsigned int pass = 0;
 
           if (self->GetConnected() && 0 == (errorLine = self->DoPumpBegin(frameCount, pass))) {
-            bool inFlow = self->m_InFlow;
             CefPostTask(TID_RENDERER,
-                        new CAfxTask([self, fn_resolve, result = inFlow]() {
+                        new CAfxTask([self, fn_resolve, frameCount, pass]() {
                           if (nullptr == self->m_Context)
                             return;
 
                           self->m_Context->Enter();
                           CefV8ValueList args;
-                          args.push_back(CefV8Value::CreateBool(result));
+                          auto dict = CefV8Value::CreateObject(nullptr,nullptr);
+                          dict->SetValue("frameCount",
+                                         CefV8Value::CreateInt(frameCount),
+                                           V8_PROPERTY_ATTRIBUTE_NONE);
+                          dict->SetValue("pass",
+                                           CefV8Value::CreateUInt(pass),
+                                           V8_PROPERTY_ATTRIBUTE_NONE);
+                          args.push_back(dict);
                           fn_resolve->ExecuteFunction(NULL, args);
                           self->m_Context->Exit();
                         }));
@@ -2462,7 +2468,109 @@ CAfxObject::AddFunction(
     });
 
     CAfxObject::AddFunction(
-        obj, "pumpEnd",
+        obj, "pumpRetry",
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
+           const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+           CefString& exceptionoverride) {
+          auto self = CAfxObject::As<AfxObjectType::DrawingInteropImpl,
+                                     CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+
+          if (2 <= arguments.size() && arguments[0]->IsFunction() &&
+              arguments[1]->IsFunction()) {
+            self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
+                                     fn_reject = arguments[1]]() {
+
+                if (!self->m_PipeServer.WriteUInt32(
+                      (UINT32)DrawingReply::Retry))
+                goto error;
+
+              if (!self->m_PipeServer.Flush())
+                goto error;
+
+              CefPostTask(TID_RENDERER, new CAfxTask([self, fn_resolve]() {
+                            self->m_Context->Enter();
+                            fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                            self->m_Context->Exit();
+                          }));
+              return;
+
+            error:
+              self->Close();
+
+              CefPostTask(TID_RENDERER, new CAfxTask([self, fn_reject]() {
+                            if (nullptr == self->m_Context)
+                              return;
+
+                            self->m_Context->Enter();
+                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            self->m_Context->Exit();
+                          }));
+            });
+
+            return true;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return true;
+        });
+
+    CAfxObject::AddFunction(
+        obj, "pumpSkip",
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
+           const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+           CefString& exceptionoverride) {
+          auto self = CAfxObject::As<AfxObjectType::DrawingInteropImpl,
+                                     CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+
+          if (2 <= arguments.size() && arguments[0]->IsFunction() &&
+              arguments[1]->IsFunction()) {
+            self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
+                                     fn_reject = arguments[1]]() {
+              if (!self->m_PipeServer.WriteUInt32(
+                      (UINT32)DrawingReply::Skip))
+                goto error;
+
+              if (!self->m_PipeServer.Flush())
+                goto error;
+
+              CefPostTask(TID_RENDERER, new CAfxTask([self, fn_resolve]() {
+                            self->m_Context->Enter();
+                            fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                            self->m_Context->Exit();
+                          }));
+              return;
+
+            error:
+              self->Close();
+
+              CefPostTask(TID_RENDERER, new CAfxTask([self, fn_reject]() {
+                            if (nullptr == self->m_Context)
+                              return;
+
+                            self->m_Context->Enter();
+                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            self->m_Context->Exit();
+                          }));
+            });
+
+            return true;
+          }
+
+          exceptionoverride = g_szInvalidArguments;
+          return true;
+        });
+
+
+    CAfxObject::AddFunction(
+        obj, "pumpFinish",
         [](const CefString& name,
                                              CefRefPtr<CefV8Value> object,
                                              const CefV8ValueList& arguments,
@@ -2479,8 +2587,6 @@ CAfxObject::AddFunction(
           arguments[1]->IsFunction()) {
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
                                  fn_reject = arguments[1]]() {
-         if (!self->m_InFlow)
-              goto error;
 
             if (!self->m_PipeServer.WriteUInt32(
                     (UINT32)DrawingReply::Finished))
@@ -2543,8 +2649,6 @@ CAfxObject::AddFunction(
                                        fn_reject = arguments[1], data, val,
                                        refVertexDeclaration = arguments[3],
                                        retobj]() {
-                if (!self->m_InFlow)
-                  goto __error;
 
                 if (!self->m_PipeServer.WriteUInt32(
                         (UINT32)DrawingReply::D3d9CreateVertexDeclaration))
@@ -2665,10 +2769,7 @@ CAfxObject::AddFunction(
                                        refIndexBuffer = arguments[6],
                                        refHandle = arguments[7]
                                        , drawingHandle, retobj]() {
-
-              if (!self->m_InFlow)
-                goto __error;
-
+              
               if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::D3d9CreateIndexBuffer))
                 goto __error;
@@ -2814,9 +2915,6 @@ CAfxObject::AddFunction(
                                        refVertexBuffer = arguments[6],
                                        refHandle = arguments[7]
                                        , drawingHandle, retobj]() {
-
-              if (!self->m_InFlow)
-                goto __error;
 
               if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::D3d9CreateVertexBuffer))
@@ -2968,9 +3066,6 @@ CAfxObject::AddFunction(
              pool = arguments[7]->GetUIntValue(), refTexture = arguments[8],
              refHandle = hasHandleArr? arguments[9] : nullptr, drawingHandle, retobj]() {
 
-              if (!self->m_InFlow)
-                goto __error;
-
               if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::D3d9CreateTexture))
                 goto __error;
@@ -3119,8 +3214,6 @@ CAfxObject::AddFunction(
                                        fn_reject = arguments[1], data, index = val->GetIndex(),
                                        refVertexShader = arguments[3],
                                        retobj]() {
-                if (!self->m_InFlow)
-                  goto __error;
 
                 if (!self->m_PipeServer.WriteUInt32(
                         (UINT32)DrawingReply::D3d9CreateVertexShader))
@@ -3238,8 +3331,6 @@ CAfxObject::AddFunction(
                                        fn_reject = arguments[1], data, val,
                                        refPixelShader = arguments[3],
                                        retobj]() {
-                if (!self->m_InFlow)
-                  goto __error;
 
                 if (!self->m_PipeServer.WriteUInt32(
                         (UINT32)DrawingReply::D3d9CreatePixelShader))
@@ -3352,9 +3443,6 @@ CAfxObject::AddFunction(
                 sourceTextureIndex = sourceTexture == nullptr ? 0 : sourceTexture->GetIndex(),
                 destinationTextureIndex = destinationTexture == nullptr ? 0 : destinationTexture->GetIndex()](){
 
-                if (!self->m_InFlow)
-                  goto __error;
-
                 if (!self->m_PipeServer.WriteUInt32(
                         (UINT32)DrawingReply::D3d9UpdateTexture))
                   goto __error;
@@ -3455,8 +3543,6 @@ CAfxObject::AddFunction(
 
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
                                      fn_reject = arguments[1], val]() {
-              if (!self->m_InFlow)
-                goto __error;
 
               if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::D3d9SetVertexDeclaration))
@@ -3546,8 +3632,6 @@ CAfxObject::AddFunction(
               arguments[1]->IsFunction()) {
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
                                      fn_reject = arguments[1]]() {
-              if (!self->m_InFlow)
-                goto __error;
 
             if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::D3d9SetViewport))
@@ -3639,8 +3723,6 @@ CAfxObject::AddFunction(
                                        v_height = height->GetUIntValue(),
                                        v_minz = minZ->GetDoubleValue(),
                                        v_maxz = maxZ->GetDoubleValue()]() {
-                if (!self->m_InFlow)
-                  goto __error;
 
               if (!self->m_PipeServer.WriteUInt32(
                         (UINT32)DrawingReply::D3d9SetViewport))
@@ -3747,8 +3829,6 @@ CAfxObject::AddFunction(
 
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
                                      fn_reject = arguments[1], state = arguments[2]->GetUIntValue(), value = arguments[3]->GetUIntValue()]() {
-              if (!self->m_InFlow)
-                goto __error;
 
                           if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::D3d9SetRenderState))
@@ -3850,8 +3930,6 @@ CAfxObject::AddFunction(
                                      sampler = arguments[2]->GetUIntValue(),
                                      type = arguments[3]->GetUIntValue(),
                                      value = arguments[4]->GetUIntValue()]() {
-              if (!self->m_InFlow)
-                goto __error;
 
             if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::D3d9SetSamplerState))
@@ -3952,8 +4030,6 @@ CAfxObject::AddFunction(
 
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
                                      fn_reject = arguments[1], sampler = arguments[2]->GetUIntValue(), val]() {
-              if (!self->m_InFlow)
-                goto __error;
 
             if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::D3d9SetTexture))
@@ -4054,8 +4130,6 @@ CAfxObject::AddFunction(
                                      stage = arguments[2]->GetUIntValue(),
                                      type = arguments[3]->GetUIntValue(),
                                      value = arguments[4]->GetUIntValue()]() {
-              if (!self->m_InFlow)
-                goto __error;
 
               if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::D3d9SetTextureStageState))
@@ -4168,8 +4242,6 @@ CAfxObject::AddFunction(
                                      fn_reject = arguments[1],
                                      state = arguments[2]->GetUIntValue(),
                                      matrix]() {
-              if (!self->m_InFlow)
-                goto __error;
 
               if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::D3d9SetTransform))
@@ -4274,8 +4346,6 @@ CAfxObject::AddFunction(
 
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
                                      fn_reject = arguments[1], val]() {
-              if (!self->m_InFlow)
-                goto __error;                               
 
             if (!self->m_PipeServer.WriteUInt32(
                     (UINT32)DrawingReply::D3d9SetIndices))
@@ -4373,8 +4443,6 @@ CAfxObject::AddFunction(
                                      streamNumber = arguments[2]->GetUIntValue(),
                                      offsetInBytes = arguments[4]->GetUIntValue(),
                                      stride = arguments[5]->GetUIntValue()]() {
-              if (!self->m_InFlow)
-                goto __error;                
 
             if (!self->m_PipeServer.WriteUInt32(
                     (UINT32)DrawingReply::D3d9SetStreamSource))
@@ -4473,8 +4541,6 @@ CAfxObject::AddFunction(
                                      fn_reject = arguments[1],
                                      streamNumber = arguments[2]->GetUIntValue(),
                                      setting = arguments[3]->GetUIntValue()]() {
-              if (!self->m_InFlow)
-                goto __error;
 
             if (!self->m_PipeServer.WriteUInt32(
                     (UINT32)DrawingReply::D3d9SetStreamSourceFreq))
@@ -4571,8 +4637,6 @@ CAfxObject::AddFunction(
 
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
                                      fn_reject = arguments[1], val]() {
-              if (!self->m_InFlow)
-                goto __error;
 
               if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::D3d9SetVertexShader))
@@ -4666,8 +4730,6 @@ CAfxObject::AddFunction(
 
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
                                      fn_reject = arguments[1], val]() {
-              if (!self->m_InFlow)
-                goto __error;
 
               if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::D3d9SetPixelShader))
@@ -4775,8 +4837,6 @@ CAfxObject::AddFunction(
             if (bOk) {
               self->m_PipeQueue.Queue([self,
               fn_resolve = arguments[0], fn_reject = arguments[1], startRegister = arguments[2]->GetUIntValue(), arr]() {
-                if (!self->m_InFlow)
-                  goto __error;
 
                 if (!self->m_PipeServer.WriteUInt32(
                         (UINT32)DrawingReply::D3d9SetVertexShaderConstantB))
@@ -4890,8 +4950,6 @@ CAfxObject::AddFunction(
             if (bOk) {
               self->m_PipeQueue.Queue([self,
               fn_resolve = arguments[0], fn_reject = arguments[1], startRegister = arguments[2]->GetUIntValue(), arr]() {
-                if (!self->m_InFlow)
-                  goto __error;
 
                 if (!self->m_PipeServer.WriteUInt32(
                         (UINT32)DrawingReply::D3d9SetVertexShaderConstantF))
@@ -5005,8 +5063,6 @@ CAfxObject::AddFunction(
             if (bOk) {
               self->m_PipeQueue.Queue([self,
               fn_resolve = arguments[0], fn_reject = arguments[1], startRegister = arguments[2]->GetUIntValue(), arr]() {
-                if (!self->m_InFlow)
-                  goto __error;
 
                 if (!self->m_PipeServer.WriteUInt32(
                         (UINT32)DrawingReply::D3d9SetVertexShaderConstantI))
@@ -5120,8 +5176,6 @@ CAfxObject::AddFunction(
             if (bOk) {
               self->m_PipeQueue.Queue([self,
               fn_resolve = arguments[0], fn_reject = arguments[1], startRegister = arguments[2]->GetUIntValue(), arr]() {
-                if (!self->m_InFlow)
-                  goto __error;
 
                 if (!self->m_PipeServer.WriteUInt32(
                         (UINT32)DrawingReply::D3d9SetPixelShaderConstantB))
@@ -5235,8 +5289,6 @@ CAfxObject::AddFunction(
             if (bOk) {
               self->m_PipeQueue.Queue([self,
               fn_resolve = arguments[0], fn_reject = arguments[1], startRegister = arguments[2]->GetUIntValue(), arr]() {
-                if (!self->m_InFlow)
-                  goto __error;
 
                 if (!self->m_PipeServer.WriteUInt32(
                         (UINT32)DrawingReply::D3d9SetPixelShaderConstantF))
@@ -5350,8 +5402,6 @@ CAfxObject::AddFunction(
             if (bOk) {
               self->m_PipeQueue.Queue([self,
               fn_resolve = arguments[0], fn_reject = arguments[1], startRegister = arguments[2]->GetUIntValue(), arr]() {
-                if (!self->m_InFlow)
-                  goto __error;
 
                 if (!self->m_PipeServer.WriteUInt32(
                         (UINT32)DrawingReply::D3d9SetPixelShaderConstantI))
@@ -5454,9 +5504,6 @@ CAfxObject::AddFunction(
             primitiveType = arguments[2]->GetUIntValue(),
             startVertex = arguments[3]->GetUIntValue(),
             primitiveCount = arguments[4]->GetUIntValue()](){
-
-            if (!self->m_InFlow)
-              goto __error;
 
             if (!self->m_PipeServer.WriteUInt32(
                     (UINT32)DrawingReply::D3d9DrawPrimitive))
@@ -5562,9 +5609,6 @@ CAfxObject::AddFunction(
             startIndex = arguments[6]->GetUIntValue(),
             primCount = arguments[7]->GetUIntValue()](){
 
-            if (!self->m_InFlow)
-              goto __error;
-
             if (!self->m_PipeServer.WriteUInt32(
                     (UINT32)DrawingReply::D3d9DrawIndexedPrimitive))
               goto __error;
@@ -5664,9 +5708,6 @@ CAfxObject::AddFunction(
     self->m_PipeQueue.Queue(
       [self, fn_resolve = arguments[0], fn_reject = arguments[1]]() {
 
-        if (!self->m_InFlow)
-          goto __error;
-
         if (!self->m_PipeServer.WriteUInt32((UINT32)DrawingReply::WaitForGpu))
           goto __error;
         if (!self->m_PipeServer.Flush())
@@ -5732,8 +5773,6 @@ CAfxObject::AddFunction(
               self->m_PipeQueue.Queue(
                 [self, fn_resolve = arguments[0], fn_reject = arguments[1], primitiveType = arguments[2]->GetUIntValue(), primitiveCount = arguments[3]->GetUIntValue(), vertexStreamZeroData,
                  vertexStreamZeroStride = arguments[5]->GetUIntValue()]() {
-                if (!self->m_InFlow)
-                  goto __error;
 
                 if (!self->m_PipeServer.WriteUInt32(
                         (UINT32)DrawingReply::DrawPrimitiveUP))
@@ -5850,8 +5889,6 @@ CAfxObject::AddFunction(
               arguments[1]->IsFunction()) {
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
                                      fn_reject = arguments[1]]() {
-              if (!self->m_InFlow)
-                goto __error;
 
               if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::BeginCleanState))
@@ -5904,8 +5941,6 @@ CAfxObject::AddFunction(
               arguments[1]->IsFunction()) {
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
                                      fn_reject = arguments[1]]() {
-              if (!self->m_InFlow)
-                goto __error;
 
               if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::EndCleanState))
@@ -5983,9 +6018,6 @@ CAfxObject::AddFunction(
         self->m_PipeQueue.Queue(
             [self, fn_resolve = arguments[0], fn_reject = arguments[1],
              index = val->GetIndex(), refTexture = arguments[3], retobj]() {
-
-              if (!self->m_InFlow)
-                goto __error;
 
               if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::GetRenderTarget))
@@ -6090,8 +6122,6 @@ CAfxObject::AddFunction(
 
             self->m_PipeQueue.Queue([self, fn_resolve = arguments[0],
                                      fn_reject = arguments[1], val]() {
-              if (!self->m_InFlow)
-                goto __error;
 
             if (!self->m_PipeServer.WriteUInt32(
                       (UINT32)DrawingReply::SetRenderTarget))
@@ -6233,8 +6263,6 @@ CAfxObject::AddFunction(
                       ? 0 : destSurface->GetIndex(),
              bDestRect, destRect,
              Filter = arguments[6]->GetUIntValue()]() {
-               if (!self->m_InFlow)
-                 goto __error;
 
                if (!self->m_PipeServer.WriteUInt32(
                        (UINT32)DrawingReply::D3d9StretchRect))
@@ -6380,31 +6408,32 @@ CAfxObject::AddFunction(
             self->m_RenderQueue.emplace(onAfterClearFn, onAfterRenderFn, arguments[0],
                                   arguments[1]);
 
-              self->m_InteropQueue.Queue([self, width, height]() {
-              try {
-                self->WriteInt32((int) HostMessage::RenderFrame);
+            self->m_InteropQueue.Queue([self, width, height]() {
+                try {
+                self->WriteInt32((int)HostMessage::RenderFrame);
                 self->WriteInt32((int)width);
                 self->WriteInt32((int)height);
                 self->Flush();
-              } catch (const std::exception& e) {
+                } catch (const std::exception& e) {
                 CefPostTask(
                     TID_RENDERER,
-                    new CAfxTask(
-                        [self, error_msg = std::string(e.what())]() {
-                          if (nullptr == self->m_Context)
-                            return;
+                    new CAfxTask([self,
+                                    error_msg = std::string(e.what())]() {
+                        if (nullptr == self->m_Context)
+                        return;
 
-                          self->m_Context->Enter();
+                        self->m_Context->Enter();
 
-                          CefRefPtr<CefV8Value> fn_reject = self->m_RenderQueue.front().OnReject;
-                          self->m_RenderQueue.pop();
+                        CefRefPtr<CefV8Value> fn_reject =
+                            self->m_RenderQueue.front().OnReject;
+                        self->m_RenderQueue.pop();
 
-                          CefV8ValueList args;
-                          args.push_back(CefV8Value::CreateString(error_msg));
-                          fn_reject->ExecuteFunction(NULL, args);
-                          self->m_Context->Exit();
-                        }));
-              }
+                        CefV8ValueList args;
+                        args.push_back(CefV8Value::CreateString(error_msg));
+                        fn_reject->ExecuteFunction(NULL, args);
+                        self->m_Context->Exit();
+                    }));
+                }
             });
 
             return true;
@@ -6606,7 +6635,6 @@ CAfxObject::AddFunction(
   }  
 
   virtual void OnClose() override {
-    m_InFlow = false;
   }
 
  private:
@@ -6926,9 +6954,6 @@ private:
             else
               self->m_DoReleased = true;
 
-            if (!self->m_Interop->m_InFlow)
-              goto __error;
-
             if (!self->m_Interop->m_PipeServer.WriteUInt32(
                     (UINT32)DrawingReply::ReleaseD3d9VertexDeclaration))
               goto __error;
@@ -7027,9 +7052,6 @@ private:
             else
               self->m_DoReleased = true;
 
-            if (!self->m_Interop->m_InFlow)
-              goto __error;
-
             if (!self->m_Interop->m_PipeServer.WriteUInt32(
                     (UINT32)DrawingReply::ReleaseD3d9IndexBuffer))
               goto __error;
@@ -7105,9 +7127,6 @@ private:
               goto __error;
             else
               self->m_DoReleased = true;
-              
-            if (!self->m_Interop->m_InFlow)
-              goto __error;
 
             if (!self->m_Interop->m_PipeServer.WriteUInt32(
                     (UINT32)DrawingReply::UpdateD3d9IndexBuffer))
@@ -7248,9 +7267,6 @@ private:
               goto __error;
             else
               self->m_DoReleased = true;
-              
-                          if (!self->m_Interop->m_InFlow)
-              goto __error;
 
             if (!self->m_Interop->m_PipeServer.WriteUInt32(
                     (UINT32)DrawingReply::ReleaseD3d9VertexBuffer))
@@ -7328,9 +7344,6 @@ private:
               goto __error;
             else
               self->m_DoReleased = true;
-              
-            if (!self->m_Interop->m_InFlow)
-              goto __error;
 
             if (!self->m_Interop->m_PipeServer.WriteUInt32(
                     (UINT32)DrawingReply::UpdateD3d9VertexBuffer))
@@ -7466,9 +7479,6 @@ private:
                 else
                   self->m_DoReleased = true;
 
-                if (!self->m_Interop->m_InFlow)
-                  goto __error;
-
                 if (!self->m_Interop->m_PipeServer.WriteUInt32(
                         (UINT32)DrawingReply::ReleaseD3d9Surface))
                   goto __error;
@@ -7565,9 +7575,6 @@ private:
               goto __error;
             else
               self->m_DoReleased = true;
-              
-                          if (!self->m_Interop->m_InFlow)
-                  goto __error;
 
                 if (!self->m_Interop->m_PipeServer.WriteUInt32(
                         (UINT32)DrawingReply::ReleaseD3d9Texture))
@@ -7638,9 +7645,6 @@ private:
                    level = arguments[2]->GetUIntValue(),
                    ppSurfaceLevel = arguments[3], retobj, val]() {
                     if (self->m_DoReleased)
-                      goto __error;
-
-                    if (!self->m_Interop->m_InFlow)
                       goto __error;
 
                     if (!self->m_Interop->m_PipeServer.WriteUInt32(
@@ -7787,9 +7791,6 @@ private:
               goto __error;
             else
               self->m_DoReleased = true;
-              
-            if (!self->m_Interop->m_InFlow)
-              goto __error;
 
           if (!self->m_Interop->m_PipeServer.WriteUInt32(
                   (UINT32)DrawingReply::UpdateD3d9Texture))
@@ -7905,9 +7906,6 @@ private:
                     goto __error;
                   else
                     self->m_DoReleased = true;
-
-                  if (!self->m_Interop->m_InFlow)
-                    goto __error;
 
           if (!self->m_Interop->m_PipeServer.WriteUInt32(
                   (UINT32)DrawingReply::UpdateD3d9Texture))
@@ -8060,10 +8058,7 @@ private:
             if (self->m_DoReleased)
               goto __error;
             else
-              self->m_DoReleased = true;
-              
-            if (!self->m_Interop->m_InFlow)
-              goto __error;
+              self->m_DoReleased = true;              
 
             if (!self->m_Interop->m_PipeServer.WriteUInt32(
                     (UINT32)DrawingReply::ReleaseD3d9PixelShader))
@@ -8156,9 +8151,6 @@ private:
             else
               self->m_DoReleased = true;
 
-                if (!self->m_Interop->m_InFlow)
-                  goto __error;
-
                 if (!self->m_Interop->m_PipeServer.WriteUInt32(
                         (UINT32)DrawingReply::ReleaseD3d9VertexShader))
                   goto __error;
@@ -8219,8 +8211,6 @@ private:
         IMPLEMENT_REFCOUNTING(CAfxD3d9VertexShader);
   };
 
-  bool m_InFlow = false;
-
   HANDLE m_ShareHandle = INVALID_HANDLE_VALUE;
   int m_Width = 640;
   int m_Height = 480;
@@ -8273,8 +8263,7 @@ private:
     }
   }
 
-  int DoPumpBegin(int frameCount, unsigned int pass) {
-       m_InFlow = false;
+  int DoPumpBegin(int &outFrameCount, unsigned int &outPass) {
 
     while (true) {
       UINT32 drawingMessage;
@@ -8322,68 +8311,13 @@ private:
       if (bContinue)
         continue;
 
-      INT32 clientFrameCount;
-      if(!m_PipeServer.ReadInt32(clientFrameCount))
+      if(!m_PipeServer.ReadInt32(outFrameCount))
           return __LINE__;
 
-      UINT32 clientPass;
-      if (!m_PipeServer.ReadUInt32(clientPass))
+      if (!m_PipeServer.ReadUInt32(outPass))
         return __LINE__;
 
-      INT32 frameDiff = frameCount - clientFrameCount;
-
-      if (frameDiff < 0) {
-        // Error: client is ahead, otherwise we would have correct
-        // data by now.
-
-        if (!m_PipeServer.WriteUInt32((INT32)DrawingReply::Retry))
-          return __LINE__;
-
-        if(!m_PipeServer.Flush())
-            return __LINE__;
-/*
-         std::string code = std::to_string(clientFrameCount) + "/> " +
-                           std::to_string(frameCount) + " @ " +
-                           std::to_string(clientPass) + " / " +
-                           std::to_string(pass);
-        MessageBoxA(0, code.c_str(), "DrawingReply::Retry", MB_OK);*/
-
-        return 0;
-
-      } else if (frameDiff > 0) {
-        // client is behind.
-
-        if (!m_PipeServer.WriteUInt32((INT32)DrawingReply::Skip))
-          return __LINE__;
-
-        if(!m_PipeServer.Flush())
-            return __LINE__;
-/*
-        std::string code = std::to_string(clientFrameCount) + " / " +
-                           std::to_string(frameCount) + " @ " +
-                           std::to_string(clientPass) + " / " +
-                           std::to_string(pass);
-        MessageBoxA(0, code.c_str(), "DrawingReply::Skip", MB_OK);*/
-      } else {
-        m_InFlow = pass == clientPass;
-
-        if(!m_InFlow) 
-        {
-          if (!m_PipeServer.WriteUInt32((UINT32)DrawingReply::Finished))
-            return __LINE__;
-
-          if (!m_PipeServer.Flush())
-            return __LINE__;
-/*
-          std::string code = std::to_string(clientFrameCount) + " == " +
-                            std::to_string(frameCount) + " @ " +
-                            std::to_string(clientPass) + " / " +
-                            std::to_string(pass);
-          MessageBoxA(0, code.c_str(), "DrawingReply::Finished", MB_OK);*/            
-        }
-
-        return 0;
-      }
+      return 0;
     }
   }
 

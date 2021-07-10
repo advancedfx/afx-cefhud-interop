@@ -75,7 +75,7 @@ class SimpleHandler : public CefClient,
 
        int browserId = browser->GetIdentifier();
 
-       OnRenderDone(browserId);
+       OnRenderDone(browserId, shared_handle);
    }
 
   virtual void GetViewRect(CefRefPtr<CefBrowser> browser,
@@ -252,7 +252,7 @@ class SimpleHandler : public CefClient,
     }
   }
 
-  void OnRenderDone(INT32 browserId) {
+  void OnRenderDone(INT32 browserId, HANDLE shared_handle) {
     std::unique_lock<std::mutex> lock(m_BrowserMutex);
 
     if (0 != browserId) {
@@ -261,7 +261,7 @@ class SimpleHandler : public CefClient,
         if (CHostPipeServerConnectionThread* connection =
                 it2->second.Connection) {
           lock.unlock();
-          it2->second.Connection->OnRenderDone();
+          it2->second.Connection->OnRenderDone(shared_handle);
           lock.lock();
         } else {
           DLOG(ERROR) << "No connection.";
@@ -297,7 +297,9 @@ class SimpleHandler : public CefClient,
 
     int GetHeight() { return m_Owner->Height; }
 
-    void OnRenderDone() { }
+    void OnRenderDone(HANDLE shared_handle) {
+
+    }
 
     /**
      * @throws exception
@@ -324,7 +326,7 @@ class SimpleHandler : public CefClient,
      * @throws exception
      */
     bool OnAfterRender(void* share_handle) {
-        std::unique_lock<std::mutex> lock2(m_DrawingMutex);
+      std::unique_lock<std::mutex> lock2(m_DrawingMutex);
       m_DrawingDone = false;
 
       {
@@ -448,12 +450,14 @@ class SimpleHandler : public CefClient,
               int width = ReadInt32();
               int height = ReadInt32();
 
-              if (m_Owner->Width != width || m_Owner->Height != height) {
+              if (m_Owner->Width != width || m_Owner->Height != height ||
+                  m_FirstRender) {
+                m_FirstRender = false;
                 m_Owner->Width = width;
                 m_Owner->Height = height;
-
                 m_Owner->Browser->GetHost()->WasResized();
               }
+
               m_Owner->Browser->GetHost()->SendExternalBeginFrame();
             } break;
             case advancedfx::interop::HostMessage::CreateDrawing: {
@@ -551,9 +555,7 @@ class SimpleHandler : public CefClient,
     bool m_DrawingDone = false;
     bool m_DrawingResult = false;
 
-    std::mutex m_RenderMutex;
-    std::condition_variable m_RenderCv;
-    bool m_RenderDone = false;
+    bool m_FirstRender = true;
   };
 
   class CGpuPipeServer : public advancedfx::interop::CPipeServer {
