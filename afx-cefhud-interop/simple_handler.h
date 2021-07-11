@@ -18,6 +18,7 @@
 #include <set>
 #include <map>
 #include <list>
+#include <queue>
 
 #include <mutex>
 #include <condition_variable>
@@ -297,8 +298,7 @@ class SimpleHandler : public CefClient,
 
     int GetHeight() { return m_Owner->Height; }
 
-    void OnRenderDone(HANDLE shared_handle) {
-
+    void OnRenderDone(HANDLE shared_handle) {      
     }
 
     /**
@@ -306,6 +306,7 @@ class SimpleHandler : public CefClient,
      */
     bool OnAfterClear(void* share_handle) {
       std::unique_lock<std::mutex> lock2(m_DrawingMutex);
+
       m_DrawingDone = false;
 
       {
@@ -319,6 +320,8 @@ class SimpleHandler : public CefClient,
       if (!m_DrawingDone)
         m_DrawingCv.wait(lock2, [this] { return m_DrawingDone; });
 
+      m_Cleared = true;
+
       return m_DrawingResult;
     }
 
@@ -327,6 +330,11 @@ class SimpleHandler : public CefClient,
      */
     bool OnAfterRender(void* share_handle) {
       std::unique_lock<std::mutex> lock2(m_DrawingMutex);
+      if (!m_Cleared)
+        return false;
+
+      m_Cleared = false;
+
       m_DrawingDone = false;
 
       {
@@ -447,6 +455,9 @@ class SimpleHandler : public CefClient,
               (advancedfx::interop::HostMessage)ReadInt32();
           switch (message) {
             case advancedfx::interop::HostMessage::RenderFrame: {
+              std::unique_lock<std::mutex> lock2(m_DrawingMutex);
+
+
               int width = ReadInt32();
               int height = ReadInt32();
 
@@ -458,7 +469,7 @@ class SimpleHandler : public CefClient,
                 m_Owner->Browser->GetHost()->WasResized();
               }
 
-              m_Owner->Browser->GetHost()->SendExternalBeginFrame();
+             m_Owner->Browser->GetHost()->SendExternalBeginFrame();
             } break;
             case advancedfx::interop::HostMessage::CreateDrawing: {
               std::string argUrl;
@@ -556,6 +567,8 @@ class SimpleHandler : public CefClient,
     bool m_DrawingResult = false;
 
     bool m_FirstRender = true;
+
+    bool m_Cleared = false;
   };
 
   class CGpuPipeServer : public advancedfx::interop::CPipeServer {
