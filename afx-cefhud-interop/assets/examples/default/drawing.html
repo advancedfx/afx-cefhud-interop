@@ -152,7 +152,7 @@ function AfxDrawingInterop(interop,args) {
 		"onHudEnd": async function(frameCount, pass){
 			this.elIndicator.classList.toggle("white",(frameCount % 2) == 0);
 			
-			console.log(frameCount+", "+pass);
+			//console.log(frameCount+", "+pass);
 			await self.renderScreen(frameCount, pass, self.renderInfo.view.x, self.renderInfo.view.y, self.renderInfo.view.width, self.renderInfo.view.height);
 		}
 	};
@@ -636,7 +636,7 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 	self.lastRender = false;
 	
 	let cmp = frameCount - clientFrameCount;
-	console.log(cmp+" "+hasLastRender);
+	//console.log(cmp+" "+hasLastRender);
 	if(hasLastRender) cmp -= 1;
 	if(0 == cmp) cmp = pass - clientPass;
 		
@@ -672,7 +672,7 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 			self.vertexDeclarations["pos3_uv2"] = refVertexDeclaration[0];
 		}
 	
-		console.log("doPaintGameToCef BEGIN");
+		//console.log("doPaintGameToCef BEGIN");
 	
 		if(rootTextureHandle.invalid) throw Utils.toSoftError(new Error("rootTextureHandle.invalid"));
 
@@ -739,14 +739,14 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 
 		if(cefTextureSuraceLevel0Ref[0]) await Utils.toPromise(cefTextureSuraceLevel0Ref[0], "release");
 		
-		console.log("doPaintGameToCef END");
+		//console.log("doPaintGameToCef END");
 		
 		return true;
 	}
 	
 	async function onAfterRender(cefTextureHandle,x,y,width,height) {
 	
-		console.log("doPaintCefToGame BEGIN");
+		//console.log("doPaintCefToGame BEGIN");
 
 		if(cefTextureHandle.invalid) throw Utils.toSoftError(new Error("cefTextureHandle.invalid"));
 
@@ -775,7 +775,7 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 		
 		await Utils.toPromise(self.interop, "waitForClientGpu");
 		
-		console.log("doPaintCefToGame END");
+		//console.log("doPaintCefToGame END");
 		
 		//
 	
