@@ -79,6 +79,12 @@ class SimpleHandler : public CefClient,
        OnRenderDone(browserId, shared_handle);
    }
 
+     virtual bool GetScreenInfo(CefRefPtr<CefBrowser> browser,
+                              CefScreenInfo& screen_info) OVERRIDE {
+     m_NextBrowserId = browser->GetIdentifier();
+     return false;
+   }
+
   virtual void GetViewRect(CefRefPtr<CefBrowser> browser,
                            CefRect& rect) OVERRIDE;
 
@@ -638,17 +644,17 @@ class SimpleHandler : public CefClient,
                } break;
                case advancedfx::interop::HostGpuMessage::OnAfterClear: {
                  HANDLE sharedHandle = ReadHandle();
-                 INT32 browserId = ReadInt32();
-                 bool bResult =
-                     m_Host->m_Host->OnAfterClear(browserId, sharedHandle);
+                 ReadInt32();
+                 bool bResult = m_Host->m_Host->OnAfterClear(
+                     m_Host->m_Host->m_NextBrowserId, sharedHandle);
                  WriteBoolean(bResult);
                  Flush();
                } break;
                case advancedfx::interop::HostGpuMessage::OnAfterRender: {
                  HANDLE sharedHandle = ReadHandle();
-                 INT32 browserId = ReadInt32();
-                 bool bResult =
-                     m_Host->m_Host->OnAfterRender(browserId, sharedHandle);
+                 ReadInt32();
+                 bool bResult = m_Host->m_Host->OnAfterRender(
+                     m_Host->m_Host->m_NextBrowserId, sharedHandle);
                  WriteBoolean(bResult);
                  Flush();
                } break;

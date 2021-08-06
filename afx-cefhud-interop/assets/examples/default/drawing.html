@@ -624,14 +624,6 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 	
 	let {frameCount: clientFrameCount, pass: clientPass} = await Utils.toPromise(self.interop, "pumpBegin");
 	
-	let frameGap = frameCount - Utils.coalesce(self.lastFrameCount, frameCount - 1);
-	
-	self.lastFrameCount = frameCount;
-	
-	if(frameGap != 1) {
-		await Utils.toPromise(self.interop, "pumpSkip");
-	}
-	
 	let cmp = frameCount - clientFrameCount;
 	if(0 == cmp) cmp = pass - clientPass;
 		
@@ -782,16 +774,23 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 	// 1) CEF can spit out intermediate frames (e.g. when GIFs are animating).
 	// 2) CEF spits out the previous frame, not the current frame.
 	
-	let animationFrame = false;
-	let rendered = false;
-	window.requestAnimationFrame(function(timestamp){
-		animationFrame = true;
-	});
+	let animationFrame = 0;
+	let resultShareHandle;
+	function onAnimationFrame(timestamp) {
+		++animationFrame;
+		if(animationFrame < 2)
+			window.requestAnimationFrame(onAnimationFrame);
+	}
+	window.requestAnimationFrame(onAnimationFrame);
 	
-	while(!rendered) {
-		try {
+	try {
+		while(animationFrame < 2) {
 			await Utils.toPromise(self.interop, "cefBeginFrame", width, height, {
 				"onAfterClear": function(resolve,reject,shareHandle) {
+					if(0 == animationFrame) {
+						resolve(false);
+						return;
+					}
 					onAfterClear(shareHandle,width,height).then(()=>{
 						resolve(true);
 					}).catch((e)=>{
@@ -799,26 +798,22 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 					});
 				}
 				, "onAfterRender": function(resolve,reject,shareHandle) {
-					if(animationFrame) {
-						rendered = true;
-						onAfterRender(shareHandle,x,y,width,height).then(()=>{
-							resolve(true);
-						}).catch((e)=>{
-							reject(e);
-						});
-					} else
-						resolve(false);
+					resultShareHandle = shareHandle;
+					resolve(false);
 				}
 			});
-		} catch(e) {
-			console.log(e);
-			if(e && e.soft) {
-				Utils.logError(e);
-				await Utils.toPromise(self.interop, "pumpFinish");
-				return;
-			}
-			throw e;
 		}
+		
+		await onAfterRender(resultShareHandle,x,y,width,height);
+	
+	} catch(e) {
+		console.log(e);
+		if(e && e.soft) {
+			Utils.logError(e);
+			await Utils.toPromise(self.interop, "pumpFinish");
+			return;
+		}
+		throw e;
 	}
 	
 	await Utils.toPromise(self.interop, "pumpFinish");

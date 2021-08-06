@@ -265,7 +265,7 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     command_line->AppendSwitch("disable-hang-monitor");
 
     command_line->AppendSwitch("disable-frame-rate-limit");
-    command_line->AppendSwitchWithValue("deadline-to-synchronize-surfaces", "0");
+    //command_line->AppendSwitchWithValue("deadline-to-synchronize-surfaces", "0");
 
     //command_line->AppendSwitch("disable-threaded-animation");
     //command_line->AppendSwitch("disable-threaded-scrolling");
@@ -280,4 +280,9 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     //command_line->AppendSwitch("enable-main-frame-before-activation");
 
     command_line->AppendSwitch("disable-backgrounding-occluded-windows");
+    command_line->AppendSwitch("disable-renderer-backgrounding");
+
+    command_line->AppendSwitch("disable-new-content-rendering-timeout");
+
+    command_line->AppendSwitch("headless");
 }

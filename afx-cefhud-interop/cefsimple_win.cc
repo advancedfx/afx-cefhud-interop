@@ -154,7 +154,6 @@ const char* g_szPixelShaderCode =
     {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12,
      D3D11_INPUT_PER_VERTEX_DATA, 0}};
 
-/* BUGGED DON'T USE.
 bool AfxWaitForGPU(ID3D11DeviceContext* pCtx) {
   if(!g_pDevice) return false;
 
@@ -172,7 +171,6 @@ bool AfxWaitForGPU(ID3D11DeviceContext* pCtx) {
 
 	return bOk;
 }
-*/
 
 class CGpuPipeClient : public advancedfx::interop::CPipeClient 
 {
@@ -254,7 +252,7 @@ _In_ ID3D11Resource* pSrcResource) {
       it->second.FirstClear = true;
       ++it->second.FlushCount;
 
-      // AfxWaitForGPU(This);
+      AfxWaitForGPU(This);
 
       try {
         g_GpuPipeClient.WriteInt32(
@@ -319,6 +317,8 @@ My_ClearRenderTargetView(ID3D11DeviceContext* This,
 
         if (pInputLayout && pVertexBuffer && pVertexShader && pPixelShader) {
           bool paintFromTempGameTexture = false;
+
+          AfxWaitForGPU(This);
 
           try {
             std::unique_lock<std::mutex> lock(g_GpuPipeClientMutex);

@@ -376,18 +376,16 @@ AfxEngineInterop.prototype.connect = async function() {
 		doConnect()
 		.then(()=>{
 			function pumper() {
-				if(self.connected) {
-					Utils.toPromise(self.interop, "pump", self.pumpEvents).then(()=>{
-						queueMicrotask(pumper);
-					}).catch((e) => {
-						Utils.logError(e);
+				Utils.toPromise(self.interop, "pump", self.pumpEvents).then(()=>{
+					queueMicrotask(pumper);
+				}).catch((e) => {
+					Utils.logError(e);
 
-						if(!(e && e.soft))
-							return Utils.toPromise(self, "disconnect");
+					if(!(e && e.soft))
+						return Utils.toPromise(self, "disconnect");
 
-						queueMicrotask(pumper);
-					});
-				}
+					queueMicrotask(pumper);
+				});
 			}
 
 			pumper();
@@ -396,7 +394,7 @@ AfxEngineInterop.prototype.connect = async function() {
 }
 
 AfxEngineInterop.prototype.disconnect = async function() {
-	
+
 	this.interop.cancel();
 	this.messagePromises = {};
 	this.pumpPromise = Promise.resolve();

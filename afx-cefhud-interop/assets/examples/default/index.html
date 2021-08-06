@@ -83,10 +83,10 @@ function AfxInterop(interop, args) {
 
 			await this.reconnect();
 		},
-		"drawingConnected": async function(engineInteropId) {
+		"drawingConnected": async function(drawingInteropId) {
 			this.elDrawingStatus.innerText = "connected";
 		},
-		"drawingDisconnected": async function(engineInteropId) {
+		"drawingDisconnected": async function(drawingInteropId) {
 			this.elDrawingStatus.innerText = "DISCONNECTED";
 		}
 	};

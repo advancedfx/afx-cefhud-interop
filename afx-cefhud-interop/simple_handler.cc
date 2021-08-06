@@ -186,14 +186,11 @@ void SimpleHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
   auto it = m_Browsers.find(browser->GetIdentifier());
   if (it != m_Browsers.end()) {
     if (CHostPipeServerConnectionThread* connection = it->second.Connection) {
-      m_NextBrowserId = browser->GetIdentifier();
-
       rect.Set(0, 0, connection->GetWidth(), connection->GetHeight());
       return;
     }
   }
 
-  m_NextBrowserId = 0;
   rect.Set(0, 0, 640, 480);
 }
 
