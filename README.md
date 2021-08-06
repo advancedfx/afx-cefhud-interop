@@ -1,18 +1,5 @@
 # afx-cefhud-interop
 
-## Known problems:
-
-### mat_queue_mode
-
-In CS:GO queued rendering needs to be enabled (usually the case for `mat_queue_mode -1` on all modern CPUs, otherwise use `mat_queue_mode 2`).
-
-The reason is that when rendering a new frame Chrome only pushes out the previous frame, so we get a chicken egg problem, that we can only solve that way without rendering twice at the moment.
-
-### Freezes when logging is enabled
-
-Especially when using e.g. animated GIFs any log output can cause the CEF RENDERER (JavaScript) thread aync queue to freeze when rendering a frame.
-It is thus recommened to disable logging in production (--disable-logging) and to limit it to a minimum when debugging (e.g. "--enable-logging" "--log-severity=error").
-
 ## FAQ
 
 ### Can I use this for browsing the internet?
