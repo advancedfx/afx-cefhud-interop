@@ -230,6 +230,48 @@ void STDMETHODCALLTYPE My_OMSetRenderTargets(
                            pDepthStencilView);
 }
 
+       
+typedef void(STDMETHODCALLTYPE* CopyResource_t)(
+    ID3D11DeviceContext* This,
+    /* [annotation] */
+    _In_ ID3D11Resource* pDstResource,
+    /* [annotation] */
+    _In_ ID3D11Resource* pSrcResource);
+
+CopyResource_t g_Org_CopyResource;
+
+void STDMETHODCALLTYPE My_CopyResource(ID3D11DeviceContext* This,
+/* [annotation] */
+_In_ ID3D11Resource* pDstResource,
+/* [annotation] */
+_In_ ID3D11Resource* pSrcResource) {
+
+  g_Org_CopyResource(This, pDstResource, pSrcResource);
+
+  if (pSrcResource) {
+    auto it = g_Textures.find((ID3D11Texture2D*)pSrcResource);
+    if (it != g_Textures.end()) {
+      it->second.FirstClear = true;
+      ++it->second.FlushCount;
+
+      // AfxWaitForGPU(This);
+
+      try {
+        g_GpuPipeClient.WriteInt32(
+            (INT32)advancedfx::interop::HostGpuMessage::OnAfterRender);
+        g_GpuPipeClient.WriteHandle(it->second.ShareHandle);
+        g_GpuPipeClient.WriteInt32(it->second.ActiveBrowser);
+        g_GpuPipeClient.Flush();
+
+        g_GpuPipeClient.ReadBoolean();
+      } catch (const std::exception& e) {
+        DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
+                    << e.what();
+      }
+    }
+  }
+}
+
 void STDMETHODCALLTYPE My_Flush(ID3D11DeviceContext* This) {
   g_Org_Flush(This);
 
@@ -242,26 +284,6 @@ void STDMETHODCALLTYPE My_Flush(ID3D11DeviceContext* This) {
       oldRenderTarget[0]->GetResource(&resource);
 
       if (resource) {
-        auto it = g_Textures.find((ID3D11Texture2D*)resource);
-        if (it != g_Textures.end()) {
-          it->second.FirstClear = true;
-          ++it->second.FlushCount;
-
-          // AfxWaitForGPU(This);
-
-          try {
-            g_GpuPipeClient.WriteInt32(
-                (INT32)advancedfx::interop::HostGpuMessage::OnAfterRender);
-            g_GpuPipeClient.WriteHandle(it->second.ShareHandle);
-            g_GpuPipeClient.WriteInt32(it->second.ActiveBrowser);
-            g_GpuPipeClient.Flush();
-
-            g_GpuPipeClient.ReadBoolean();
-          } catch (const std::exception& e) {
-            DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
-                        << e.what();
-          }
-        }
 
         resource->Release();
       }
@@ -896,6 +918,9 @@ MyD3D11CreateDevice(_In_opt_ IDXGIAdapter* pAdapter,
           (OMSetRenderTargets_t) *
           (void**)((*(char**)(pContext)) + sizeof(void*) * 33);
 
+     g_Org_CopyResource =
+         (CopyResource_t) *
+         (void**)((*(char**)(pContext)) + sizeof(void*) * 47);
 
      g_Org_ClearRenderTargetView =
           (ClearRenderTargetView_t) *
@@ -910,6 +935,7 @@ MyD3D11CreateDevice(_In_opt_ IDXGIAdapter* pAdapter,
       DetourTransactionBegin();
       DetourUpdateThread(GetCurrentThread());
       DetourAttach(&(PVOID&)g_Org_OMSetRenderTargets, My_OMSetRenderTargets);
+      DetourAttach(&(PVOID&)g_Org_CopyResource, My_CopyResource);
       DetourAttach(&(PVOID&)g_Org_ClearRenderTargetView,
                    My_ClearRenderTargetView);
       DetourAttach(&(PVOID&)g_Org_Flush,

@@ -1398,6 +1398,31 @@ class CAfxCallback : public CefBaseRefCounted {
   IMPLEMENT_REFCOUNTING(CAfxCallback);
 };
 
+ class CAfxCallbackFn : public CefV8Handler {
+  IMPLEMENT_REFCOUNTING(CAfxCallbackFn);
+
+ public:
+  typedef std::function<bool(const CefString& name,
+                             CefRefPtr<CefV8Value> object,
+                             const CefV8ValueList& arguments,
+                             CefRefPtr<CefV8Value>& retval,
+                             CefString& exception)>
+      fp_t;
+
+  CAfxCallbackFn(const fp_t& fn) : m_Fn(fn) {}
+  CAfxCallbackFn(fp_t&& op) : m_Fn(std::move(op)) {}
+
+  virtual bool Execute(const CefString& name,
+                       CefRefPtr<CefV8Value> object,
+                       const CefV8ValueList& arguments,
+                       CefRefPtr<CefV8Value>& retval,
+                       CefString& exception) override {
+    return m_Fn(name,object,arguments,retval, exception);
+  }
+
+ private:
+     fp_t m_Fn;
+};
 
 class CAfxObject;
 
@@ -8657,34 +8682,9 @@ CAfxObject::AddFunction(
           if (3 <= arguments.size() && arguments[0]->IsFunction() &&
               arguments[1]->IsFunction()) {
         self->m_PipeQueue.Queue(
-            [self, fn_resolve = arguments[0], fn_reject = arguments[1], filter = new CAfxValue(arguments[2]),
-                                 obj = new CAfxValue(4 <= arguments.size() ? arguments[3] : nullptr)]() {
+            [self, fn_resolve = arguments[0], fn_reject = arguments[1], filter = new CAfxValue(arguments[2])]() {
 
-          int errorLine = __LINE__;
-
-          if (self->GetConnected() &&
-              0 == (errorLine = self->DoPump(filter, obj))) {
-              CefPostTask(TID_RENDERER, new CAfxTask([self, fn_resolve]() {
-                          if (nullptr == self->m_Context)
-                            return;
-
-                            self->m_Context->Enter();
-                            fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
-                            self->m_Context->Exit();
-                          }));            
-          } else {
-              CefPostTask(TID_RENDERER,
-                        new CAfxTask([self, fn_reject, errorLine]() {
-                          if (nullptr == self->m_Context)
-                            return;
-
-                            self->m_Context->Enter();
-                            CefV8ValueList args;
-                            args.push_back(CefV8Value::CreateString("AfxInterop.cpp:"+std::to_string(errorLine)));
-                            fn_reject->ExecuteFunction(NULL, args);
-                            self->m_Context->Exit();
-                          }));            
-          }
+          self->DoPump(fn_resolve, fn_reject, filter, nullptr);
         });
 
         return true;
@@ -9163,8 +9163,14 @@ private:
   float m_Rz = 0;
   float m_Fov = 90;
 
-  int DoPump(CefRefPtr<CAfxValue> filter, CefRefPtr<CAfxValue> obj) {
+  void DoPump(CefRefPtr<CefV8Value> fn_resolve,
+              CefRefPtr<CefV8Value> fn_reject,
+              CefRefPtr<CAfxValue> filter,
+              CefRefPtr<CAfxValue> obj) {
     int errorLine = 0;
+
+    if (!GetConnected())
+      AFX_GOTO_ERROR
 
     switch (m_PumpResumeAt) {
       case 0:
@@ -9191,10 +9197,9 @@ private:
 
       if (!m_PipeServer.WriteInt32(m_ServerVersion.GetMajor()))
         AFX_GOTO_ERROR
-      
+
       if (!m_PipeServer.Flush())
         AFX_GOTO_ERROR
-
 
       bool versionSupported;
       if (!m_PipeServer.ReadBoolean(versionSupported))
@@ -9203,7 +9208,7 @@ private:
       if (!versionSupported)
         AFX_GOTO_ERROR
 
-      // Supply server info required by client:
+        // Supply server info required by client:
 
 #if _WIN64
       if (!m_PipeServer.WriteBoolean(true))
@@ -9257,7 +9262,7 @@ private:
       m_ClientVersion.Set(clientVersion[0], clientVersion[1], clientVersion[2],
                           clientVersion[3]);
 
-      if (m_ClientVersion < CVersion(7,0,0,0)) {
+      if (m_ClientVersion < CVersion(7, 0, 0, 0)) {
         if (!m_PipeServer.WriteBoolean(false))
           AFX_GOTO_ERROR
 
@@ -9281,557 +9286,668 @@ private:
       auto onNewConnection = GetPumpFilter(filter, "onNewConnection");
       if (nullptr != onNewConnection) {
         m_PumpResumeAt = 1;
-        CefPostTask(TID_RENDERER, new CAfxTask([this, onNewConnection]() {
+        CefPostTask(TID_RENDERER, new CAfxTask([this, onNewConnection,
+                                                fn_resolve, fn_reject]() {
                       if (nullptr == m_Context)
                         return;
                       m_Context->Enter();
-                      onNewConnection->ExecuteFunction(nullptr, CefV8ValueList());
+                      CefV8ValueList args;
+                      args.push_back(fn_resolve);
+                      args.push_back(fn_reject);
+                      onNewConnection->ExecuteFunction(nullptr, args);
                       m_Context->Exit();
                     }));
-        return 0;
+        return;
       }
     }
 
-    goto __1;
+    m_PumpResumeAt = 1;
+    goto __resolve;
   }
- 
-  __1: {
-      UINT32 engineMessage;
-      if (!m_PipeServer.ReadUInt32(engineMessage))
-        AFX_GOTO_ERROR
 
-      switch ((EngineMessage)engineMessage) {
-        case EngineMessage::BeforeFrameStart: {
-          // Read incoming commands from client:
-          {
-            UINT32 commandIndex = 0;
-            UINT32 commandCount;
-            if (!m_PipeServer.ReadCompressedUInt32(commandCount))
+  __1 : {
+    UINT32 engineMessage;
+    if (!m_PipeServer.ReadUInt32(engineMessage))
+      AFX_GOTO_ERROR
+
+    switch ((EngineMessage)engineMessage) {
+      case EngineMessage::BeforeFrameStart: {
+        // Read incoming commands from client:
+        {
+          UINT32 commandIndex = 0;
+          UINT32 commandCount;
+          if (!m_PipeServer.ReadCompressedUInt32(commandCount))
+            AFX_GOTO_ERROR
+
+          CefRefPtr<CAfxValue> objCommands =
+              CAfxValue::CreateArray((int)commandCount);
+
+          while (0 < commandCount) {
+            UINT32 argIndex = 0;
+            UINT32 argCount;
+            if (!m_PipeServer.ReadCompressedUInt32(argCount))
               AFX_GOTO_ERROR
 
-            CefRefPtr<CAfxValue> objCommands = CAfxValue::CreateArray((int)commandCount);
+            CefRefPtr<CAfxValue> objArgs =
+                CAfxValue::CreateArray((int)argCount);
 
-            while (0 < commandCount) {
-              UINT32 argIndex = 0;
-              UINT32 argCount;
-              if (!m_PipeServer.ReadCompressedUInt32(argCount))
+            objCommands->SetArrayElement((int)commandIndex, objArgs);
+
+            while (0 < argCount) {
+              std::string str;
+
+              if (!m_PipeServer.ReadStringUTF8(str))
                 AFX_GOTO_ERROR
 
-              CefRefPtr<CAfxValue> objArgs =
-                  CAfxValue::CreateArray((int)argCount);
+              objArgs->SetArrayElement((int)argIndex,
+                                       CAfxValue::CreateString(str));
 
-              objCommands->SetArrayElement((int)commandIndex, objArgs);
-
-              while (0 < argCount) {
-                std::string str;
-
-                if (!m_PipeServer.ReadStringUTF8(str))
-                  AFX_GOTO_ERROR
-
-                objArgs->SetArrayElement((int)argIndex,
-                                         CAfxValue::CreateString(str));
-
-                --argCount;
-                ++argIndex;
-              }
-
-              --commandCount;
-              ++commandIndex;
+              --argCount;
+              ++argIndex;
             }
 
-            auto onCommands = GetPumpFilter(filter, "onCommands");
-            if (nullptr != onCommands) {
-              m_PumpResumeAt = 2;
-              CefPostTask(TID_RENDERER,
-                          new CAfxTask([this, onCommands, objCommands]() {
-                            if (nullptr == m_Context)
-                              return;
-
-                            m_Context->Enter();
-                            CefV8ValueList args;
-                            args.push_back(objCommands->ToV8Value());
-                            onCommands->ExecuteFunction(nullptr, args);
-                            m_Context->Exit();
-                          }));
-              return 0;
-            }
-          }
-          if (!m_PipeServer.WriteCompressedUInt32((UINT32)(0)))
-            AFX_GOTO_ERROR
-        
-          if (!m_PipeServer.Flush())
-              AFX_GOTO_ERROR
-
-          goto __1;     
-        } break;
-
-        case EngineMessage::BeforeFrameRenderStart: {
-          if (!WriteGameEventSettings(true, filter))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.Flush())
-            AFX_GOTO_ERROR
-
-          goto __1;
-        } break;
-
-        case EngineMessage::AfterFrameRenderStart: {
-          if (!m_HandleCalcCallbacks.BatchUpdateRequest(m_PipeServer))
-            AFX_GOTO_ERROR
-          if (!m_VecAngCalcCallbacks.BatchUpdateRequest(m_PipeServer))
-            AFX_GOTO_ERROR
-          if (!m_CamCalcCallbacks.BatchUpdateRequest(m_PipeServer))
-            AFX_GOTO_ERROR
-          if (!m_FovCalcCallbacks.BatchUpdateRequest(m_PipeServer))
-            AFX_GOTO_ERROR
-          if (!m_BoolCalcCallbacks.BatchUpdateRequest(m_PipeServer))
-            AFX_GOTO_ERROR
-          if (!m_IntCalcCallbacks.BatchUpdateRequest(m_PipeServer))
-            AFX_GOTO_ERROR
-
-          if (!m_PipeServer.Flush())
-            AFX_GOTO_ERROR
-
-          if (!m_HandleCalcCallbacks.BatchUpdateResult(this, m_PipeServer))
-            AFX_GOTO_ERROR
-          if (!m_VecAngCalcCallbacks.BatchUpdateResult(this, m_PipeServer))
-            AFX_GOTO_ERROR
-          if (!m_CamCalcCallbacks.BatchUpdateResult(this, m_PipeServer))
-            AFX_GOTO_ERROR
-          if (!m_FovCalcCallbacks.BatchUpdateResult(this, m_PipeServer))
-            AFX_GOTO_ERROR
-          if (!m_BoolCalcCallbacks.BatchUpdateResult(this, m_PipeServer))
-            AFX_GOTO_ERROR
-          if (!m_IntCalcCallbacks.BatchUpdateResult(this, m_PipeServer))
-            AFX_GOTO_ERROR
-
-          goto __1;
-        } break;
-
-        case EngineMessage::OnRenderView: {
-          struct RenderInfo_s renderInfo;
-
-          if (!m_PipeServer.ReadInt32(renderInfo.FrameCount))
-            AFX_GOTO_ERROR
-
-          if (!m_PipeServer.ReadSingle(renderInfo.AbsoluteFrameTime))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.CurTime))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.FrameTime))
-            AFX_GOTO_ERROR
-
-          if (!m_PipeServer.ReadInt32(renderInfo.View.X))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadInt32(renderInfo.View.Y))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadInt32(renderInfo.View.Width))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadInt32(renderInfo.View.Height))
-            AFX_GOTO_ERROR
-
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M00))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M01))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M02))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M03))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M10))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M11))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M12))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M13))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M20))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M21))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M22))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M23))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M30))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M31))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M32))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M33))
-            AFX_GOTO_ERROR
-
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M00))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M01))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M02))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M03))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M10))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M11))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M12))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M13))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M20))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M21))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M22))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M23))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M30))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M31))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M32))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M33))
-            AFX_GOTO_ERROR
-
-          auto onRenderViewBegin = GetPumpFilter(filter, "onRenderViewBegin");
-          if (nullptr != onRenderViewBegin) {
-            m_PumpResumeAt = 3;
-            CefPostTask(TID_RENDERER,
-                new CAfxTask([this, onRenderViewBegin,
-                              renderInfo = CreateAfxRenderInfo(renderInfo)]() {
-                  if (nullptr == m_Context)
-                    return;
-
-                          m_Context->Enter();
-                          CefV8ValueList args;
-                          args.push_back(renderInfo->ToV8Value());
-                          onRenderViewBegin->ExecuteFunction(nullptr, args);
-                          m_Context->Exit();
-                        }));
-            return 0;
+            --commandCount;
+            ++commandIndex;
           }
 
-           goto __3;
-        } break;
-
-        case EngineMessage::OnRenderViewEnd: {
-          auto onRenderViewEnd = GetPumpFilter(filter, "onRenderViewEnd");
-          if (nullptr != onRenderViewEnd) {
-            m_PumpResumeAt = 4;
-            CefPostTask(TID_RENDERER, new CAfxTask([this, onRenderViewEnd]() {
-                          if (nullptr == m_Context)
-                            return;
-
-                          m_Context->Enter();
-                          onRenderViewEnd->ExecuteFunction(nullptr,
-                                                           CefV8ValueList());
-                          m_Context->Exit();
-                        }));
-            return 0;
-          }
-        } goto __4;
-
-        case EngineMessage::BeforeHud: {
-          auto onHudBegin = GetPumpFilter(filter, "onRenderViewHudBegin");
-          if (nullptr != onHudBegin) {
-            m_PumpResumeAt = 1;
-            CefPostTask(TID_RENDERER, new CAfxTask([this, onHudBegin]() {
-                          if (nullptr == m_Context)
-                            return;
-
-                          m_Context->Enter();
-                          onHudBegin->ExecuteFunction(nullptr, CefV8ValueList());
-                          m_Context->Exit();
-                        }));
-            return 0;
-          }
-        } goto __1;
-
-        case EngineMessage::AfterHud: {
-          auto onHudEnd = GetPumpFilter(filter, "onRenderViewHudEnd");
-          if (nullptr != onHudEnd) {
-            m_PumpResumeAt = 1;
-            CefPostTask(TID_RENDERER, new CAfxTask([this, onHudEnd]() {
-                          if (nullptr == m_Context)
-                            return;
-
-                          m_Context->Enter();
-                          onHudEnd->ExecuteFunction(nullptr, CefV8ValueList());
-                          m_Context->Exit();
-                        }));
-            return 0;
-          }
-        } goto __1;
-
-        case EngineMessage::BeforeTranslucentShadow: {
-          bool bReturn;
-          if (!DoRenderPass(filter, "onRenderViewBeforeTranslucentShadow", bReturn))
-            AFX_GOTO_ERROR
-          if (bReturn)
-            return 0;
-        }
-          goto __1;
-        case EngineMessage::AfterTranslucentShadow: {
-          bool bReturn;
-          if (!DoRenderPass(filter, "onRenderViewAfterTranslucentShadow", bReturn))
-            AFX_GOTO_ERROR
-          if (bReturn)
-            return 0;
-        }
-          goto __1;
-        case EngineMessage::BeforeTranslucent: {
-          bool bReturn;
-          if (!DoRenderPass(filter, "onRenderViewBeforeTranslucent", bReturn))
-            AFX_GOTO_ERROR
-          if (bReturn)
-            return 0;
-        }
-          goto __1;
-        case EngineMessage::AfterTranslucent: {
-          bool bReturn;
-          if (!DoRenderPass(filter, "onRenderViewAfterTranslucent", bReturn))
-            AFX_GOTO_ERROR
-          if (bReturn)
-            return 0;
-        }
-          goto __1;
-
-        case EngineMessage::OnViewOverride: {
-          if (!m_PipeServer.ReadSingle(m_Tx))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(m_Ty))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(m_Tz))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(m_Rx))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(m_Ry))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(m_Rz))
-            AFX_GOTO_ERROR
-          if (!m_PipeServer.ReadSingle(m_Fov))
-            AFX_GOTO_ERROR
-
-          auto onViewOverride = GetPumpFilter(filter, "onViewOverride");
-          if (nullptr != onViewOverride) {
-            m_PumpResumeAt = 5;
-            CefPostTask(TID_RENDERER,
-                        new CAfxTask([this, onViewOverride, tx = m_Tx,
-                                      ty = m_Ty, tz = m_Tz, rx = m_Rx,
-                                      ry = m_Ry, rz = m_Rz, fov = m_Fov]() {
-                          if (nullptr == m_Context)
-                            return;
-
-                          m_Context->Enter();
-
-                        CefV8ValueList args;
-                        CefRefPtr<CefV8Value> obj2 =
-                              CefV8Value::CreateObject(nullptr, nullptr);
-
-                          obj2->SetValue("tX", CefV8Value::CreateDouble(tx),
-                                         V8_PROPERTY_ATTRIBUTE_NONE);
-                          obj2->SetValue("tY", CefV8Value::CreateDouble(ty),
-                                         V8_PROPERTY_ATTRIBUTE_NONE);
-                          obj2->SetValue("tZ", CefV8Value::CreateDouble(tz),
-                                         V8_PROPERTY_ATTRIBUTE_NONE);
-                          obj2->SetValue("rX", CefV8Value::CreateDouble(rx),
-                                         V8_PROPERTY_ATTRIBUTE_NONE);
-                          obj2->SetValue("rY", CefV8Value::CreateDouble(ry),
-                                         V8_PROPERTY_ATTRIBUTE_NONE);
-                          obj2->SetValue("rZ", CefV8Value::CreateDouble(rz),
-                                         V8_PROPERTY_ATTRIBUTE_NONE);
-                          obj2->SetValue("fov", CefV8Value::CreateDouble(fov),
-                                         V8_PROPERTY_ATTRIBUTE_NONE);
-
-                          args.push_back(obj2);
-
-                          onViewOverride->ExecuteFunction(nullptr, args);
-                          m_Context->Exit();
-                        }));
-            return 0;
-          }
-
-          if (!m_PipeServer.WriteBoolean(false))
-            AFX_GOTO_ERROR
-
-          if (!m_PipeServer.Flush())
-              AFX_GOTO_ERROR  // client is waiting
-
-          goto __1;
-        }
-
-        case EngineMessage::GameEvent: {
-          bool bReturn = false;
-          m_PumpResumeAt = 1;
-          if (!ReadGameEvent(filter, bReturn))
-            AFX_GOTO_ERROR
-          if (bReturn) {
-            return 0;
-          }
-        } goto __1;
-      }
-    }
-
-    AFX_GOTO_ERROR
-
-__2: {
-      int len = nullptr != obj && obj->IsArray() ? obj->GetArraySize() : 0;
-
-    if (!m_PipeServer.WriteCompressedUInt32((UINT32)(len)))
-      AFX_GOTO_ERROR
-
-    for(int i = 0; i < len; ++i) {
-      auto elem = obj->GetArrayElement(i);
-      if (nullptr != elem && elem->IsString()) {
-        if (!m_PipeServer.WriteStringUTF8(elem->GetString()))
-          AFX_GOTO_ERROR
-      }
-    }
-
-    if (!m_PipeServer.Flush())
-      AFX_GOTO_ERROR
-
-    goto __1;
-}
-
-__3 : {
-  bool outBeforeTranslucentShadow =
-      IsPumpFilter(filter, "onRenderViewBeforeTranslucentShadow");
-  bool outAfterTranslucentShadow =
-      IsPumpFilter(filter, "onRenderViewAfterTranslucentShadow");
-  bool outBeforeTranslucent =
-      IsPumpFilter(filter, "onRenderViewBeforeTranslucent");
-  bool outAfterTranslucent =
-      IsPumpFilter(filter, "onRenderViewAfterTranslucent");
-  bool outBeforeHud =
-      IsPumpFilter(filter, "onRenderViewHudBegin");
-  bool outAfterHud = IsPumpFilter(filter, "onRenderViewHudEnd");
-  bool outAfterRenderView =
-      IsPumpFilter(filter, "onRenderViewEnd");
-
-  if (!m_PipeServer.WriteBoolean(outBeforeTranslucentShadow))
-    AFX_GOTO_ERROR
-  if (!m_PipeServer.WriteBoolean(outAfterTranslucentShadow))
-    AFX_GOTO_ERROR
-  if (!m_PipeServer.WriteBoolean(outBeforeTranslucent))
-    AFX_GOTO_ERROR
-  if (!m_PipeServer.WriteBoolean(outAfterTranslucent))
-    AFX_GOTO_ERROR
-  if (!m_PipeServer.WriteBoolean(outBeforeHud))
-    AFX_GOTO_ERROR
-  if (!m_PipeServer.WriteBoolean(outAfterHud))
-    AFX_GOTO_ERROR
-  if (!m_PipeServer.WriteBoolean(outAfterRenderView))
-    AFX_GOTO_ERROR
-
-  /*bool done = !(true || outBeforeTranslucentShadow || outAfterTranslucentShadow ||
-                outBeforeTranslucent || outAfterTranslucent || outBeforeHud ||
-                outAfterHud || outAfterRenderView);
-
-  if (done)
-    goto __4;
-  */
-  goto __1;
- 
-}
-
-__4 : {
-  m_PumpResumeAt = 1;
-  auto onDone = GetPumpFilter(filter, "onDone");
-  if (nullptr != onDone) {
-    CefPostTask(TID_RENDERER, new CAfxTask([this, onDone]() {
+          auto onCommands = GetPumpFilter(filter, "onCommands");
+          if (nullptr != onCommands) {
+            m_PumpResumeAt = 2;
+            CefPostTask(
+                TID_RENDERER, new CAfxTask([this, onCommands, fn_resolve,
+                                            fn_reject, filter, objCommands]() {
                   if (nullptr == m_Context)
                     return;
 
                   m_Context->Enter();
-                  onDone->ExecuteFunction(nullptr, CefV8ValueList());
+                  CefV8ValueList args;
+                  args.push_back(CefV8Value::CreateFunction(
+                      "resolve",
+                      new CAfxCallbackFn([this, fn_resolve, fn_reject, filter](
+                                             const CefString& name,
+                                             CefRefPtr<CefV8Value> object,
+                                             const CefV8ValueList& arguments,
+                                             CefRefPtr<CefV8Value>& retval,
+                                             CefString& exception) -> bool {
+                        m_PipeQueue.Queue(
+                            [this, fn_resolve, fn_reject, filter,
+                             obj = 1 <= arguments.size()
+                                       ? CAfxValue::FromV8Value(arguments[0])
+                                       : nullptr]() {
+                              DoPump(fn_resolve, fn_reject, filter, obj);
+                            });
+                        return true;
+                      })));
+                  args.push_back(fn_reject);
+                  args.push_back(objCommands->ToV8Value());
+                  onCommands->ExecuteFunction(nullptr, args);
                   m_Context->Exit();
                 }));
-    return 0;
-  }
-  goto __1;
-}
+            return;
+          }
+        }
+        if (!m_PipeServer.WriteCompressedUInt32((UINT32)(0)))
+          AFX_GOTO_ERROR
 
-__5 : {
-      bool overriden = false;
+        if (!m_PipeServer.Flush())
+          AFX_GOTO_ERROR
 
-      if (nullptr != obj && obj->IsObject()) {
-        CefRefPtr<CAfxValue> v8Tx = obj->GetChild("tX");
-        if (nullptr != v8Tx && v8Tx->IsDouble()) {
-          m_Tx = (float)v8Tx->GetDouble();
-          overriden = true;
+        m_PumpResumeAt = 1;
+        goto __resolve;
+      } break;
+
+      case EngineMessage::BeforeFrameRenderStart: {
+        if (!WriteGameEventSettings(true, filter))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.Flush())
+          AFX_GOTO_ERROR
+
+        m_PumpResumeAt = 1;
+        goto __resolve;
+      } break;
+
+      case EngineMessage::AfterFrameRenderStart: {
+        if (!m_HandleCalcCallbacks.BatchUpdateRequest(m_PipeServer))
+          AFX_GOTO_ERROR
+        if (!m_VecAngCalcCallbacks.BatchUpdateRequest(m_PipeServer))
+          AFX_GOTO_ERROR
+        if (!m_CamCalcCallbacks.BatchUpdateRequest(m_PipeServer))
+          AFX_GOTO_ERROR
+        if (!m_FovCalcCallbacks.BatchUpdateRequest(m_PipeServer))
+          AFX_GOTO_ERROR
+        if (!m_BoolCalcCallbacks.BatchUpdateRequest(m_PipeServer))
+          AFX_GOTO_ERROR
+        if (!m_IntCalcCallbacks.BatchUpdateRequest(m_PipeServer))
+          AFX_GOTO_ERROR
+
+        if (!m_PipeServer.Flush())
+          AFX_GOTO_ERROR
+
+        if (!m_HandleCalcCallbacks.BatchUpdateResult(this, m_PipeServer))
+          AFX_GOTO_ERROR
+        if (!m_VecAngCalcCallbacks.BatchUpdateResult(this, m_PipeServer))
+          AFX_GOTO_ERROR
+        if (!m_CamCalcCallbacks.BatchUpdateResult(this, m_PipeServer))
+          AFX_GOTO_ERROR
+        if (!m_FovCalcCallbacks.BatchUpdateResult(this, m_PipeServer))
+          AFX_GOTO_ERROR
+        if (!m_BoolCalcCallbacks.BatchUpdateResult(this, m_PipeServer))
+          AFX_GOTO_ERROR
+        if (!m_IntCalcCallbacks.BatchUpdateResult(this, m_PipeServer))
+          AFX_GOTO_ERROR
+
+        m_PumpResumeAt = 1;
+        goto __resolve;
+      } break;
+
+      case EngineMessage::OnRenderView: {
+        struct RenderInfo_s renderInfo;
+
+        if (!m_PipeServer.ReadInt32(renderInfo.FrameCount))
+          AFX_GOTO_ERROR
+
+        if (!m_PipeServer.ReadSingle(renderInfo.AbsoluteFrameTime))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.CurTime))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.FrameTime))
+          AFX_GOTO_ERROR
+
+        if (!m_PipeServer.ReadInt32(renderInfo.View.X))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadInt32(renderInfo.View.Y))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadInt32(renderInfo.View.Width))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadInt32(renderInfo.View.Height))
+          AFX_GOTO_ERROR
+
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M00))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M01))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M02))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M03))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M10))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M11))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M12))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M13))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M20))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M21))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M22))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M23))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M30))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M31))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M32))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ViewMatrix.M33))
+          AFX_GOTO_ERROR
+
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M00))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M01))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M02))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M03))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M10))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M11))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M12))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M13))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M20))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M21))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M22))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M23))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M30))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M31))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M32))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(renderInfo.View.ProjectionMatrix.M33))
+          AFX_GOTO_ERROR
+
+        auto onRenderViewBegin = GetPumpFilter(filter, "onRenderViewBegin");
+        if (nullptr != onRenderViewBegin) {
+          m_PumpResumeAt = 3;
+          CefPostTask(
+              TID_RENDERER,
+              new CAfxTask([this, onRenderViewBegin, fn_resolve, fn_reject,
+                            filter,
+                            renderInfo = CreateAfxRenderInfo(renderInfo)]() {
+                if (nullptr == m_Context)
+                  return;
+
+                m_Context->Enter();
+                CefV8ValueList args;
+                args.push_back(fn_resolve);
+                args.push_back(fn_reject);
+                args.push_back(renderInfo->ToV8Value());
+                onRenderViewBegin->ExecuteFunction(nullptr, args);
+                m_Context->Exit();
+              }));
+          return;
         }
 
-        CefRefPtr<CAfxValue> v8Ty = obj->GetChild("tY");
-        if (nullptr != v8Ty && v8Ty->IsDouble()) {
-          m_Ty = (float)v8Ty->GetDouble();
-          overriden = true;
-        }
+        m_PumpResumeAt = 3;
+        goto __resolve;
+      } break;
 
-        CefRefPtr<CAfxValue> v8Tz = obj->GetChild("tZ");
-        if (nullptr != v8Tz && v8Tz->IsDouble()) {
-          m_Tz = (float)v8Tz->GetDouble();
-          overriden = true;
-        }
+      case EngineMessage::OnRenderViewEnd: {
+        auto onRenderViewEnd = GetPumpFilter(filter, "onRenderViewEnd");
+        if (nullptr != onRenderViewEnd) {
+          m_PumpResumeAt = 4;
+          CefPostTask(TID_RENDERER, new CAfxTask([this, onRenderViewEnd,
+                                                  fn_resolve, fn_reject]() {
+                        if (nullptr == m_Context)
+                          return;
 
-        CefRefPtr<CAfxValue> v8Rx = obj->GetChild("rX");
-        if (nullptr != v8Rx && v8Rx->IsDouble()) {
-          m_Rx = (float)v8Rx->GetDouble();
-          overriden = true;
-        }
+                        m_Context->Enter();
 
-        CefRefPtr<CAfxValue> v8Ry = obj->GetChild("rY");
-        if (nullptr != v8Ry && v8Ry->IsDouble()) {
-          m_Ry = (float)v8Ry->GetDouble();
-          overriden = true;
-        }
-
-        CefRefPtr<CAfxValue> v8Rz = obj->GetChild("rZ");
-        if (nullptr != v8Rz && v8Rz->IsDouble()) {
-          m_Rz = (float)v8Rz->GetDouble();
-          overriden = true;
-        }
-
-        CefRefPtr<CAfxValue> v8Fov = obj->GetChild("fov");
-        if (nullptr != v8Fov && v8Fov->IsDouble()) {
-          m_Fov = (float)v8Fov->GetDouble();
-          overriden = true;
+                        CefV8ValueList args;
+                        args.push_back(fn_resolve);
+                        args.push_back(fn_reject);
+                        onRenderViewEnd->ExecuteFunction(nullptr, args);
+                        m_Context->Exit();
+                      }));
+          return;
         }
       }
+        m_PumpResumeAt = 4;
+        goto __resolve;
 
-      if (overriden) {
-        if (!m_PipeServer.WriteBoolean(true))
+      case EngineMessage::BeforeHud: {
+        auto onHudBegin = GetPumpFilter(filter, "onRenderViewHudBegin");
+        if (nullptr != onHudBegin) {
+          m_PumpResumeAt = 1;
+          CefPostTask(TID_RENDERER,
+                      new CAfxTask([this, onHudBegin, fn_resolve, fn_reject]() {
+                        if (nullptr == m_Context)
+                          return;
+
+                        m_Context->Enter();
+                        CefV8ValueList args;
+                        args.push_back(fn_resolve);
+                        args.push_back(fn_reject);
+                        onHudBegin->ExecuteFunction(nullptr, args);
+                        m_Context->Exit();
+                      }));
+          return;
+        }
+      }
+        m_PumpResumeAt = 1;
+        goto __resolve;
+
+      case EngineMessage::AfterHud: {
+        auto onHudEnd = GetPumpFilter(filter, "onRenderViewHudEnd");
+        if (nullptr != onHudEnd) {
+          m_PumpResumeAt = 1;
+          CefPostTask(TID_RENDERER,
+                      new CAfxTask([this, onHudEnd, fn_resolve, fn_reject]() {
+                        if (nullptr == m_Context)
+                          return;
+
+                        m_Context->Enter();
+                        CefV8ValueList args;
+                        args.push_back(fn_resolve);
+                        args.push_back(fn_reject);
+                        onHudEnd->ExecuteFunction(nullptr, args);
+                        m_Context->Exit();
+                      }));
+          return;
+        }
+      }
+        m_PumpResumeAt = 1;
+        goto __resolve;
+
+      case EngineMessage::BeforeTranslucentShadow: {
+        bool bReturn;
+        if (!DoRenderPass(filter, "onRenderViewBeforeTranslucentShadow",
+                          fn_resolve, fn_reject, bReturn))
+          AFX_GOTO_ERROR
+        if (bReturn)
+          return;
+      }
+        m_PumpResumeAt = 1;
+        goto __resolve;
+      case EngineMessage::AfterTranslucentShadow: {
+        bool bReturn;
+        if (!DoRenderPass(filter, "onRenderViewAfterTranslucentShadow",
+                          fn_resolve, fn_reject, bReturn))
+          AFX_GOTO_ERROR
+        if (bReturn)
+          return;
+      }
+        m_PumpResumeAt = 1;
+        goto __resolve;
+      case EngineMessage::BeforeTranslucent: {
+        bool bReturn;
+        if (!DoRenderPass(filter, "onRenderViewBeforeTranslucent", fn_resolve,
+                          fn_reject, bReturn))
+          AFX_GOTO_ERROR
+        if (bReturn)
+          return;
+      }
+        goto __1;
+      case EngineMessage::AfterTranslucent: {
+        bool bReturn;
+        if (!DoRenderPass(filter, "onRenderViewAfterTranslucent", fn_resolve,
+                          fn_reject, bReturn))
+          AFX_GOTO_ERROR
+        if (bReturn)
+          return;
+      }
+        m_PumpResumeAt = 1;
+        goto __resolve;
+
+      case EngineMessage::OnViewOverride: {
+        if (!m_PipeServer.ReadSingle(m_Tx))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(m_Ty))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(m_Tz))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(m_Rx))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(m_Ry))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(m_Rz))
+          AFX_GOTO_ERROR
+        if (!m_PipeServer.ReadSingle(m_Fov))
           AFX_GOTO_ERROR
 
-        if (!m_PipeServer.WriteSingle(m_Tx))
-          AFX_GOTO_ERROR
-        if (!m_PipeServer.WriteSingle(m_Ty))
-          AFX_GOTO_ERROR
-        if (!m_PipeServer.WriteSingle(m_Tz))
-          AFX_GOTO_ERROR
-        if (!m_PipeServer.WriteSingle(m_Rx))
-          AFX_GOTO_ERROR
-        if (!m_PipeServer.WriteSingle(m_Ry))
-          AFX_GOTO_ERROR
-        if (!m_PipeServer.WriteSingle(m_Rz))
-          AFX_GOTO_ERROR
-        if (!m_PipeServer.WriteSingle(m_Fov))
-          AFX_GOTO_ERROR
-      } else {
+        auto onViewOverride = GetPumpFilter(filter, "onViewOverride");
+        if (nullptr != onViewOverride) {
+          m_PumpResumeAt = 5;
+          CefPostTask(
+              TID_RENDERER,
+              new CAfxTask([this, onViewOverride, tx = m_Tx, ty = m_Ty,
+                            tz = m_Tz, rx = m_Rx, ry = m_Ry, rz = m_Rz,
+                            fov = m_Fov, fn_resolve, fn_reject, filter]() {
+                if (nullptr == m_Context)
+                  return;
+
+                m_Context->Enter();
+
+                CefV8ValueList args;
+                args.push_back(CefV8Value::CreateFunction(
+                    "resolve",
+                    new CAfxCallbackFn([this, fn_reject, fn_resolve, filter](
+                                           const CefString& name,
+                                           CefRefPtr<CefV8Value> object,
+                                           const CefV8ValueList& arguments,
+                                           CefRefPtr<CefV8Value>& retval,
+                                           CefString& exception) -> bool {
+                      m_PipeQueue.Queue(
+                          [this, fn_resolve, fn_reject, filter,
+                           obj = 1 <= arguments.size()
+                                     ? CAfxValue::FromV8Value(arguments[0])
+                                     : nullptr]() {
+                            DoPump(fn_resolve, fn_reject, filter, obj);
+                          });
+
+                      return true;
+                    })));
+                args.push_back(fn_reject);
+                CefRefPtr<CefV8Value> obj2 =
+                    CefV8Value::CreateObject(nullptr, nullptr);
+
+                obj2->SetValue("tX", CefV8Value::CreateDouble(tx),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+                obj2->SetValue("tY", CefV8Value::CreateDouble(ty),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+                obj2->SetValue("tZ", CefV8Value::CreateDouble(tz),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+                obj2->SetValue("rX", CefV8Value::CreateDouble(rx),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+                obj2->SetValue("rY", CefV8Value::CreateDouble(ry),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+                obj2->SetValue("rZ", CefV8Value::CreateDouble(rz),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+                obj2->SetValue("fov", CefV8Value::CreateDouble(fov),
+                               V8_PROPERTY_ATTRIBUTE_NONE);
+
+                args.push_back(obj2);
+
+                onViewOverride->ExecuteFunction(nullptr, args);
+                m_Context->Exit();
+              }));
+          return;
+        }
+
         if (!m_PipeServer.WriteBoolean(false))
           AFX_GOTO_ERROR
+
+        if (!m_PipeServer.Flush())
+          AFX_GOTO_ERROR  // client is waiting
+
+              m_PumpResumeAt = 1;
+        goto __resolve;
       }
 
-    if (!m_PipeServer.Flush())
-        AFX_GOTO_ERROR  // client is waiting
+      case EngineMessage::GameEvent: {
+        bool bReturn = false;
+        m_PumpResumeAt = 1;
+        if (!ReadGameEvent(fn_resolve, fn_reject, filter, bReturn))
+          AFX_GOTO_ERROR
+        if (bReturn) {
+          return;
+        }
+      }
+        m_PumpResumeAt = 1;
+        goto __resolve;
+    }
+  }
 
-  }   goto __1;
+    AFX_GOTO_ERROR
+
+  __2 : {
+    int len = nullptr != obj && obj->IsArray() ? obj->GetArraySize() : 0;
+
+    if (!m_PipeServer.WriteCompressedUInt32((UINT32)(len)))
+      AFX_GOTO_ERROR
+
+    for (int i = 0; i < len; ++i) {
+      auto elem = obj->GetArrayElement(i);
+      if (nullptr != elem && elem->IsString()) {
+        if (!m_PipeServer.WriteStringUTF8(elem->GetString()))
+          AFX_GOTO_ERROR      
+      }
+      else {
+        if (!m_PipeServer.WriteStringUTF8(""))
+          AFX_GOTO_ERROR      
+      }
+    }
+
+    if (!m_PipeServer.Flush())
+      AFX_GOTO_ERROR
+
+    m_PumpResumeAt = 1;
+    goto __resolve;
+  }
+
+  __3 : {
+    bool outBeforeTranslucentShadow =
+        IsPumpFilter(filter, "onRenderViewBeforeTranslucentShadow");
+    bool outAfterTranslucentShadow =
+        IsPumpFilter(filter, "onRenderViewAfterTranslucentShadow");
+    bool outBeforeTranslucent =
+        IsPumpFilter(filter, "onRenderViewBeforeTranslucent");
+    bool outAfterTranslucent =
+        IsPumpFilter(filter, "onRenderViewAfterTranslucent");
+    bool outBeforeHud = IsPumpFilter(filter, "onRenderViewHudBegin");
+    bool outAfterHud = IsPumpFilter(filter, "onRenderViewHudEnd");
+    bool outAfterRenderView = IsPumpFilter(filter, "onRenderViewEnd");
+
+    if (!m_PipeServer.WriteBoolean(outBeforeTranslucentShadow))
+      AFX_GOTO_ERROR
+    if (!m_PipeServer.WriteBoolean(outAfterTranslucentShadow))
+      AFX_GOTO_ERROR
+    if (!m_PipeServer.WriteBoolean(outBeforeTranslucent))
+      AFX_GOTO_ERROR
+    if (!m_PipeServer.WriteBoolean(outAfterTranslucent))
+      AFX_GOTO_ERROR
+    if (!m_PipeServer.WriteBoolean(outBeforeHud))
+      AFX_GOTO_ERROR
+    if (!m_PipeServer.WriteBoolean(outAfterHud))
+      AFX_GOTO_ERROR
+    if (!m_PipeServer.WriteBoolean(outAfterRenderView))
+      AFX_GOTO_ERROR
+
+    /*bool done = !(true || outBeforeTranslucentShadow ||
+    outAfterTranslucentShadow || outBeforeTranslucent || outAfterTranslucent ||
+    outBeforeHud || outAfterHud || outAfterRenderView);
+
+    if (done)
+      goto __4;
+    */
+    m_PumpResumeAt = 1;
+    goto __resolve;
+  }
+
+  __4 : {
+    m_PumpResumeAt = 1;
+    auto onDone = GetPumpFilter(filter, "onDone");
+    if (nullptr != onDone) {
+      CefPostTask(TID_RENDERER,
+                  new CAfxTask([this, onDone, fn_resolve, fn_reject]() {
+                    if (nullptr == m_Context)
+                      return;
+
+                    m_Context->Enter();
+                    CefV8ValueList args;
+                    args.push_back(fn_resolve);
+                    args.push_back(fn_reject);
+                    onDone->ExecuteFunction(nullptr, args);
+                    m_Context->Exit();
+                  }));
+      return;
+    }
+    m_PumpResumeAt = 1;
+    goto __resolve;
+  }
+
+  __5 : {
+    bool overriden = false;
+
+    if (nullptr != obj && obj->IsObject()) {
+      CefRefPtr<CAfxValue> v8Tx = obj->GetChild("tX");
+      if (nullptr != v8Tx && v8Tx->IsDouble()) {
+        m_Tx = (float)v8Tx->GetDouble();
+        overriden = true;
+      }
+
+      CefRefPtr<CAfxValue> v8Ty = obj->GetChild("tY");
+      if (nullptr != v8Ty && v8Ty->IsDouble()) {
+        m_Ty = (float)v8Ty->GetDouble();
+        overriden = true;
+      }
+
+      CefRefPtr<CAfxValue> v8Tz = obj->GetChild("tZ");
+      if (nullptr != v8Tz && v8Tz->IsDouble()) {
+        m_Tz = (float)v8Tz->GetDouble();
+        overriden = true;
+      }
+
+      CefRefPtr<CAfxValue> v8Rx = obj->GetChild("rX");
+      if (nullptr != v8Rx && v8Rx->IsDouble()) {
+        m_Rx = (float)v8Rx->GetDouble();
+        overriden = true;
+      }
+
+      CefRefPtr<CAfxValue> v8Ry = obj->GetChild("rY");
+      if (nullptr != v8Ry && v8Ry->IsDouble()) {
+        m_Ry = (float)v8Ry->GetDouble();
+        overriden = true;
+      }
+
+      CefRefPtr<CAfxValue> v8Rz = obj->GetChild("rZ");
+      if (nullptr != v8Rz && v8Rz->IsDouble()) {
+        m_Rz = (float)v8Rz->GetDouble();
+        overriden = true;
+      }
+
+      CefRefPtr<CAfxValue> v8Fov = obj->GetChild("fov");
+      if (nullptr != v8Fov && v8Fov->IsDouble()) {
+        m_Fov = (float)v8Fov->GetDouble();
+        overriden = true;
+      }
+    }
+
+    if (overriden) {
+      if (!m_PipeServer.WriteBoolean(true))
+        AFX_GOTO_ERROR
+
+      if (!m_PipeServer.WriteSingle(m_Tx))
+        AFX_GOTO_ERROR
+      if (!m_PipeServer.WriteSingle(m_Ty))
+        AFX_GOTO_ERROR
+      if (!m_PipeServer.WriteSingle(m_Tz))
+        AFX_GOTO_ERROR
+      if (!m_PipeServer.WriteSingle(m_Rx))
+        AFX_GOTO_ERROR
+      if (!m_PipeServer.WriteSingle(m_Ry))
+        AFX_GOTO_ERROR
+      if (!m_PipeServer.WriteSingle(m_Rz))
+        AFX_GOTO_ERROR
+      if (!m_PipeServer.WriteSingle(m_Fov))
+        AFX_GOTO_ERROR
+    } else {
+      if (!m_PipeServer.WriteBoolean(false))
+        AFX_GOTO_ERROR
+    }
+
+    if (!m_PipeServer.Flush())
+      AFX_GOTO_ERROR  // client is waiting
+  }
+    m_PumpResumeAt = 1;
+    goto __resolve;
+
+  __resolve:
+    CefPostTask(TID_RENDERER, new CAfxTask([this, fn_resolve, errorLine]() {
+                  if (nullptr == m_Context)
+                    return;
+
+                  m_Context->Enter();
+                  fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                  m_Context->Exit();
+                }));
+    return;
 
   error:
     m_PumpResumeAt = 0;
-    return errorLine;
+    CefPostTask(TID_RENDERER, new CAfxTask([this, fn_reject, errorLine]() {
+                  if (nullptr == m_Context)
+                    return;
+
+                  m_Context->Enter();
+                  CefV8ValueList args;
+                  args.push_back(CefV8Value::CreateString(
+                      "AfxInterop.cpp:" + std::to_string(errorLine)));
+                  fn_reject->ExecuteFunction(NULL, args);
+                  m_Context->Exit();
+                }));
   }
 
  private:
@@ -10046,7 +10162,11 @@ private:
     }
   }
 
-  bool DoRenderPass(CefRefPtr<CAfxValue> filter, const char* what, bool & bReturn) {
+  bool DoRenderPass(CefRefPtr<CAfxValue> filter,
+                    const char* what,
+                    CefRefPtr<CefV8Value> fn_resolve,
+                    CefRefPtr<CefV8Value> fn_reject,
+                    bool& bReturn) {
 
     bReturn = false;
 
@@ -10132,12 +10252,14 @@ private:
       m_PumpResumeAt = 1;
       bReturn = true;
       CefPostTask(TID_RENDERER, new CAfxTask([this, onRenderPass,
-                                              argView = CreateAfxView(view)]() {
+                                              argView = CreateAfxView(view), fn_resolve, fn_reject]() {
                     if (nullptr == m_Context)
                       return;
 
                     m_Context->Enter();
                     CefV8ValueList args;
+                    args.push_back(fn_resolve);
+                    args.push_back(fn_reject);
                     args.push_back(argView->ToV8Value());
                     onRenderPass->ExecuteFunction(nullptr, args);
                     m_Context->Exit();
@@ -10200,7 +10322,10 @@ private:
 
   std::map<int, KnownGameEvent_s> m_KnownGameEvents;
 
-  bool ReadGameEvent(CefRefPtr<CAfxValue> filter, bool & bReturn) {
+  bool ReadGameEvent(CefRefPtr<CefV8Value> fn_resolve,
+                     CefRefPtr<CefV8Value> fn_reject,
+                     CefRefPtr<CAfxValue> filter,
+                     bool& bReturn) {
     
     bReturn = false;
 
@@ -10439,12 +10564,14 @@ private:
     auto onGameEvent = GetPumpFilter(filter, "onGameEvent");
     if (nullptr != onGameEvent) {
       bReturn = true;
-      CefPostTask(TID_RENDERER, new CAfxTask([this, onGameEvent, objEvent]() {
+      CefPostTask(TID_RENDERER, new CAfxTask([this, onGameEvent, objEvent, fn_resolve, fn_reject]() {
                     if (nullptr == m_Context)
                       return;
 
                 m_Context->Enter();
                     CefV8ValueList args;
+                args.push_back(fn_resolve);
+                    args.push_back(fn_reject);
                 args.push_back(objEvent->ToV8Value());
                     onGameEvent->ExecuteFunction(nullptr, args);
                 m_Context->Exit();

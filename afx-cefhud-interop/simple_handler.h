@@ -330,8 +330,6 @@ class SimpleHandler : public CefClient,
      */
     bool OnAfterRender(void* share_handle) {
       std::unique_lock<std::mutex> lock2(m_DrawingMutex);
-      if (!m_Cleared)
-        return false;
 
       m_Cleared = false;
 
@@ -469,7 +467,8 @@ class SimpleHandler : public CefClient,
                 m_Owner->Browser->GetHost()->WasResized();
               }
 
-             m_Owner->Browser->GetHost()->SendExternalBeginFrame();
+              //m_Owner->Browser->GetHost()->Invalidate(PET_VIEW);
+              m_Owner->Browser->GetHost()->SendExternalBeginFrame();
             } break;
             case advancedfx::interop::HostMessage::CreateDrawing: {
               std::string argUrl;

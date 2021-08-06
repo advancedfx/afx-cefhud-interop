@@ -226,7 +226,6 @@ void SimpleHandler::DoCreateDrawing(const std::string& argStr, const std::string
   CefWindowInfo window_info;
   window_info.SetAsWindowless(NULL);
   window_info.shared_texture_enabled = true;
-   //true;
   window_info.external_begin_frame_enabled = true;
   window_info.width = 640;
   window_info.height = 360;

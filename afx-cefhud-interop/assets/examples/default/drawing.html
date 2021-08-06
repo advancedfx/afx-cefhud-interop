@@ -632,12 +632,7 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 		await Utils.toPromise(self.interop, "pumpSkip");
 	}
 	
-	let hasLastRender = Utils.coalesce(self.lastRender, false);
-	self.lastRender = false;
-	
 	let cmp = frameCount - clientFrameCount;
-	//console.log(cmp+" "+hasLastRender);
-	if(hasLastRender) cmp -= 1;
 	if(0 == cmp) cmp = pass - clientPass;
 		
 	if(cmp < 0) {
@@ -797,26 +792,20 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 		try {
 			await Utils.toPromise(self.interop, "cefBeginFrame", width, height, {
 				"onAfterClear": function(resolve,reject,shareHandle) {
-					if(hasLastRender)
-						onAfterClear(shareHandle,width,height).then(()=>{
-							resolve(true);
-						}).catch((e)=>{
-							reject(e);
-						});
-					else
-						resolve(false);
+					onAfterClear(shareHandle,width,height).then(()=>{
+						resolve(true);
+					}).catch((e)=>{
+						reject(e);
+					});
 				}
 				, "onAfterRender": function(resolve,reject,shareHandle) {
 					if(animationFrame) {
 						rendered = true;
-						if(hasLastRender)
-							onAfterRender(shareHandle,x,y,width,height).then(()=>{
-								resolve(true);
-							}).catch((e)=>{
-								reject(e);
-							});
-						else
-							resolve(false);
+						onAfterRender(shareHandle,x,y,width,height).then(()=>{
+							resolve(true);
+						}).catch((e)=>{
+							reject(e);
+						});
 					} else
 						resolve(false);
 				}
@@ -832,12 +821,7 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 		}
 	}
 	
-	self.lastRender = true;
-	
-	if(hasLastRender)
-		await Utils.toPromise(self.interop, "pumpFinish");
-	else
-		await Utils.toPromise(self.interop, "pumpRetry");
+	await Utils.toPromise(self.interop, "pumpFinish");
 }
 
 ////////////////////////////////////////////////////////////////////////////////

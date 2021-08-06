@@ -220,11 +220,9 @@ function AfxEngineInterop(interop, args) {
 		// optional.
 		"onNewConnection": async function(){
 			console.log("New connection");
-			await Utils.toPromise(this.interop, "pump", this.pumpEvents);
 		},
-		// recommended.
+		// optional.
 		"onDone": async function(){
-			await Utils.toPromise(this.interop, "pump", this.pumpEvents);
 		},
 		// optional.
 		"onCommands": async function(commands) {
@@ -266,7 +264,8 @@ function AfxEngineInterop(interop, args) {
 					}
 				}
 			}
-			await Utils.toPromise(this.interop, "pump", this.pumpEvents, doCommands);
+			
+			return doCommands;
 		},
 		// optional.
 		"onGameEvent": async function(e){
@@ -274,7 +273,6 @@ function AfxEngineInterop(interop, args) {
 				"id": "onGameEvent",
 				"args": [e]
 			}));
-			await Utils.toPromise(this.interop, "pump", this.pumpEvents);
 		},
 		// optional.
 		"onRenderViewBegin": async function(renderInfo) {
@@ -286,37 +284,31 @@ function AfxEngineInterop(interop, args) {
 				"id": "onRenderViewBegin",
 				"args": [renderInfo]
 			}));
-			await Utils.toPromise(this.interop, "pump", this.pumpEvents);
 		},
 		/*
 		// optional.
 		"onRenderViewBeforeTranslucent" : async function(view) {
 			//TODO: schedule for drawing.
-			await Utils.toPromise(this.interop, "pump", this.pumpEvents);
 		},*/
 		/*
 		// optional.
 		"onRenderViewAfterTranslucent" : async function(view) {
 			//TODO: schedule for drawing.
-			await Utils.toPromise(this.interop, "pump", this.pumpEvents);
 		},*/
 		/*
 		// optional.
 		"onRenderViewBeforeTranslucentShadow" : async function(view) {
 			//TODO: schedule for drawing.
-			await Utils.toPromise(this.interop, "pump", this.pumpEvents);
 		},*/
 		/*
 		// optional.
 		"onRenderViewAfterTranslucentShadow" : async function(view) {
 			//TODO: schedule for drawing.
-			await Utils.toPromise(this.interop, "pump", this.pumpEvents);
 		},*/
 		/*
 		// optional.
 		"onRenderViewHudBegin" : async function() {
 			//TODO: schedule for drawing.
-			await Utils.toPromise(this.interop, "pump", this.pumpEvents);
 		},*/		
 		// optional.
 		"onRenderViewHudEnd": async function(){
@@ -327,25 +319,24 @@ function AfxEngineInterop(interop, args) {
 
 			this.pass++;
 
-			await Utils.toPromise(this.interop, "pump", this.pumpEvents);
 		},
 		// optional.
 		/*"onRenderViewEnd": aync function() {
 			//TODO: schedule for drawing.
-			await Utils.toPromise(this.interop, "pump", this.pumpEvents);
 		},*/
 		/*
 		// optional.
 		"onViewOverride": async function(view) {
-			await Utils.toPromise(this.interop, "pump", this.pumpEvents, {
-				//tX: 0,
-				//tY: 0,
-				//tZ: 0,
-				//rX: 0,
-				//rY: 0,
-				//rZ: 0,
-				//fov: 90,
-			});
+			// optional:
+			//return {
+			//	tX: 0, // optional
+			//	tY: 0, // optional
+			//	tZ: 0, // optional
+			//	rX: 0, // optional
+			//	rY: 0, // optional
+			//	rZ: 0, // optional
+			//	fov: 90, // optional
+			//};
 		},*/
 	};
 
@@ -383,7 +374,24 @@ AfxEngineInterop.prototype.connect = async function() {
 		}
 
 		doConnect()
-		.then(()=>Utils.toPromise(self.interop, "pump",  self.pumpEvents));
+		.then(()=>{
+			function pumper() {
+				if(self.connected) {
+					Utils.toPromise(self.interop, "pump", self.pumpEvents).then(()=>{
+						queueMicrotask(pumper);
+					}).catch((e) => {
+						Utils.logError(e);
+
+						if(!(e && e.soft))
+							return Utils.toPromise(self, "disconnect");
+
+						queueMicrotask(pumper);
+					});
+				}
+			}
+
+			pumper();
+		});
 	});
 }
 
@@ -439,15 +447,11 @@ AfxEngineInterop.prototype.disconnect = async function() {
 
 	Object.keys(self.pumpEventsAsync).forEach((key) => {
 
-		pumpEvents[key] = function(...args){
-		
-			self.pumpPromise = self.pumpPromise
-			.finally(()=>self.pumpEventsAsync[key].apply(self, args))
-			.catch((e) => {
-				Utils.logError(e);
-
-				if(!(e && e.soft))
-					return Utils.toPromise(self, "disconnect");
+		pumpEvents[key] = function(resolve,reject,...args){
+			self.pumpEventsAsync[key].apply(self, args).then((...args)=>{
+				resolve(...args);
+			}).catch((...args) => {
+				reject(...args);
 			});
 		}
 	});
