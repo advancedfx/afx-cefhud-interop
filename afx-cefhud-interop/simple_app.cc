@@ -284,5 +284,5 @@ void SimpleApp::OnBeforeCommandLineProcessing(
 
     command_line->AppendSwitch("disable-new-content-rendering-timeout");
 
-    command_line->AppendSwitch("headless");
+    //command_line->AppendSwitch("use-gpu-high-thread-priority-for-perf-tests");
 }

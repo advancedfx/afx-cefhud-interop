@@ -135,7 +135,8 @@ enum class EngineMessage : unsigned int {
   AfterTranslucent = 12,
   BeforeHud = 13,
   AfterHud = 14,
-  GameEvent = 15
+  GameEvent = 15,
+  ForceEndQueue = 16
 };
 
 enum class DrawingMessage : unsigned int {
@@ -2448,18 +2449,23 @@ CAfxObject::AddFunction(
                                  fn_reject = arguments[1]]() {
 
           int errorLine = __LINE__;
+          bool queuedThreaded = false;
           int frameCount = -1;
           unsigned int pass = 0;
 
-          if (self->GetConnected() && 0 == (errorLine = self->DoPumpBegin(frameCount, pass))) {
+          if (self->GetConnected() && 0 == (errorLine = self->DoPumpBegin(queuedThreaded, frameCount, pass))) {
             CefPostTask(TID_RENDERER,
-                        new CAfxTask([self, fn_resolve, frameCount, pass]() {
+                        new CAfxTask([self, fn_resolve,
+                                      queuedThreaded, frameCount, pass]() {
                           if (nullptr == self->m_Context)
                             return;
 
                           self->m_Context->Enter();
                           CefV8ValueList args;
                           auto dict = CefV8Value::CreateObject(nullptr,nullptr);
+                          dict->SetValue("queuedThreaded",
+                                         CefV8Value::CreateBool(queuedThreaded),
+                                         V8_PROPERTY_ATTRIBUTE_NONE);
                           dict->SetValue("frameCount",
                                          CefV8Value::CreateInt(frameCount),
                                            V8_PROPERTY_ATTRIBUTE_NONE);
@@ -8288,7 +8294,7 @@ private:
     }
   }
 
-  int DoPumpBegin(int &outFrameCount, unsigned int &outPass) {
+  int DoPumpBegin(bool &outQueuedThreaded, int &outFrameCount, unsigned int &outPass) {
 
     while (true) {
       UINT32 drawingMessage;
@@ -8336,7 +8342,10 @@ private:
       if (bContinue)
         continue;
 
-      if(!m_PipeServer.ReadInt32(outFrameCount))
+      if (!m_PipeServer.ReadBoolean(outQueuedThreaded))
+        return __LINE__;
+
+      if (!m_PipeServer.ReadInt32(outFrameCount))
           return __LINE__;
 
       if (!m_PipeServer.ReadUInt32(outPass))
@@ -9752,6 +9761,28 @@ private:
         if (!ReadGameEvent(fn_resolve, fn_reject, filter, bReturn))
           AFX_GOTO_ERROR
         if (bReturn) {
+          return;
+        }
+      }
+        m_PumpResumeAt = 1;
+        goto __resolve;
+
+          case EngineMessage::ForceEndQueue: {
+        auto onForceEndQueue = GetPumpFilter(filter, "onForceEndQueue");
+            if (nullptr != onForceEndQueue) {
+          m_PumpResumeAt = 1;
+          CefPostTask(TID_RENDERER, new CAfxTask([this, onForceEndQueue,
+                                                  fn_resolve, fn_reject]() {
+                        if (nullptr == m_Context)
+                          return;
+
+                        m_Context->Enter();
+                        CefV8ValueList args;
+                        args.push_back(fn_resolve);
+                        args.push_back(fn_reject);
+                        onForceEndQueue->ExecuteFunction(nullptr, args);
+                        m_Context->Exit();
+                      }));
           return;
         }
       }

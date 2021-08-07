@@ -338,6 +338,14 @@ function AfxEngineInterop(interop, args) {
 			//	fov: 90, // optional
 			//};
 		},*/
+		// required if you want to do queued rendering optimizations,
+		// ohterwise optional.
+		"onForceEndQueue": async function() {
+			await Utils.toPromise(this.interop, "sendMessage", this.args.drawingInteropId, JSON.stringify({
+				"id": "onForceEndQueue",
+				"args": []
+			}));
+		}
 	};
 
 	this.pumpEvents = this.makePumpEvents();

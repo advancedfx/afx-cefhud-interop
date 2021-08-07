@@ -21,6 +21,10 @@ First install / extract the Release-Base.7z and over that replace with the conte
 - Based on CEF 07/27/2019 - 75.1.14+gc81164e+chromium-75.0.3770.100 / Chromium 75.0.3770.100
 - Pre-releases available here: https://github.com/advancedfx/afx-cefhud-interop/releases
 
+### Known problems
+
+- You should disable logging or only log errors in order to avoid deadlocking the rendering.
+
 ### Build instructions
 
 - Obtain Visual Studio 2019 (e.g. Community edition) and make sure at least the "Desktop Development with C++ component" is installed.
