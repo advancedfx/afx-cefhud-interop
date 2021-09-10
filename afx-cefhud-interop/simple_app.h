@@ -67,6 +67,11 @@ class SimpleApp : public CefApp,
                                  CefRefPtr<CefFrame> frame,
                                  CefRefPtr<CefV8Context> context) OVERRIDE;
 
+    virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                        CefRefPtr<CefFrame> frame,
+                                        CefProcessId source_process,
+                                        CefRefPtr<CefProcessMessage> message) OVERRIDE;
+
   // CefApp methods:
   virtual void OnBeforeCommandLineProcessing(
       const CefString& process_type,
@@ -74,7 +79,7 @@ class SimpleApp : public CefApp,
 
  private:
   std::map<int,CefRefPtr<class advancedfx::interop::CInterop>> m_Interops;
-  std::mutex m_InteropMutex;
+  std::mutex m_InteropMutex; //TODO: maybe turn this into a shared mutex?
   CefRefPtr<CefDictionaryValue> extra_info_;
 
   // Include the default reference counting implementation.

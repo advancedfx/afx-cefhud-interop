@@ -232,6 +232,21 @@ void SimpleApp::OnContextReleased(CefRefPtr<CefBrowser> browser,
   }
 }
 
+bool SimpleApp::OnProcessMessageReceived(
+    CefRefPtr<CefBrowser> browser,
+                                      CefRefPtr<CefFrame> frame,
+                                      CefProcessId source_process,
+                                      CefRefPtr<CefProcessMessage> message) {
+  std::unique_lock<std::mutex> lock(m_InteropMutex);
+  auto it = m_Interops.find(browser->GetMainFrame()->GetIdentifier());
+  if (it != m_Interops.end()) {
+    return it->second->OnProcessMessageReceived(browser, frame, source_process,
+                                         message);
+  }
+
+  return false;
+}
+
 void SimpleApp::OnBeforeCommandLineProcessing(
       const CefString& process_type,
       CefRefPtr<CefCommandLine> command_line) {
@@ -241,7 +256,7 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     command_line->AppendSwitch("disable-accelerated-video-decode");
 
     // un-comment to show the built-in Chromium fps meter
-    //command_line->AppendSwitch("show-fps-counter");
+    command_line->AppendSwitch("show-fps-counter");
 
     command_line->AppendSwitch("disable-gpu-vsync");
 
@@ -273,7 +288,7 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     //command_line->AppendSwitch("run-all-compositor-stages-before-draw");
 
     //command_line->AppendSwitch("disable-image-animation-resync");
-    ///command_line->AppendSwitch("deterministic-mode");
+    //command_line->AppendSwitch("deterministic-mode");
 
     command_line->AppendSwitch("disable-ipc-flooding-protection");
 

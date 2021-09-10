@@ -332,28 +332,18 @@ public:
 };
 
 enum class ClientMessage : int {
-  Message = 1,
-  ReleaseTextureHandle = 2,
-  OnAfterClear = 3,
-  OnAfterRender = 4,
-  OnAfterRenderFinished = 5
+  Message = 1
 };
 
 enum class HostMessage : int {
-  RenderFrame = 1,
-  CreateDrawing = 2,
-  CreateEngine = 3,
-  Message = 4,
-  OnAfterClearDone = 8,
-  OnAfterRenderDone = 9
+  CreateDrawing = 1,
+  CreateEngine = 2,
+  Message = 3
 };
 
 enum class HostGpuMessage : int {
-  ReleaseShareHandle = 1,
-  OnAfterClear = 2,
-  OnAfterRender = 3,
-  GetActiveBrowser = 4,
-  SupplyShareHandle =2
+  OnAfterClear = 1,
+  OnAfterRender = 2
 };
 
 class CInterop : public virtual CefBaseRefCounted {
@@ -361,6 +351,14 @@ class CInterop : public virtual CefBaseRefCounted {
   CefRefPtr<CefV8Context> m_Context;
 
   virtual void CloseInterop() = 0;
+
+  virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+      CefRefPtr<CefFrame> frame,
+      CefProcessId source_process,
+      CefRefPtr<CefProcessMessage> message) {
+
+      return false;
+  }
 
   protected:
     CThreadedQueue m_InteropQueue;

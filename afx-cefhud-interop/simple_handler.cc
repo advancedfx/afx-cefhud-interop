@@ -218,12 +218,11 @@ bool SimpleHandler::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
 void SimpleHandler::DoCreateDrawing(const std::string& argStr, const std::string& argUrl) {
   CefBrowserSettings browser_settings;
   browser_settings.file_access_from_file_urls = STATE_ENABLED;
-  browser_settings.windowless_frame_rate =
-      60;  // vsync doesn't matter only if external_begin_frame_enabled
+  browser_settings.windowless_frame_rate = 1; // vsync doesn't matter only if external_begin_frame_enabled
   CefWindowInfo window_info;
   window_info.SetAsWindowless(NULL);
   window_info.shared_texture_enabled = true;
-  window_info.external_begin_frame_enabled = true;
+  window_info.external_begin_frame_enabled = false;
   window_info.width = 640;
   window_info.height = 360;
 
@@ -245,7 +244,7 @@ void SimpleHandler::DoCreateEngine(const std::string& argStr, const std::string&
   CefWindowInfo window_info;
   window_info.SetAsWindowless(NULL);
   window_info.shared_texture_enabled = false;
-  window_info.external_begin_frame_enabled = true;
+  window_info.external_begin_frame_enabled = false;
   window_info.width = 640;
   window_info.height = 360;
 
@@ -257,4 +256,61 @@ void SimpleHandler::DoCreateEngine(const std::string& argStr, const std::string&
   m_Creating = true;
   CefBrowserHost::CreateBrowser(window_info, this, argUrl, browser_settings,
                                 extra_info, nullptr);
+}
+
+bool SimpleHandler::OnProcessMessageReceived(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefFrame> frame,
+    CefProcessId source_process,
+    CefRefPtr<CefProcessMessage> message) {
+  auto name = message->GetName();
+
+  if (name == "afx-lock") {
+    std::unique_lock<std::mutex> lock(m_BrowserMutex);
+    auto it = m_Browsers.find(browser->GetIdentifier());
+    if (it != m_Browsers.end()) {
+      if (auto connection = it->second.Connection) {
+        connection->Lock();
+      }
+    }
+    auto response = CefProcessMessage::Create("afx-ack");
+    browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, response);
+    return true;
+  } else if (name == "afx-unlock") {
+    auto args = message->GetArgumentList();
+    bool updateClearTexture = args->GetBool(0);
+    std::unique_lock<std::mutex> lock(m_BrowserMutex);
+    auto it = m_Browsers.find(browser->GetIdentifier());
+    if (it != m_Browsers.end()) {
+      if (auto connection = it->second.Connection) {
+        connection->Unlock(updateClearTexture);
+      }
+    }
+    auto response = CefProcessMessage::Create("afx-ack");
+    browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, response);
+    return true;
+  } else if (name == "afx-set-frame-rate") {
+    auto args = message->GetArgumentList();
+    int fps = args->GetInt(0);
+
+    browser->GetHost()->SetWindowlessFrameRate(fps);
+    return true;
+  } else if (name == "afx-set-size") {
+    auto args = message->GetArgumentList();
+    int width = args->GetInt(0);
+    int height = args->GetInt(1);
+
+    std::unique_lock<std::mutex> lock(m_BrowserMutex);
+    auto it = m_Browsers.find(browser->GetIdentifier());
+    if (it != m_Browsers.end()) {
+      if (auto connection = it->second.Connection) {
+        connection->SetSize(width, height);
+        lock.unlock();
+        browser->GetHost()->WasResized();
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
