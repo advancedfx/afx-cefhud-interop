@@ -320,6 +320,7 @@ function AfxEngineInterop(interop, args) {
 		},*/		
 		// optional.
 		"onRenderViewHudEnd": async function(){
+			console.log("onRenderViewHudEnd");
 			await Utils.toPromise(this.interop, "sendMessage", this.args.drawingInteropId, JSON.stringify({
 				"id": "onHudEnd",
 				"args": [this.renderInfo.frameCount, this.pass]

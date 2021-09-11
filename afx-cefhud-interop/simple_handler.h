@@ -73,8 +73,6 @@ class SimpleHandler : public CefClient,
                        int width,
                        int height) OVERRIDE {
 
-       DLOG(INFO) << "OnPaint: " << browser->GetIdentifier();
-
    }
 
    virtual void OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
@@ -255,12 +253,11 @@ class SimpleHandler : public CefClient,
     }
 
     void Unlock(bool updateClearTexture) {
-      m_UpdateClearTexture = updateClearTexture;
       m_SupressUpdates = false;
     }
 
-    void SetCleared() {
-        m_UpdateClearTexture = true; 
+    void SetUseClear(bool useClearTexture) {
+      m_UseClearTexture = useClearTexture;
     }
 
     void SetSize(int width, int height) {
@@ -277,7 +274,7 @@ class SimpleHandler : public CefClient,
      */
     bool OnAfterClear(HANDLE clearTextureHandle) {
         m_Owner->ClearHandle = clearTextureHandle;
-      return m_UpdateClearTexture.exchange(false);
+      return m_UseClearTexture;
     }
 
     /**
@@ -430,7 +427,7 @@ class SimpleHandler : public CefClient,
     advancedfx::interop::CPipeClient m_ClientConnection;
     std::mutex m_ClientConnectionMutex;
 
-    std::atomic<bool> m_UpdateClearTexture = false;
+    std::atomic<bool> m_UseClearTexture = false;
     std::atomic<bool> m_SupressUpdates = false;
   };
 

@@ -309,7 +309,7 @@ My_ClearRenderTargetView(ID3D11DeviceContext* This,
                           ((g_ClearCount << 16) % 256) / 255.0f, 1.0f};
         g_Org_ClearRenderTargetView(pContext, pRenderTargetView, color);*/
 
-        bool bUpdateTexture = false;
+        bool bUseTexture = false;
 
         try {
           std::unique_lock<std::mutex> lock(g_GpuPipeClientMutex);
@@ -320,7 +320,7 @@ My_ClearRenderTargetView(ID3D11DeviceContext* This,
 
           g_GpuPipeClient.WriteHandle(it->second.TempTextureHandle);
 
-          bUpdateTexture = g_GpuPipeClient.ReadBoolean();
+          bUseTexture = g_GpuPipeClient.ReadBoolean();
 
           //DLOG(INFO) << "My_ClearRenderTargetView : " << bUpdateTexture;
 
@@ -330,14 +330,7 @@ My_ClearRenderTargetView(ID3D11DeviceContext* This,
           DebugBreak();
         }
         
-        if (bUpdateTexture) {
-          g_Org_CopyResource(This, it->second.TempTexture,
-                             it->second.SharedTexture);
-
-          AfxWaitForGPU(This);
-        }
-
-        if (pInputLayout && pVertexBuffer && pVertexShader &&
+        if (bUseTexture && pInputLayout && pVertexBuffer && pVertexShader &&
             pPixelShader) {
 
           bSkip = true;

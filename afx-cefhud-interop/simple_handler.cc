@@ -276,6 +276,20 @@ bool SimpleHandler::OnProcessMessageReceived(
     auto response = CefProcessMessage::Create("afx-ack");
     browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, response);
     return true;
+  }
+  else if (name == "afx-use-clear") {
+    auto args = message->GetArgumentList();
+    bool useClearTexture = args->GetBool(0);
+    std::unique_lock<std::mutex> lock(m_BrowserMutex);
+    auto it = m_Browsers.find(browser->GetIdentifier());
+    if (it != m_Browsers.end()) {
+      if (auto connection = it->second.Connection) {
+        connection->SetUseClear(useClearTexture);
+      }
+    }
+    auto response = CefProcessMessage::Create("afx-ack");
+    browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, response);
+    return true;
   } else if (name == "afx-unlock") {
     auto args = message->GetArgumentList();
     bool updateClearTexture = args->GetBool(0);
@@ -289,7 +303,8 @@ bool SimpleHandler::OnProcessMessageReceived(
     auto response = CefProcessMessage::Create("afx-ack");
     browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, response);
     return true;
-  } else if (name == "afx-set-frame-rate") {
+  }
+  else if (name == "afx-set-frame-rate") {
     auto args = message->GetArgumentList();
     int fps = args->GetInt(0);
 

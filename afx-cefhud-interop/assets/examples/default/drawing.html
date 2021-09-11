@@ -168,7 +168,7 @@ function AfxDrawingInterop(interop,args) {
 			let messages = self.messages[port]
 			let jMessage = messages[0];
 			
-			console.log(JSON.stringify(jMessage));
+			//console.log(JSON.stringify(jMessage));
 			
 			self.messageHandlers[jMessage.id].apply(self, jMessage.args).then(()=>{
 				messages.shift();
@@ -234,27 +234,6 @@ function AfxDrawingInterop(interop,args) {
 	this.vertexBuffers = {
 		"rect": null
 	};
-	
-	self.onAnimationFrame = [];
-	
-	function onAnimationFrame(timestamp) {
-		console.log(timestamp);
-		if(0 < self.onAnimationFrame.length) {
-			let elFn = self.onAnimationFrame.shift();
-			//Utils.toPromise(self.interop, "waitForCefFrame").then(()=>{
-				//Utils.toPromise(self.interop, "lockCefTexture").then(()=>{
-					elFn(timestamp).then((updateClearTexture)=>{
-						//Utils.toPromise(self.interop, "unlockCefTexture", updateClearTexture).then(()=>{
-							window.requestAnimationFrame(onAnimationFrame);
-						//});
-					});
-				//});
-			//});
-		}
-		else
-			window.requestAnimationFrame(onAnimationFrame);
-	}
-	window.requestAnimationFrame(onAnimationFrame);
 	
 	Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
 		"id": "drawingCreated",
@@ -642,9 +621,16 @@ AfxDrawingInterop.prototype.render = async function(newRender) {
 	
 	var self = this;
 	
-	await new Promise((resolvePass,rejectPass)=>{
+	while(true) {
 		
-		async function updateShareHandle() {
+		let lastRender = Utils.coalesce(self.lastRender, null);
+
+		// paint last frame (if wanted):
+		if(lastRender && lastRender.onPaint) {
+			
+			if(lastRender.sync)
+				await self.waitForCefFrame;
+			
 			if(self.lastShareHandle)
 			{
 				if(
@@ -656,142 +642,107 @@ AfxDrawingInterop.prototype.render = async function(newRender) {
 			}
 			self.lastShareHandle = self.interop.cefTextureShareHandle;
 			
-			if(self.lastClearShareHandle)
-			{
-				if(
-					self.interop.cefClearTextureShareHandle.lo != self.lastClearShareHandle.lo
-					|| self.interop.cefClearTextureShareHandle.hi != self.lastClearShareHandle.hi) {
-					console.log("Cleaer share handle changed, releasing old one on client ...");
-					await self.releaseShareHandle(self.lastClearShareHandle);
-				}
-			}
-			self.lastClearShareHandle = self.interop.cefClearTextureShareHandle;
-		}
-		
-		async function doNewFrame(queued) {
-			console.log("doNewFrame("+queued+")");
-		
-			self.lastRender = newRender;
-			
-			if(newRender) {
-				if(queued) {
-					resolvePass();
-					return;
-				}
-				newRender = null;
-			}
-			else {
-				resolvePass();
-				return;
-			}
-			
-			await doRender();
-		}
-		
-		async function doRenderClear(queued, resized) {
-			console.log("doRenderClear("+queued+", "+resized+")");
-
-			await updateShareHandle();
-			
-			try {
-				await newRender.onClear(self.interop.cefClearTextureShareHandle);
-			} catch(e) {
-				Utils.logError(e);
-				if(!(e && e.soft)) throw e;
-			}
-			
-			if(resized) {
-				await doNewFrame(queued);
-			}
-		}
-		
-		async function doContinueRender(lastRender) {
-			// finish last frame:
-			if(lastRender && lastRender.onEnd) {
-				console.log("6");
-				try {
-					await lastRender.onEnd();
-				} catch(e) {
-					if(!(e && e.soft)) throw e;
-				}
-			}
-			
-			let resized = false;
-			
-			// Handle resizing:
-			if(newRender && (self.width !== newRender.width || self.height !== newRender.height)) {
-				console.log(newRender.width, newRender.height);
-				
-				self.width = newRender.width;
-				self.height = newRender.height;
-				
-				self.interop.setSize(newRender.width, newRender.height);
-				resized = true;
-			}
-			
-			let queued = false;
-
-			// begin new frame:
-			if(newRender && newRender.onBegin) {
-				try {
-					queued = await newRender.onBegin();
-				} catch(e) {
-					if(!(e && e.soft)) throw e;
-					queued = false;
-				}
-
-			}
-			
-			// clear new frame (if wanted):
-			if(newRender && newRender.onClear) {
-				
-				// If we resized we need to waste a frame, since we paint onto the old one.
-				if(resized) {
-					self.onAnimationFrame.push(function(timestamp) {
-						return doRenderClear(queued,true).then(()=>{ return false; }).catch((e)=>{rejectPass(e); return false; });
-					});
-					return;
-				}
-				
-				await doRenderClear(queued,false);
-			}
-			
-			await doNewFrame(queued);
-		}
-		
-		async function doPaint(lastRender) {
-			
-			await updateShareHandle();
-			
 			try {
 				await lastRender.onPaint(self.interop.cefTextureShareHandle);
 			} catch(e) {
 				if(!(e && e.soft)) throw e;
 			}
-			
-			await doContinueRender(lastRender);
 		}
 		
-		async function doRender() {
-			console.log("doRender()");
-		
-			let lastRender = Utils.coalesce(self.lastRender, null);
-
-			// paint last frame (if wanted):
-			if(lastRender && lastRender.onPaint) {
-				self.onAnimationFrame.push(function(timestamp) {
-					return doPaint(lastRender).then(()=>{
-						return null !== lastRender;
-					}).catch((e)=>{rejectPass(e); return false; });
-				});
-				return;
+		// finish last frame:
+		if(lastRender && lastRender.onEnd) {
+			try {
+				await lastRender.onEnd();
+			} catch(e) {
+				if(!(e && e.soft)) throw e;
 			}
-			
-			await doContinueRender(lastRender);
 		}
 		
-		return doRender();
-	});
+		
+		// Handle resizing:
+		if(newRender && (self.width !== newRender.width || self.height !== newRender.height)) {
+			console.log("Resizing to "+newRender.width+"x"+newRender.height+" ...");
+			
+			self.width = newRender.width;
+			self.height = newRender.height;
+			
+			self.interop.setSize(newRender.width, newRender.height);
+			
+			let timestamp = await new Promise((resolve,reject)=>{
+				window.requestAnimationFrame(function(timestamp){
+					if(newRender.sync) self.waitForCefFrame = Utils.toPromise(self.interop, "waitForCefFrame");
+					resolve(timestamp);
+				});
+			});
+			if(newRender.sync) await self.waitForCefFrame;
+		}
+		
+		let queued = false;
+		
+		// begin new frame:
+		if(newRender && newRender.onBegin) {
+			try {
+				queued = await newRender.onBegin();
+			} catch(e) {
+				if(!(e && e.soft)) throw e;
+				queued = false;
+			}
+
+		}
+		
+		
+		async function doClear() {
+			// clear new frame (if wanted):
+			if(newRender && newRender.onClear) {
+				self.interop.setCefUseClearTexture(true);
+
+				if(self.lastClearShareHandle)
+				{
+					if(
+						self.interop.cefClearTextureShareHandle.lo != self.lastClearShareHandle.lo
+						|| self.interop.cefClearTextureShareHandle.hi != self.lastClearShareHandle.hi) {
+						console.log("Clear share handle changed, releasing old one on client ...");
+						await self.releaseShareHandle(self.lastClearShareHandle);
+					}
+				}
+				self.lastClearShareHandle = self.interop.cefClearTextureShareHandle;
+				
+				try {
+					await newRender.onClear(self.interop.cefClearTextureShareHandle);
+				} catch(e) {
+					Utils.logError(e);
+					if(!(e && e.soft)) throw e;
+				}
+			}
+			else {
+				self.interop.setCefUseClearTexture(false);
+			}
+		}
+		
+		let timestamp = await new Promise((resolve,reject)=>{
+			window.requestAnimationFrame(function(timestamp){
+				let onAnimationFrame = doClear();
+				if(newRender && newRender.onAnimationFrame)
+					onAnimationFrame = onAnimationFrame.then(()=>newRender.onAnimationFrame(timestamp));
+				onAnimationFrame.then(()=>{
+					if(newRender && newRender.sync) self.waitForCefFrame = Utils.toPromise(self.interop, "waitForCefFrame");
+					resolve(timestamp);
+				}).catch((e)=>{reject(e);});
+			});
+		});
+
+		self.lastRender = newRender;
+
+		if(newRender) {
+			if(queued) {
+				break;
+			}
+			newRender = null;
+		}
+		else {
+			break;
+		}
+	}
 }
 
 AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,width,height) {
@@ -802,6 +753,7 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 		// Ensure resources:
 		
 		await this.render({
+			"sync": true, // change this according to if you need perfect sync (performance boost if false)
 			"x": x,
 			"y": y,
 			"width": width,
@@ -821,8 +773,6 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 					
 					let cmp = this.frameCount - clientFrameCount;
 					if(0 == cmp) cmp = this.pass - clientPass;
-					
-					console.log("CMP: "+cmp);
 					
 					if(cmp < 0) {
 						// client ahead.
@@ -862,6 +812,7 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 				
 				return queued;
 			},
+			// comment out or rename this to s.th. else if you don't need background of cs:go in cef for special background effects.
 			"onClear": async function(rootTextureHandle) {
 			
 				if(this.retry) return;

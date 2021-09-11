@@ -2438,30 +2438,6 @@ CAfxObject::AddFunction(
         });
 
 
- CAfxObject::AddFunction(
-        obj, "lockCefTexture",
-        [](const CefString& name, CefRefPtr<CefV8Value> object,
-           const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
-           CefString& exceptionoverride) {
-          auto self = CAfxObject::As<AfxObjectType::DrawingInteropImpl,
-                                     CDrawingInteropImpl>(object);
-          if (self == nullptr) {
-            exceptionoverride = g_szInvalidThis;
-            return true;
-          }
-
-          if (2 <= arguments.size() && arguments[0]->IsFunction() &&
-              arguments[1]->IsFunction()) {
-            self->m_OnAck = arguments[0];
-            auto message = CefProcessMessage::Create("afx-lock");
-            self->m_Frame->SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
-
-          exceptionoverride = g_szInvalidArguments;
-          return true;
-        });
-
     CAfxObject::AddFunction(
      obj, "waitForCefFrame",
      [](const CefString& name, CefRefPtr<CefV8Value> object,
@@ -2485,7 +2461,7 @@ CAfxObject::AddFunction(
      });
 
     CAfxObject::AddFunction(
-        obj, "unlockCefTexture",
+        obj, "setCefUseClearTexture",
         [](const CefString& name, CefRefPtr<CefV8Value> object,
            const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
            CefString& exceptionoverride) {
@@ -2496,20 +2472,14 @@ CAfxObject::AddFunction(
             return true;
           }
 
-          if (2 <= arguments.size() && arguments[0]->IsFunction() &&
-              arguments[1]->IsFunction()) {
-            self->m_OnAck = arguments[0];
-            auto message = CefProcessMessage::Create("afx-unlock");
+            auto message = CefProcessMessage::Create("afx-use-clear");
             auto args = message->GetArgumentList();
             args->SetSize(1);
-            args->SetBool(0, 3 <= arguments.size() && arguments[2]->IsBool() &&
-                                 arguments[2]->GetBoolValue());
+            args->SetBool(0, 1 <= arguments.size() && arguments[0]->IsBool() &&
+                                    arguments[0]->GetBoolValue());
             self->m_Frame->SendProcessMessage(PID_BROWSER, message);
-            return true;
-          }
 
-          exceptionoverride = g_szInvalidArguments;
-          return true;
+            return true;
         });
 
 
