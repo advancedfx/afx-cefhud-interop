@@ -50,7 +50,12 @@ function AfxEngineInterop(interop, args) {
 
 	this.drawingConnectRequested = false;
 	
+	this.indexSettings = {};
+	
 	this.messageHandlers = {
+		"settings": async function (settings) {
+			this.indexSettings = Object.assign({}, this.indexSettings, settings);
+		},
 		"connect": async function(senderId) {
 			await this.connect();
 		},
@@ -72,6 +77,25 @@ function AfxEngineInterop(interop, args) {
 			console.log("drawingDisconnected: "+senderId);
 			this.drawingConnectRequested = false;
 			await Utils.toPromise(this, "disconnect");
+		},
+		"pump": async function() {
+		
+			try {
+				await Utils.toPromise(this.interop, "pump", this.pumpEvents);
+			}
+			catch(e) {
+				Utils.logError(e);
+
+				if(!(e && e.soft)) {
+					await Utils.toPromise(this, "disconnect");
+					return;
+				}
+			}
+
+			if(this.connected) this.interop.onMessage(this.interop.id, JSON.stringify({
+				"id": "pump",
+				"args": []
+			}));
 		}
 	};
 	
@@ -290,7 +314,7 @@ function AfxEngineInterop(interop, args) {
 			
 			await Utils.toPromise(this.interop, "sendMessage", this.args.drawingInteropId, JSON.stringify({
 				"id": "onRenderViewBegin",
-				"args": [renderInfo]
+				"args": [renderInfo,this.indexSettings]
 			}));
 		},
 		/*
@@ -320,7 +344,7 @@ function AfxEngineInterop(interop, args) {
 		},*/		
 		// optional.
 		"onRenderViewHudEnd": async function(){
-			console.log("onRenderViewHudEnd");
+			//console.log("onRenderViewHudEnd");
 			await Utils.toPromise(this.interop, "sendMessage", this.args.drawingInteropId, JSON.stringify({
 				"id": "onHudEnd",
 				"args": [this.renderInfo.frameCount, this.pass]
@@ -350,7 +374,7 @@ function AfxEngineInterop(interop, args) {
 		// required if you want to do queued rendering optimizations,
 		// ohterwise optional.
 		"onForceEndQueue": async function() {
-			console.log("SEND onForceEndQueue");
+			//console.log("SEND onForceEndQueue");
 			await Utils.toPromise(this.interop, "sendMessage", this.args.drawingInteropId, JSON.stringify({
 				"id": "onForceEndQueue",
 				"args": []
@@ -370,45 +394,26 @@ AfxEngineInterop.prototype.connect = async function() {
 
 	var self = this;
 
-	await new Promise(function(resolve,reject){
-		self.connected = true;
-		self.newConnection = true;
-		self.drawingConnectedEvent = [resolve,reject];
+	self.connected = true;
+	self.newConnection = true;
+	self.drawingConnectRequested = true;
+		
+	await Utils.toPromise(self.interop, "sendMessage", self.args.drawingInteropId, JSON.stringify({
+		"id": "connect",
+		"args": [self.interop.id]
+	}));
+	
+	await Utils.toPromise(self.interop, "connect");
+	
+	await Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
+		"id": "engineConnected",
+		"args": [self.interop.id]
+	}));
 
-		async function doConnect() {
-			self.drawingConnectRequested = true;
-			
-			await Utils.toPromise(self.interop, "sendMessage", self.args.drawingInteropId, JSON.stringify({
-				"id": "connect",
-				"args": [self.interop.id]
-			}));
-			
-			await Utils.toPromise(self.interop, "connect");
-			
-			await Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
-					"id": "engineConnected",
-					"args": [self.interop.id]
-			}));
-		}
-
-		doConnect()
-		.then(()=>{
-			function pumper() {
-				Utils.toPromise(self.interop, "pump", self.pumpEvents).then(()=>{
-					queueMicrotask(pumper);
-				}).catch((e) => {
-					Utils.logError(e);
-
-					if(!(e && e.soft))
-						return Utils.toPromise(self, "disconnect");
-
-					queueMicrotask(pumper);
-				});
-			}
-
-			pumper();
-		});
-	});
+	await self.interop.onMessage(self.interop.id, JSON.stringify({
+		"id": "pump",
+		"args": []
+	}));
 }
 
 AfxEngineInterop.prototype.disconnect = async function() {
@@ -416,14 +421,6 @@ AfxEngineInterop.prototype.disconnect = async function() {
 	this.interop.cancel();
 	this.messages = {};
 	this.pumpPromise = Promise.resolve();
-
-	if(this.drawingConnectedEvent)
-	{
-		var e = this.drawingConnectedEvent;
-		this.drawingConnectedEvent = null;
-		e[1]();
-		return;
-	}
 
 	if(this.drawingConnectRequested)
 	{
