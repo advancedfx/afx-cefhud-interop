@@ -277,19 +277,6 @@ bool SimpleHandler::OnProcessMessageReceived(
     browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, response);
     return true;
   } else if (name == "afx-paint") {
-
-    {
-      std::unique_lock<std::mutex> lock(m_BrowserMutex);
-      auto it = m_Browsers.find(browser->GetIdentifier());
-      if (it != m_Browsers.end()) {
-        if (it->second.FirstRender) {
-          it->second.FirstRender = false;
-          lock.unlock();
-          browser->GetHost()->SendExternalBeginFrame();
-        }
-      }
-    }
-
     browser->GetHost()->SendExternalBeginFrame();
   }
   else if (name == "afx-use-clear") {

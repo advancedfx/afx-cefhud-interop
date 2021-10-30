@@ -101,8 +101,8 @@ function AfxDrawingInterop(interop,args) {
 				o.pos = float4(i.pos, 1);
 				o.pos = mul( o.pos, World );
     			o.pos = mul( o.pos, View );
-    			o.pos = mul( o.pos, Projection );	
-				o.pos /= o.pos.w;			
+    			o.pos = mul( o.pos, Projection );
+				o.pos /= o.pos.w;
 				o.c = float4(o.pos.x,0,o.pos.y,1);
 				o.t0 = i.t0;
 				
@@ -238,11 +238,24 @@ function AfxDrawingInterop(interop,args) {
 	this.vertexBuffers = {
 		"rect": null
 	};
+
+	async function waitForFirstSucessfulPaint() {
+		let painted = false;
+		while(!painted) {
+			Utils.toPromise(self.interop, "waitForCefFrame").then(()=>{
+				painted = true;
+			});
+			await Utils.sleepPromise(1000);
+		}
+	}
 	
-	Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
-		"id": "drawingCreated",
-		"args": [interop.id]
-	}));
+	
+	waitForFirstSucessfulPaint().then(()=>{
+		Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
+			"id": "drawingCreated",
+			"args": [interop.id]
+		}));
+	});
 }
 
 AfxDrawingInterop.prototype.onDeviceReset = async function() {
@@ -632,8 +645,7 @@ AfxDrawingInterop.prototype.render = async function(newRender) {
 		// paint last frame (if wanted):
 		if(lastRender && lastRender.onPaint) {
 			
-			if(lastRender.sync)
-				await Utils.toPromise(self.interop, "waitForCefFrame");
+			await Utils.toPromise(self.interop, "waitForCefFrame");
 			
 			if(self.lastShareHandle)
 			{
@@ -743,7 +755,6 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 		// Ensure resources:
 		
 		let renderSettings = {
-			"sync": this.indexSettings.sync,
 			"x": x,
 			"y": y,
 			"width": width,
