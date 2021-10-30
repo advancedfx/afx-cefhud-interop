@@ -2453,6 +2453,10 @@ CAfxObject::AddFunction(
        if (2 <= arguments.size() && arguments[0]->IsFunction() &&
            arguments[1]->IsFunction()) {
          self->m_OnFrame = arguments[0];
+
+         auto message = CefProcessMessage::Create("afx-paint");
+         self->m_Frame->SendProcessMessage(PID_BROWSER, message);
+
          return true;
        }
 

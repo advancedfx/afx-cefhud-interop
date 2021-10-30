@@ -222,7 +222,7 @@ void SimpleHandler::DoCreateDrawing(const std::string& argStr, const std::string
   CefWindowInfo window_info;
   window_info.SetAsWindowless(NULL);
   window_info.shared_texture_enabled = true;
-  window_info.external_begin_frame_enabled = false;
+  window_info.external_begin_frame_enabled = true;
   window_info.width = 640;
   window_info.height = 360;
 
@@ -276,6 +276,21 @@ bool SimpleHandler::OnProcessMessageReceived(
     auto response = CefProcessMessage::Create("afx-ack");
     browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, response);
     return true;
+  } else if (name == "afx-paint") {
+
+    {
+      std::unique_lock<std::mutex> lock(m_BrowserMutex);
+      auto it = m_Browsers.find(browser->GetIdentifier());
+      if (it != m_Browsers.end()) {
+        if (it->second.FirstRender) {
+          it->second.FirstRender = false;
+          lock.unlock();
+          browser->GetHost()->SendExternalBeginFrame();
+        }
+      }
+    }
+
+    browser->GetHost()->SendExternalBeginFrame();
   }
   else if (name == "afx-use-clear") {
     auto args = message->GetArgumentList();

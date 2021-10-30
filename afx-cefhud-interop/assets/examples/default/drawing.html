@@ -633,7 +633,7 @@ AfxDrawingInterop.prototype.render = async function(newRender) {
 		if(lastRender && lastRender.onPaint) {
 			
 			if(lastRender.sync)
-				await self.waitForCefFrame;
+				await Utils.toPromise(self.interop, "waitForCefFrame");
 			
 			if(self.lastShareHandle)
 			{
@@ -662,7 +662,6 @@ AfxDrawingInterop.prototype.render = async function(newRender) {
 			}
 		}
 		
-		
 		// Handle resizing:
 		if(newRender && (self.width !== newRender.width || self.height !== newRender.height)) {
 			console.log("Resizing to "+newRender.width+"x"+newRender.height+" ...");
@@ -672,13 +671,7 @@ AfxDrawingInterop.prototype.render = async function(newRender) {
 			
 			self.interop.setSize(newRender.width, newRender.height);
 			
-			let timestamp = await new Promise((resolve,reject)=>{
-				window.requestAnimationFrame(function(timestamp){
-					if(newRender.sync) self.waitForCefFrame = Utils.toPromise(self.interop, "waitForCefFrame");
-					resolve(timestamp);
-				});
-			});
-			if(newRender.sync) await self.waitForCefFrame;
+			await Utils.toPromise(self.interop, "waitForCefFrame");
 		}
 		
 		let queued = false;
@@ -723,17 +716,10 @@ AfxDrawingInterop.prototype.render = async function(newRender) {
 			}
 		}
 		
-		let timestamp = await new Promise((resolve,reject)=>{
-			window.requestAnimationFrame(function(timestamp){
-				let onAnimationFrame = doClear();
-				if(newRender && newRender.onAnimationFrame)
-					onAnimationFrame = onAnimationFrame.then(()=>newRender.onAnimationFrame(timestamp));
-				onAnimationFrame.then(()=>{
-					if(newRender && newRender.sync) self.waitForCefFrame = Utils.toPromise(self.interop, "waitForCefFrame");
-					resolve(timestamp);
-				}).catch((e)=>{reject(e);});
-			});
-		});
+		await doClear();
+
+		if(newRender && newRender.onAnimationFrame)
+			await newRender.onAnimationFrame(timestamp);
 
 		self.lastRender = newRender;
 

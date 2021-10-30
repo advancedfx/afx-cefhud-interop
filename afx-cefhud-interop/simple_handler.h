@@ -80,31 +80,33 @@ class SimpleHandler : public CefClient,
                                    const RectList& dirtyRects,
                                    void* shared_handle) OVERRIDE {
 
-     HANDLE clearHandle = INVALID_HANDLE_VALUE;
-     int browserId = browser->GetIdentifier();
+    if (type == PET_VIEW) {
+       HANDLE clearHandle = INVALID_HANDLE_VALUE;
+       int browserId = browser->GetIdentifier();
 
-     {
-       std::unique_lock<std::mutex> lock(m_BrowserMutex);
+       {
+         std::unique_lock<std::mutex> lock(m_BrowserMutex);
 
-       if (0 != browserId) {
-         auto it2 = m_Browsers.find(browserId);
-         if (it2 != m_Browsers.end()) {
-           clearHandle = it2->second.ClearHandle;
+         if (0 != browserId) {
+           auto it2 = m_Browsers.find(browserId);
+           if (it2 != m_Browsers.end()) {
+             clearHandle = it2->second.ClearHandle;
+           }
          }
        }
+
+       auto message = CefProcessMessage::Create("afx-paint");
+       auto args = message->GetArgumentList();
+       args->SetSize(4);
+       args->SetInt(0, (int)(((unsigned __int64)shared_handle) & 0xFFFFFFFF));
+       args->SetInt(1, (int)(((unsigned __int64)shared_handle) >> 32));
+       args->SetInt(2, (int)(((unsigned __int64)clearHandle) & 0xFFFFFFFF));
+       args->SetInt(3, (int)(((unsigned __int64)clearHandle) >> 32));
+
+       // DLOG(INFO) << "OnAcceleratedPaint: " << browser->GetIdentifier();
+
+       browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, message);
      }
-
-     auto message = CefProcessMessage::Create("afx-paint");
-     auto args = message->GetArgumentList();
-     args->SetSize(4);
-     args->SetInt(0, (int)(((unsigned __int64)shared_handle) & 0xFFFFFFFF));
-     args->SetInt(1, (int)(((unsigned __int64)shared_handle) >> 32));
-     args->SetInt(2, (int)(((unsigned __int64)clearHandle) & 0xFFFFFFFF));
-     args->SetInt(3, (int)(((unsigned __int64)clearHandle) >> 32));
-
-     //DLOG(INFO) << "OnAcceleratedPaint: " << browser->GetIdentifier();
-
-     browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, message);
    }
 
      virtual bool GetScreenInfo(CefRefPtr<CefBrowser> browser,
@@ -238,6 +240,7 @@ class SimpleHandler : public CefClient,
     int Height = 480;
     class CHostPipeServerConnectionThread* Connection = nullptr;
     HANDLE ClearHandle = INVALID_HANDLE_VALUE;
+    bool FirstRender = true;
 
     BrowserMapElem(CefRefPtr<CefBrowser> browser) : Browser(browser) {}
   };
