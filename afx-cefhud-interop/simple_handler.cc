@@ -217,12 +217,12 @@ bool SimpleHandler::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
 
 void SimpleHandler::DoCreateDrawing(const std::string& argStr, const std::string& argUrl) {
   CefBrowserSettings browser_settings;
-  browser_settings.file_access_from_file_urls = STATE_ENABLED;
+  //browser_settings.file_access_from_file_urls = STATE_ENABLED;
   browser_settings.windowless_frame_rate = 1; // vsync doesn't matter only if external_begin_frame_enabled
   CefWindowInfo window_info;
   window_info.SetAsWindowless(NULL);
   window_info.shared_texture_enabled = true;
-  window_info.external_begin_frame_enabled = true;
+  window_info.external_begin_frame_enabled = false;
   window_info.width = 640;
   window_info.height = 360;
 
@@ -238,13 +238,13 @@ void SimpleHandler::DoCreateDrawing(const std::string& argStr, const std::string
 
 void SimpleHandler::DoCreateEngine(const std::string& argStr, const std::string& argUrl) {
   CefBrowserSettings browser_settings;
-  browser_settings.file_access_from_file_urls = STATE_ENABLED;
+  //browser_settings.file_access_from_file_urls = STATE_ENABLED;
   browser_settings.windowless_frame_rate = 1;
 
   CefWindowInfo window_info;
   window_info.SetAsWindowless(NULL);
   window_info.shared_texture_enabled = false;
-  window_info.external_begin_frame_enabled = false;
+  window_info.external_begin_frame_enabled = true;
   window_info.width = 640;
   window_info.height = 360;
 
@@ -266,40 +266,57 @@ bool SimpleHandler::OnProcessMessageReceived(
   auto name = message->GetName();
 
   if (name == "afx-lock") {
-    std::unique_lock<std::mutex> lock(m_BrowserMutex);
-    auto it = m_Browsers.find(browser->GetIdentifier());
-    if (it != m_Browsers.end()) {
-      if (auto connection = it->second.Connection) {
-        connection->Lock();
+    {
+      std::unique_lock<std::mutex> lock(m_BrowserMutex);
+      auto it = m_Browsers.find(browser->GetIdentifier());
+      if (it != m_Browsers.end()) {
+        if (auto connection = it->second.Connection) {
+          connection->Lock();
+        }
       }
     }
     auto response = CefProcessMessage::Create("afx-ack");
     browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, response);
     return true;
   } else if (name == "afx-paint") {
-    browser->GetHost()->SendExternalBeginFrame();
-  }
-  else if (name == "afx-use-clear") {
-    auto args = message->GetArgumentList();
-    bool useClearTexture = args->GetBool(0);
-    std::unique_lock<std::mutex> lock(m_BrowserMutex);
-    auto it = m_Browsers.find(browser->GetIdentifier());
-    if (it != m_Browsers.end()) {
-      if (auto connection = it->second.Connection) {
-        connection->SetUseClear(useClearTexture);
+    CefPostTask(TID_UI, new advancedfx::interop::CAfxTask([this, browser] {
+                  std::unique_lock<std::mutex> lock(m_BrowserMutex);
+                  auto it = m_Browsers.find(browser->GetIdentifier());
+                  if (it != m_Browsers.end()) {
+                    if (auto connection = it->second.Connection) {
+                      it->second.Waiting = 1;
+                      it->second.ClearHandle = INVALID_HANDLE_VALUE;                    
+                    }
+                  }
+                  lock.unlock();
+                  browser->GetHost()->WasHidden(true);
+                  browser->GetHost()->WasHidden(false);
+                }));
+  } else if (name == "afx-use-clear") {
+    {
+      auto args = message->GetArgumentList();
+      bool useClearTexture = args->GetBool(0);
+      std::unique_lock<std::mutex> lock(m_BrowserMutex);
+      auto it = m_Browsers.find(browser->GetIdentifier());
+      if (it != m_Browsers.end()) {
+        if (auto connection = it->second.Connection) {
+          connection->SetUseClear(useClearTexture);
+        }
       }
     }
     auto response = CefProcessMessage::Create("afx-ack");
     browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, response);
     return true;
   } else if (name == "afx-unlock") {
-    auto args = message->GetArgumentList();
-    bool updateClearTexture = args->GetBool(0);
-    std::unique_lock<std::mutex> lock(m_BrowserMutex);
-    auto it = m_Browsers.find(browser->GetIdentifier());
-    if (it != m_Browsers.end()) {
-      if (auto connection = it->second.Connection) {
-        connection->Unlock(updateClearTexture);
+    {
+      auto args = message->GetArgumentList();
+      bool updateClearTexture = args->GetBool(0);
+      std::unique_lock<std::mutex> lock(m_BrowserMutex);
+      auto it = m_Browsers.find(browser->GetIdentifier());
+      if (it != m_Browsers.end()) {
+        if (auto connection = it->second.Connection) {
+          connection->Unlock(updateClearTexture);
+        }
       }
     }
     auto response = CefProcessMessage::Create("afx-ack");

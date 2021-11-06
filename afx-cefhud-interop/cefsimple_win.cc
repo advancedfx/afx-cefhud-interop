@@ -1024,12 +1024,12 @@ class TestClient : public CefClient, public CefLifeSpanHandler {
   IMPLEMENT_REFCOUNTING(TestClient);
 
   public:
-  virtual CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() OVERRIDE {
+  virtual CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override {
     return this;
   }
 
-  virtual bool DoClose(CefRefPtr<CefBrowser> browser) OVERRIDE { return false; }
-  virtual void OnBeforeClose(CefRefPtr<CefBrowser> browser) OVERRIDE {
+  virtual bool DoClose(CefRefPtr<CefBrowser> browser) override { return false; }
+  virtual void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
   
       CefQuitMessageLoop();
   }
@@ -1040,11 +1040,11 @@ class TestApp : public CefApp, public CefBrowserProcessHandler {
 
  public:
   virtual CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler()
-      OVERRIDE {
+      override {
     return this;
   }
 
-  void OnContextInitialized() OVERRIDE {
+  void OnContextInitialized() override {
     CefWindowInfo window_info;
     window_info.SetAsPopup(NULL, "cefsimple");
 
@@ -1091,7 +1091,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
   DetourUpdateThread(GetCurrentThread());
   DetourAttach(&(PVOID&)TrueD3D11CreateDevice, MyD3D11CreateDevice);
   g_detours_error = DetourTransactionCommit();
-  //
   
   // Enable High-DPI support on Windows 7 or newer.
   CefEnableHighDPISupport();
@@ -1144,12 +1143,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
   // Shut down CEF.
   CefShutdown();
 
-  //
   DetourTransactionBegin();
   DetourUpdateThread(GetCurrentThread());
   DetourDetach(&(PVOID&)TrueD3D11CreateDevice, MyD3D11CreateDevice);
   g_detours_error = DetourTransactionCommit();
-  //
 
   FreeLibrary(g_hD3d11Dll);
 

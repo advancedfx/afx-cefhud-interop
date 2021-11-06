@@ -19,6 +19,13 @@
 #include <vector>
 #include <functional>
 
+#define CefPostTask(tid, args) \
+  if (!CefPostTask(tid, args)) \
+  {           \
+    MessageBoxA(0, "HOLLA", "LOL", MB_OK); \
+    DebugBreak(); \
+  }
+
 namespace advancedfx {
 namespace interop {
 
@@ -478,7 +485,7 @@ void CPipeReader::ReadBytes(LPVOID bytes, DWORD offset, DWORD length) {
     DWORD bytesRead = 0;
 
     if (!(ReadFile(m_Handle, (unsigned char*)bytes + offset, length,
-                   &bytesRead, NULL))) {
+                   &bytesRead, nullptr))) {
       DWORD lastError = GetLastError();
       switch (lastError) {
         case ERROR_MORE_DATA:
@@ -580,7 +587,7 @@ void CPipeWriter::WriteBytes(const LPVOID bytes, DWORD offset, DWORD length) {
     DWORD bytesWritten = 0;
 
     if (!(WriteFile(m_Handle, (unsigned char*)bytes + offset, length,
-                    &bytesWritten, NULL))) {
+                    &bytesWritten, nullptr))) {
       DWORD lastError = GetLastError();
       switch (lastError) {
         case ERROR_MORE_DATA:
@@ -674,7 +681,7 @@ void CPipeClient::OpenPipe(const char* pipeName, int timeOut) {
 
   for(int i = 0; i < 2; ++i)
   {
-    m_Handle = CreateFileA(pipeName, GENERIC_WRITE | GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+    m_Handle = CreateFileA(pipeName, GENERIC_WRITE | GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
     if (m_Handle != INVALID_HANDLE_VALUE)
       return;
 
@@ -724,13 +731,13 @@ CPipeServerConnectionThread* CPipeServer::WaitForConnection(
                                PIPE_REJECT_REMOTE_CLIENTS,
                            PIPE_UNLIMITED_INSTANCES, 0,0,
                            pipeTimeOut,
-                           NULL);
+                           nullptr);
 
     if (hPipe == INVALID_HANDLE_VALUE) {
       throw CWinApiException("CreateNamedPipeA failed", GetLastError());
     }
 
-    fConnected = ConnectNamedPipe(hPipe, NULL)
+    fConnected = ConnectNamedPipe(hPipe, nullptr)
                      ? TRUE
                      : (GetLastError() == ERROR_PIPE_CONNECTED);
 
@@ -782,7 +789,7 @@ class CNamedPipeServer {
     m_PipeHandle = CreateNamedPipeA(strPipeName.c_str(), PIPE_ACCESS_DUPLEX,
                                     PIPE_READMODE_BYTE | PIPE_TYPE_BYTE |
                                         PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                         1, 0, 0, TEN_MINUTES_IN_MILLISECONDS, NULL);
+                         1, 0, 0, TEN_MINUTES_IN_MILLISECONDS, nullptr);
 
     return m_PipeHandle != INVALID_HANDLE_VALUE;
   }
@@ -791,7 +798,7 @@ class CNamedPipeServer {
     std::unique_lock<std::mutex> lock(m_PipeMutex);
 
     if (m_PipeHandle != INVALID_HANDLE_VALUE) {
-      BOOL fConnected = ConnectNamedPipe(m_PipeHandle, NULL)
+      BOOL fConnected = ConnectNamedPipe(m_PipeHandle, nullptr)
                             ? TRUE
                             : (GetLastError() == ERROR_PIPE_CONNECTED);
 
@@ -808,7 +815,7 @@ class CNamedPipeServer {
       DWORD bytesRead = 0;
 
       if (!(ReadFile(m_PipeHandle, (unsigned char*)bytes + offset, length,
-                     &bytesRead, NULL))) {
+                     &bytesRead, nullptr))) {
         DWORD lastError = GetLastError();
         switch (lastError) {
           case ERROR_MORE_DATA:
@@ -924,7 +931,7 @@ class CNamedPipeServer {
       DWORD bytesWritten = 0;
 
       if (!(WriteFile(m_PipeHandle, (unsigned char*)bytes + offset, length,
-                      &bytesWritten, NULL))) {
+                      &bytesWritten, nullptr))) {
         DWORD lastError = GetLastError();
         switch (lastError) {
           case ERROR_MORE_DATA:
@@ -1388,8 +1395,8 @@ class CAfxCallback : public CefBaseRefCounted {
 
   bool IsValid() { return m_CallbackFunc != nullptr; }
 
-  CefRefPtr<CefV8Value> ExecuteCallback(const CefV8ValueList& arguments) {
-    return m_CallbackFunc->ExecuteFunctionWithContext(CefV8Context::GetCurrentContext(), NULL,
+  CefRefPtr<CefV8Value> ExecuteCallback(CefRefPtr<CefV8Context> context, const CefV8ValueList& arguments) {
+    return m_CallbackFunc->ExecuteFunctionWithContext(context, nullptr,
                                                       arguments);
   }
 
@@ -1453,8 +1460,9 @@ class CAfxObject : public CAfxObjectBase, public CefV8Handler {
     object->SetValue(name, func, V8_PROPERTY_ATTRIBUTE_NONE);
     self->m_GetMap.emplace(
         name, [func](const CefString& name, const CefRefPtr<CefV8Value> object,
-                     CefRefPtr<CefV8Value>& retval,
-                     CefString& exception) { return func; });
+                 CefRefPtr<CefV8Value>& retval,
+                 CefString& exception) { retval = func;
+                return true; });
   }
 
   static CefRefPtr<CAfxObject> As(CefRefPtr<CefV8Value> value) {
@@ -1553,7 +1561,7 @@ class CAfxObject : public CAfxObjectBase, public CefV8Handler {
                        CefRefPtr<CefV8Value> object,
                        const CefV8ValueList& arguments,
                        CefRefPtr<CefV8Value>& retval,
-                       CefString& exception) OVERRIDE {
+                       CefString& exception) override {
     auto self = As(object);
     if (self == nullptr) {
       exception = g_szInvalidThis;
@@ -1574,7 +1582,7 @@ class CAfxObject : public CAfxObjectBase, public CefV8Handler {
 
   UINT64 GetIndex() const { return (UINT64)this; }
 
-  virtual CAfxObject * AsRef() OVERRIDE { return this; }
+  virtual CAfxObject * AsRef() override { return this; }
 
  private:
   class CAfxObjectHandler : public CefV8Accessor {
@@ -1583,7 +1591,7 @@ class CAfxObject : public CAfxObjectBase, public CefV8Handler {
     virtual bool Get(const CefString& name,
                      const CefRefPtr<CefV8Value> object,
                      CefRefPtr<CefV8Value>& retval,
-                     CefString& exception) OVERRIDE {
+                     CefString& exception) override {
       auto self = As(object);
       if (self == nullptr) {
         exception = g_szInvalidThis;
@@ -1601,7 +1609,7 @@ class CAfxObject : public CAfxObjectBase, public CefV8Handler {
     virtual bool Set(const CefString& name,
                      const CefRefPtr<CefV8Value> object,
                      const CefRefPtr<CefV8Value> value,
-                     CefString& exception) OVERRIDE {
+                     CefString& exception) override {
       auto self = As(object);
       if (self == nullptr) {
         exception = g_szInvalidThis;
@@ -1832,7 +1840,7 @@ class CCalcCallbacks abstract : public CCalcCallbacksGuts {
                         return;
 
           interop->m_Context->Enter();
-          CallResult(callback, result);
+                      CallResult(callback, interop->m_Context, result);
             interop->m_Context->Exit();
         }));
       }
@@ -1843,7 +1851,9 @@ class CCalcCallbacks abstract : public CCalcCallbacksGuts {
 
  protected:
   virtual bool ReadResult(CNamedPipeServer & pipeServer, CefRefPtr<R> outResult) = 0;
-  virtual void CallResult(CefRefPtr<CAfxCallback> callback, CefRefPtr<R> result) = 0;
+  virtual void CallResult(CefRefPtr<CAfxCallback> callback,
+                          CefRefPtr<CefV8Context> context,
+                          CefRefPtr<R> result) = 0;
 };
 
 class CHandleCalcCallbacks
@@ -1858,6 +1868,7 @@ class CHandleCalcCallbacks
   }
 
   virtual void CallResult(CefRefPtr<CAfxCallback> callback,
+      CefRefPtr<CefV8Context> context,
                           CefRefPtr<struct HandleCalcResult_s> result) override {
 
     CefV8ValueList args;
@@ -1873,7 +1884,7 @@ class CHandleCalcCallbacks
       args.push_back(CefV8Value::CreateNull());
     }
 
-    callback->ExecuteCallback(args);
+    callback->ExecuteCallback(context,args);
   }
 };
 
@@ -1900,6 +1911,7 @@ class CVecAngCalcCallbacks
   }
 
   virtual void CallResult(CefRefPtr<CAfxCallback> callback,
+      CefRefPtr<CefV8Context> context,
                           CefRefPtr<struct VecAngCalcResult_s> result) override {
 
     CefV8ValueList args;
@@ -1933,7 +1945,7 @@ class CVecAngCalcCallbacks
       args.push_back(CefV8Value::CreateNull());
     }
 
-    callback->ExecuteCallback(args);
+    callback->ExecuteCallback(context,args);
   }
 };
 
@@ -1962,6 +1974,7 @@ class CCamCalcCallbacks : public CCalcCallbacks<struct CamCalcResult_s> {
   }
 
   virtual void CallResult(CefRefPtr<CAfxCallback> callback,
+                          CefRefPtr<CefV8Context> context,
                           CefRefPtr<struct CamCalcResult_s> result) override {
     CefV8ValueList args;
 
@@ -1997,7 +2010,7 @@ class CCamCalcCallbacks : public CCalcCallbacks<struct CamCalcResult_s> {
       args.push_back(CefV8Value::CreateNull());
     }
 
-    callback->ExecuteCallback(args);
+    callback->ExecuteCallback(context, args);
   }
 };
 
@@ -2013,6 +2026,7 @@ class CFovCalcCallbacks
   }
 
   virtual void CallResult(CefRefPtr<CAfxCallback> callback,
+                          CefRefPtr<CefV8Context> context,
                           CefRefPtr<struct FovCalcResult_s> result) override {
     CefV8ValueList args;
 
@@ -2027,7 +2041,7 @@ class CFovCalcCallbacks
       args.push_back(CefV8Value::CreateNull());
     }
 
-    callback->ExecuteCallback(args);
+    callback->ExecuteCallback(context,args);
   }
 };
 
@@ -2046,6 +2060,7 @@ class CBoolCalcCallbacks
   }
 
   virtual void CallResult(CefRefPtr<CAfxCallback> callback,
+                          CefRefPtr<CefV8Context> context,
                           CefRefPtr<struct BoolCalcResult_s> result) override {
     CefV8ValueList args;
 
@@ -2060,7 +2075,7 @@ class CBoolCalcCallbacks
       args.push_back(CefV8Value::CreateNull());
     }
 
-    callback->ExecuteCallback(args);
+    callback->ExecuteCallback(context,args);
   }
 };
 
@@ -2079,6 +2094,7 @@ class CIntCalcCallbacks
   }
 
   virtual void CallResult(CefRefPtr<CAfxCallback> callback,
+                          CefRefPtr<CefV8Context> context,
                           CefRefPtr<struct IntCalcResult_s> result) override {
     CefV8ValueList args;
 
@@ -2093,7 +2109,7 @@ class CIntCalcCallbacks
       args.push_back(CefV8Value::CreateNull());
     }
 
-    callback->ExecuteCallback(args);
+    callback->ExecuteCallback(context,args);
   }
 };
 
@@ -2170,7 +2186,7 @@ class CDrawingInteropImpl : public CAfxObject,
       CefRefPtr<CefBrowser> browser,
       CefRefPtr<CefFrame> frame,
       CefProcessId source_process,
-      CefRefPtr<CefProcessMessage> message) OVERRIDE {
+      CefRefPtr<CefProcessMessage> message) override {
     auto name = message->GetName();
 
     if (name == "afx-paint") {
@@ -2193,7 +2209,7 @@ class CDrawingInteropImpl : public CAfxObject,
                         return;
 
                       m_Context->Enter();
-                      fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                      fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
                       m_Context->Exit();
                     }));
       }
@@ -2208,7 +2224,7 @@ class CDrawingInteropImpl : public CAfxObject,
                         return;
 
                       m_Context->Enter();
-                      fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                      fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
                       m_Context->Exit();
                     }));
       }
@@ -2225,6 +2241,7 @@ class CDrawingInteropImpl : public CAfxObject,
                                       const CefString& argStr,
                                       DWORD handlerId,
                                       CefRefPtr<CInterop>* out = nullptr) {
+
     CefRefPtr<CDrawingInteropImpl> self =
         new CDrawingInteropImpl(browser->GetIdentifier());
 
@@ -2354,7 +2371,8 @@ CAfxObject::AddFunction(
                             return;
 
                           self->m_Context->Enter();
-                          fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                          fn_resolve->ExecuteFunction(nullptr,
+                                                      CefV8ValueList());
                           self->m_Context->Exit();
                         }));
                   } catch (const std::exception& e) {
@@ -2368,7 +2386,7 @@ CAfxObject::AddFunction(
                           self->m_Context->Enter();
                           CefV8ValueList args;
                           args.push_back(CefV8Value::CreateString(error_msg));
-                          fn_reject->ExecuteFunction(NULL, args);
+                          fn_reject->ExecuteFunction(nullptr, args);
                           self->m_Context->Exit();
                         }));
 
@@ -2543,7 +2561,7 @@ CAfxObject::AddFunction(
                             return;
 
                           self->m_Context->Enter();
-                          fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                          fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
                           self->m_Context->Exit();
                         }));
           } else {
@@ -2552,7 +2570,7 @@ CAfxObject::AddFunction(
                             return;
 
                           self->m_Context->Enter();
-                          fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                          fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                           self->m_Context->Exit();
                         }));
           }
@@ -2602,7 +2620,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -2656,7 +2674,7 @@ CAfxObject::AddFunction(
                                            CefV8Value::CreateUInt(pass),
                                            V8_PROPERTY_ATTRIBUTE_NONE);
                           args.push_back(dict);
-                          fn_resolve->ExecuteFunction(NULL, args);
+                          fn_resolve->ExecuteFunction(nullptr, args);
                           self->m_Context->Exit();
                         }));
           } else {
@@ -2668,7 +2686,7 @@ CAfxObject::AddFunction(
                           self->m_Context->Enter();
                           CefV8ValueList args;
                           args.push_back(CefV8Value::CreateString("AfxInterop.cpp:"+std::to_string(errorLine)));
-                          fn_reject->ExecuteFunction(NULL, args);
+                          fn_reject->ExecuteFunction(nullptr, args);
                           self->m_Context->Exit();
                         }));
           }
@@ -2707,7 +2725,7 @@ CAfxObject::AddFunction(
 
               CefPostTask(TID_RENDERER, new CAfxTask([self, fn_resolve]() {
                             self->m_Context->Enter();
-                            fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
               return;
@@ -2720,7 +2738,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -2757,7 +2775,7 @@ CAfxObject::AddFunction(
 
               CefPostTask(TID_RENDERER, new CAfxTask([self, fn_resolve]() {
                             self->m_Context->Enter();
-                            fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
               return;
@@ -2770,7 +2788,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -2812,7 +2830,7 @@ CAfxObject::AddFunction(
 
             CefPostTask(TID_RENDERER, new CAfxTask([self, fn_resolve]() {
                           self->m_Context->Enter();
-                          fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                          fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
                           self->m_Context->Exit();
                         }));
             return;
@@ -2825,7 +2843,7 @@ CAfxObject::AddFunction(
                           return;
 
                         self->m_Context->Enter();
-                       fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                       fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                         self->m_Context->Exit();
                      }));
         });
@@ -2903,7 +2921,7 @@ CAfxObject::AddFunction(
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Context->Exit();
                       }));
                   return;
@@ -2921,7 +2939,7 @@ CAfxObject::AddFunction(
                                 CefV8ValueList args;
                                 args.push_back(CefV8Value::CreateInt(hr));
                                 fn_resolve->ExecuteFunction(
-                                    NULL, args);
+                                    nullptr, args);
                                 self->m_Context->Exit();
                               }));
                 return;
@@ -2934,7 +2952,7 @@ CAfxObject::AddFunction(
                                 return;
 
                               self->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL,
+                              fn_reject->ExecuteFunction(nullptr,
                                                          CefV8ValueList());
                               self->m_Context->Exit();
                             }));
@@ -3039,7 +3057,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
 
                       self->m_Context->Exit();
                     }));
@@ -3070,7 +3088,7 @@ CAfxObject::AddFunction(
 
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(hr));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -3083,7 +3101,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -3185,7 +3203,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
 
                       self->m_Context->Exit();
                     }));
@@ -3216,7 +3234,7 @@ CAfxObject::AddFunction(
 
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(hr));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -3229,7 +3247,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -3342,7 +3360,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
 
                       self->m_Context->Exit();
                     }));
@@ -3374,7 +3392,7 @@ CAfxObject::AddFunction(
 
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(hr));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -3387,7 +3405,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -3468,7 +3486,7 @@ CAfxObject::AddFunction(
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Context->Exit();
                       }));
                   return;
@@ -3489,7 +3507,7 @@ CAfxObject::AddFunction(
 
                               args.push_back(CefV8Value::CreateInt(hr));
 
-                              fn_resolve->ExecuteFunction(NULL, args);
+                              fn_resolve->ExecuteFunction(nullptr, args);
                               self->m_Context->Exit();
                             }));
                 
@@ -3503,7 +3521,7 @@ CAfxObject::AddFunction(
                                 return;
 
                               self->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL,
+                              fn_reject->ExecuteFunction(nullptr,
                                                          CefV8ValueList());
                               self->m_Context->Exit();
                             }));
@@ -3585,7 +3603,7 @@ CAfxObject::AddFunction(
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Context->Exit();
                       }));
                   return;
@@ -3605,7 +3623,7 @@ CAfxObject::AddFunction(
                                 CefV8ValueList args;
                                 args.push_back(CefV8Value::CreateInt(hr));
                                 fn_resolve->ExecuteFunction(
-                                    NULL, args);
+                                    nullptr, args);
                                 self->m_Context->Exit();
                               }));
                 return;
@@ -3618,7 +3636,7 @@ CAfxObject::AddFunction(
                                 return;
 
                               self->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL,
+                              fn_reject->ExecuteFunction(nullptr,
                                                          CefV8ValueList());
                               self->m_Context->Exit();
                             }));
@@ -3694,7 +3712,7 @@ CAfxObject::AddFunction(
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
 
                         self->m_Context->Exit();
                       }));
@@ -3710,7 +3728,7 @@ CAfxObject::AddFunction(
 
                               CefV8ValueList args;
                               args.push_back(CefV8Value::CreateInt(hr));
-                              fn_resolve->ExecuteFunction(NULL, args);
+                              fn_resolve->ExecuteFunction(nullptr, args);
                               self->m_Context->Exit();
                             }));
                 return;
@@ -3723,7 +3741,7 @@ CAfxObject::AddFunction(
                                 return;
 
                               self->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                              fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                               self->m_Context->Exit();
                             }));
 
@@ -3793,7 +3811,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
                       self->m_Context->Exit();
                     }));
                 return;
@@ -3806,7 +3824,7 @@ CAfxObject::AddFunction(
                             self->m_Context->Enter();
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(hr));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -3819,7 +3837,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -3881,7 +3899,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
                       self->m_Context->Exit();
                     }));
                 return;
@@ -3894,7 +3912,7 @@ CAfxObject::AddFunction(
                             self->m_Context->Enter();
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(hr));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -3907,7 +3925,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -3984,7 +4002,7 @@ CAfxObject::AddFunction(
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Context->Exit();
                       }));
                   return;
@@ -3998,7 +4016,7 @@ CAfxObject::AddFunction(
                               self->m_Context->Enter();
                               CefV8ValueList args;
                               args.push_back(CefV8Value::CreateInt(hr));
-                              fn_resolve->ExecuteFunction(NULL, args);
+                              fn_resolve->ExecuteFunction(nullptr, args);
                               self->m_Context->Exit();
                             }));
                 return;
@@ -4011,7 +4029,7 @@ CAfxObject::AddFunction(
                                 return;
 
                               self->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL,
+                              fn_reject->ExecuteFunction(nullptr,
                                                          CefV8ValueList());
                               self->m_Context->Exit();
                             }));
@@ -4084,7 +4102,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
                       self->m_Context->Exit();
                     }));
                 return;
@@ -4097,7 +4115,7 @@ CAfxObject::AddFunction(
                             self->m_Context->Enter();
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(hr));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -4110,7 +4128,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -4186,7 +4204,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
                       self->m_Context->Exit();
                     }));
                 return;
@@ -4199,7 +4217,7 @@ CAfxObject::AddFunction(
                             self->m_Context->Enter();
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(hr));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -4212,7 +4230,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -4285,7 +4303,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
                       self->m_Context->Exit();
                     }));
                 return;
@@ -4298,7 +4316,7 @@ CAfxObject::AddFunction(
                             self->m_Context->Enter();
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(hr));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -4311,7 +4329,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -4386,7 +4404,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
                       self->m_Context->Exit();
                     }));
                 return;
@@ -4399,7 +4417,7 @@ CAfxObject::AddFunction(
                             self->m_Context->Enter();
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(hr));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -4412,7 +4430,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -4499,7 +4517,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
                       self->m_Context->Exit();
                     }));
                 return;
@@ -4512,7 +4530,7 @@ CAfxObject::AddFunction(
                             self->m_Context->Enter();
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(hr));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -4525,7 +4543,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -4596,7 +4614,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
                       self->m_Context->Exit();
                     }));
                 return;
@@ -4609,7 +4627,7 @@ CAfxObject::AddFunction(
                             self->m_Context->Enter();
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(hr));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -4622,7 +4640,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -4699,7 +4717,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
                       self->m_Context->Exit();
                     }));
                 return;
@@ -4712,7 +4730,7 @@ CAfxObject::AddFunction(
                             self->m_Context->Enter();
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(hr));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -4725,7 +4743,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -4793,7 +4811,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
                       self->m_Context->Exit();
                     }));
                 return;
@@ -4806,7 +4824,7 @@ CAfxObject::AddFunction(
                             self->m_Context->Enter();
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(hr));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -4819,7 +4837,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -4887,7 +4905,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
                       self->m_Context->Exit();
                     }));
                 return;
@@ -4900,7 +4918,7 @@ CAfxObject::AddFunction(
                             self->m_Context->Enter();
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(hr));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -4913,7 +4931,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -4980,7 +4998,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
                       self->m_Context->Exit();
                     }));
                 return;
@@ -4993,7 +5011,7 @@ CAfxObject::AddFunction(
                             self->m_Context->Enter();
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(hr));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -5006,7 +5024,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -5092,7 +5110,7 @@ CAfxObject::AddFunction(
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Context->Exit();
                       }));
                   return;
@@ -5106,7 +5124,7 @@ CAfxObject::AddFunction(
                               self->m_Context->Enter();
                               CefV8ValueList args;
                               args.push_back(CefV8Value::CreateInt(hr));
-                              fn_resolve->ExecuteFunction(NULL, args);
+                              fn_resolve->ExecuteFunction(nullptr, args);
                               self->m_Context->Exit();
                             }));
                 return;
@@ -5119,7 +5137,7 @@ CAfxObject::AddFunction(
                                 return;
 
                               self->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                              fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                               self->m_Context->Exit();
                             }));
               });
@@ -5205,7 +5223,7 @@ CAfxObject::AddFunction(
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Context->Exit();
                       }));
                   return;
@@ -5219,7 +5237,7 @@ CAfxObject::AddFunction(
                               self->m_Context->Enter();
                               CefV8ValueList args;
                               args.push_back(CefV8Value::CreateInt(hr));
-                              fn_resolve->ExecuteFunction(NULL, args);
+                              fn_resolve->ExecuteFunction(nullptr, args);
                               self->m_Context->Exit();
                             }));
                 return;
@@ -5232,7 +5250,7 @@ CAfxObject::AddFunction(
                                 return;
 
                               self->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                              fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                               self->m_Context->Exit();
                             }));
               });
@@ -5318,7 +5336,7 @@ CAfxObject::AddFunction(
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Context->Exit();
                       }));
                   return;
@@ -5332,7 +5350,7 @@ CAfxObject::AddFunction(
                               self->m_Context->Enter();
                               CefV8ValueList args;
                               args.push_back(CefV8Value::CreateInt(hr));
-                              fn_resolve->ExecuteFunction(NULL, args);
+                              fn_resolve->ExecuteFunction(nullptr, args);
                               self->m_Context->Exit();
                             }));
                 return;
@@ -5345,7 +5363,7 @@ CAfxObject::AddFunction(
                                 return;
 
                               self->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                              fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                               self->m_Context->Exit();
                             }));
               });
@@ -5431,7 +5449,7 @@ CAfxObject::AddFunction(
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Context->Exit();
                       }));
                   return;
@@ -5445,7 +5463,7 @@ CAfxObject::AddFunction(
                               self->m_Context->Enter();
                               CefV8ValueList args;
                               args.push_back(CefV8Value::CreateInt(hr));
-                              fn_resolve->ExecuteFunction(NULL, args);
+                              fn_resolve->ExecuteFunction(nullptr, args);
                               self->m_Context->Exit();
                             }));
                 return;
@@ -5458,7 +5476,7 @@ CAfxObject::AddFunction(
                                 return;
 
                               self->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                              fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                               self->m_Context->Exit();
                             }));
               });
@@ -5544,7 +5562,7 @@ CAfxObject::AddFunction(
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Context->Exit();
                       }));
                   return;
@@ -5558,7 +5576,7 @@ CAfxObject::AddFunction(
                               self->m_Context->Enter();
                               CefV8ValueList args;
                               args.push_back(CefV8Value::CreateInt(hr));
-                              fn_resolve->ExecuteFunction(NULL, args);
+                              fn_resolve->ExecuteFunction(nullptr, args);
                               self->m_Context->Exit();
                             }));
                 return;
@@ -5571,7 +5589,7 @@ CAfxObject::AddFunction(
                                 return;
 
                               self->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                              fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                               self->m_Context->Exit();
                             }));
               });
@@ -5657,7 +5675,7 @@ CAfxObject::AddFunction(
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Context->Exit();
                       }));
                   return;
@@ -5671,7 +5689,7 @@ CAfxObject::AddFunction(
                               self->m_Context->Enter();
                               CefV8ValueList args;
                               args.push_back(CefV8Value::CreateInt(hr));
-                              fn_resolve->ExecuteFunction(NULL, args);
+                              fn_resolve->ExecuteFunction(nullptr, args);
                               self->m_Context->Exit();
                             }));
                 return;
@@ -5684,7 +5702,7 @@ CAfxObject::AddFunction(
                                 return;
 
                               self->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                              fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                               self->m_Context->Exit();
                             }));
               });
@@ -5757,7 +5775,7 @@ CAfxObject::AddFunction(
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Context->Exit();
                       }));
                   return;
@@ -5771,7 +5789,7 @@ CAfxObject::AddFunction(
                               self->m_Context->Enter();
                               CefV8ValueList args;
                               args.push_back(CefV8Value::CreateInt(hr));
-                              fn_resolve->ExecuteFunction(NULL, args);
+                              fn_resolve->ExecuteFunction(nullptr, args);
                               self->m_Context->Exit();
                             }));
                 return;
@@ -5784,7 +5802,7 @@ CAfxObject::AddFunction(
                                 return;
 
                               self->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                              fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                               self->m_Context->Exit();
                             }));
                  });
@@ -5867,7 +5885,7 @@ CAfxObject::AddFunction(
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Context->Exit();
                       }));
                   return;
@@ -5881,7 +5899,7 @@ CAfxObject::AddFunction(
                               self->m_Context->Enter();
                               CefV8ValueList args;
                               args.push_back(CefV8Value::CreateInt(hr));
-                              fn_resolve->ExecuteFunction(NULL, args);
+                              fn_resolve->ExecuteFunction(nullptr, args);
                               self->m_Context->Exit();
                             }));
                 return;
@@ -5894,7 +5912,7 @@ CAfxObject::AddFunction(
                                 return;
 
                               self->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                              fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                               self->m_Context->Exit();
                             }));
               });
@@ -5938,7 +5956,7 @@ CAfxObject::AddFunction(
                         return;
 
                       self->m_Context->Enter();
-                      fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                      fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
                       self->m_Context->Exit();
                     }));
         return;
@@ -5951,7 +5969,7 @@ CAfxObject::AddFunction(
                         return;
 
                       self->m_Context->Enter();
-                      fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                      fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                       self->m_Context->Exit();
                     }));
     });
@@ -6046,7 +6064,7 @@ CAfxObject::AddFunction(
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Context->Exit();
                       }));
                   return;
@@ -6060,7 +6078,7 @@ CAfxObject::AddFunction(
                               self->m_Context->Enter();
                               CefV8ValueList args;
                               args.push_back(CefV8Value::CreateInt(hr));
-                              fn_resolve->ExecuteFunction(NULL, args);
+                              fn_resolve->ExecuteFunction(nullptr, args);
                               self->m_Context->Exit();
                             }));
                 return;
@@ -6073,7 +6091,7 @@ CAfxObject::AddFunction(
                                 return;
 
                               self->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL,
+                              fn_reject->ExecuteFunction(nullptr,
                                                          CefV8ValueList());
                               self->m_Context->Exit();
                             }));
@@ -6113,7 +6131,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
               return;
@@ -6126,7 +6144,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -6165,7 +6183,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
               return;
@@ -6178,7 +6196,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -6264,7 +6282,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
 
                       self->m_Context->Exit();
                     }));
@@ -6290,7 +6308,7 @@ CAfxObject::AddFunction(
 
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(0));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -6303,7 +6321,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -6372,7 +6390,7 @@ CAfxObject::AddFunction(
 
                       CefV8ValueList args;
                       args.push_back(result);
-                      fn_resolve->ExecuteFunction(NULL, args);
+                      fn_resolve->ExecuteFunction(nullptr, args);
                       self->m_Context->Exit();
                     }));
                 return;
@@ -6385,7 +6403,7 @@ CAfxObject::AddFunction(
                             self->m_Context->Enter();
                             CefV8ValueList args;
                             args.push_back(CefV8Value::CreateInt(0));
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Context->Exit();
                           }));
               return;
@@ -6398,7 +6416,7 @@ CAfxObject::AddFunction(
                               return;
 
                             self->m_Context->Enter();
-                            fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                            fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                             self->m_Context->Exit();
                           }));
             });
@@ -6547,7 +6565,7 @@ CAfxObject::AddFunction(
 
                                CefV8ValueList args;
                                args.push_back(result);
-                               fn_resolve->ExecuteFunction(NULL, args);
+                               fn_resolve->ExecuteFunction(nullptr, args);
 
                                self->m_Context->Exit();
                              }));
@@ -6562,7 +6580,7 @@ CAfxObject::AddFunction(
 
                              CefV8ValueList args;
                              args.push_back(CefV8Value::CreateInt(hr));
-                             fn_resolve->ExecuteFunction(NULL, args);
+                             fn_resolve->ExecuteFunction(nullptr, args);
                              self->m_Context->Exit();
                            }));
                return;
@@ -6575,7 +6593,7 @@ CAfxObject::AddFunction(
                                return;
 
                              self->m_Context->Enter();
-                             fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                             fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                              self->m_Context->Exit();
                            }));
              });
@@ -6622,20 +6640,20 @@ CAfxObject::AddFunction(
             ID3DBlob* pErrorMsgs = nullptr;
 
             HRESULT result = D3DCompile2(
-                srcData ? srcData->GetData() : NULL,
+                srcData ? srcData->GetData() : nullptr,
                 srcData ? srcData->GetSize() : 0,
                 // srcName:
                 arguments[1]->IsNull()
-                    ? NULL
+                    ? nullptr
                     : arguments[1]->GetStringValue().ToString().c_str(),
-                defines ? (D3D_SHADER_MACRO*)defines->GetData() : NULL, NULL,
+                defines ? (D3D_SHADER_MACRO*)defines->GetData() : nullptr, nullptr,
                 // entryPoint:
                 arguments[4]->IsNull()
-                    ? NULL
+                    ? nullptr
                     : arguments[4]->GetStringValue().ToString().c_str(),
                 target.ToString().c_str(),
                 flags1, flags2, secondaryDataFlags,
-                secondaryData ? secondaryData->GetData() : NULL,
+                secondaryData ? secondaryData->GetData() : nullptr,
                 secondaryData ? secondaryData->GetSize() : 0, &pCode,
                 &pErrorMsgs);
 
@@ -6644,7 +6662,7 @@ CAfxObject::AddFunction(
             retval->SetValue("hResult", CefV8Value::CreateUInt(result),
                               V8_PROPERTY_ATTRIBUTE_NONE);
 
-            if (NULL == pCode)
+            if (nullptr == pCode)
               retval->SetValue("code", CefV8Value::CreateNull(),
                                V8_PROPERTY_ATTRIBUTE_NONE);
             else {
@@ -6663,7 +6681,7 @@ CAfxObject::AddFunction(
               pCode->Release();
             }
 
-            if (NULL == pErrorMsgs)
+            if (nullptr == pErrorMsgs)
               retval->SetValue("errorMsgs", CefV8Value::CreateNull(),
                                V8_PROPERTY_ATTRIBUTE_NONE);
             else {
@@ -6694,7 +6712,7 @@ CAfxObject::AddFunction(
                       const CefV8ValueList& arguments,
                       CefRefPtr<CefV8Value>& retval,
                       CefString& exceptionoverride) {
-          retval = CAfxHandle::Create(NULL);
+          retval = CAfxHandle::Create(nullptr);
           return true;
         });
     CAfxObject::AddFunction(
@@ -6797,7 +6815,7 @@ CAfxObject::AddFunction(
   execArgs.push_back(CefV8Value::CreateString(message));
 
   if (m_OnMessage->IsValid()) {
-    m_OnMessage->ExecuteCallback(execArgs);
+    m_OnMessage->ExecuteCallback(m_Context, execArgs);
   }
 
   m_Context->Exit();
@@ -6827,10 +6845,11 @@ CAfxObject::AddFunction(
              std::string argMessage;
              ReadStringUTF8(argMessage);
 
-             CefPostTask(
-                 TID_RENDERER,
-                 base::Bind(&CDrawingInteropImpl::OnClientMessage_Message,
-                            m_Host, senderId, argMessage));
+              CefPostTask(TID_RENDERER, new advancedfx::interop::CAfxTask(
+                                     [host = m_Host, senderId, argMessage] {
+                                       host->OnClientMessage_Message(
+                                           senderId, argMessage);
+                                     }));
            } break;
            default:
              throw "CHostPipeServerConnectionThread::ConnectionThread: Unknown message.";
@@ -6900,7 +6919,7 @@ private:
 
                           self->m_Interop->m_Context->Enter();
 
-                          fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                          fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
 
                           self->m_Interop->m_Context->Exit();
                         }));
@@ -6915,7 +6934,7 @@ private:
                             return;
 
                           self->m_Interop->m_Context->Enter();
-                          fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                          fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                           self->m_Interop->m_Context->Exit();
                         }));
           });
@@ -6998,7 +7017,7 @@ private:
 
                           self->m_Interop->m_Context->Enter();
 
-                          fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                          fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
 
                           self->m_Interop->m_Context->Exit();
                         }));
@@ -7013,7 +7032,7 @@ private:
                             return;
 
                           self->m_Interop->m_Context->Enter();
-                          fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                          fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                           self->m_Interop->m_Context->Exit();
                         }));
           });
@@ -7103,7 +7122,7 @@ private:
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Interop->m_Context->Exit();
                       }));
                   return;
@@ -7118,7 +7137,7 @@ private:
                                 CefV8ValueList args;
                                 args.push_back(CefV8Value::CreateInt(hr));
                                 fn_resolve->ExecuteFunction(
-                                    NULL, args);
+                                    nullptr, args);
                                 self->m_Interop->m_Context->Exit();
                               }));
                 return;
@@ -7131,7 +7150,7 @@ private:
                                 return;
 
                               self->m_Interop->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL,
+                              fn_reject->ExecuteFunction(nullptr,
                                                          CefV8ValueList());
                               self->m_Interop->m_Context->Exit();
                             }));
@@ -7214,7 +7233,7 @@ private:
 
                           self->m_Interop->m_Context->Enter();
 
-                          fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                          fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
 
                           self->m_Interop->m_Context->Exit();
                         }));
@@ -7229,7 +7248,7 @@ private:
                             return;
 
                           self->m_Interop->m_Context->Enter();
-                          fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                          fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                           self->m_Interop->m_Context->Exit();
                         }));
           });
@@ -7320,7 +7339,7 @@ private:
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Interop->m_Context->Exit();
                       }));
                   return;
@@ -7335,7 +7354,7 @@ private:
                                 CefV8ValueList args;
                                 args.push_back(CefV8Value::CreateInt(hr));
                                 fn_resolve->ExecuteFunction(
-                                    NULL, args);
+                                    nullptr, args);
                                 self->m_Interop->m_Context->Exit();
                               }));
                 return;
@@ -7348,7 +7367,7 @@ private:
                                 return;
 
                               self->m_Interop->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL,
+                              fn_reject->ExecuteFunction(nullptr,
                                                          CefV8ValueList());
                               self->m_Interop->m_Context->Exit();
                             }));
@@ -7425,7 +7444,7 @@ private:
 
                               self->m_Interop->m_Context->Enter();
 
-                              fn_resolve->ExecuteFunction(NULL,
+                              fn_resolve->ExecuteFunction(nullptr,
                                                           CefV8ValueList());
 
                               self->m_Interop->m_Context->Exit();
@@ -7440,7 +7459,7 @@ private:
                                 return;
 
                               self->m_Interop->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL,
+                              fn_reject->ExecuteFunction(nullptr,
                                                          CefV8ValueList());
                               self->m_Interop->m_Context->Exit();
                             }));
@@ -7523,7 +7542,7 @@ private:
 
                               self->m_Interop->m_Context->Enter();
 
-                              fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                              fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
 
                               self->m_Interop->m_Context->Exit();
                             }));
@@ -7539,7 +7558,7 @@ private:
                             return;
 
                           self->m_Interop->m_Context->Enter();
-                          fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                          fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                           self->m_Interop->m_Context->Exit();
                         }));
               });
@@ -7619,7 +7638,7 @@ private:
 
                             CefV8ValueList args;
                             args.push_back(result);
-                            fn_resolve->ExecuteFunction(NULL, args);
+                            fn_resolve->ExecuteFunction(nullptr, args);
                             self->m_Interop->m_Context->Exit();
                           }));
                       return;
@@ -7636,7 +7655,7 @@ private:
 
                                   CefV8ValueList args;
                                   args.push_back(CefV8Value::CreateInt(hr));
-                                  fn_resolve->ExecuteFunction(NULL, args);
+                                  fn_resolve->ExecuteFunction(nullptr, args);
 
                                   self->m_Interop->m_Context->Exit();
                                 }));
@@ -7650,7 +7669,7 @@ private:
                                     return;
 
                                   self->m_Interop->m_Context->Enter();
-                                  fn_reject->ExecuteFunction(NULL,
+                                  fn_reject->ExecuteFunction(nullptr,
                                                              CefV8ValueList());
                                   self->m_Interop->m_Context->Exit();
                                 }));
@@ -7786,7 +7805,7 @@ private:
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Interop->m_Context->Exit();
                       }));
                   return;
@@ -7801,7 +7820,7 @@ private:
                                 CefV8ValueList args;
                                 args.push_back(CefV8Value::CreateInt(hr));
                                 fn_resolve->ExecuteFunction(
-                                    NULL, args);
+                                    nullptr, args);
                                 self->m_Interop->m_Context->Exit();
                               }));
                 return;
@@ -7814,7 +7833,7 @@ private:
                                 return;
 
                               self->m_Interop->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL,
+                              fn_reject->ExecuteFunction(nullptr,
                                                          CefV8ValueList());
                               self->m_Interop->m_Context->Exit();
                             }));
@@ -7893,7 +7912,7 @@ private:
 
                         CefV8ValueList args;
                         args.push_back(result);
-                        fn_resolve->ExecuteFunction(NULL, args);
+                        fn_resolve->ExecuteFunction(nullptr, args);
                         self->m_Interop->m_Context->Exit();
                       }));
                   return;
@@ -7908,7 +7927,7 @@ private:
                                 CefV8ValueList args;
                                 args.push_back(CefV8Value::CreateInt(hr));
                                 fn_resolve->ExecuteFunction(
-                                    NULL, args);
+                                    nullptr, args);
                                 self->m_Interop->m_Context->Exit();
                               }));
                 return;
@@ -7921,7 +7940,7 @@ private:
                                 return;
 
                               self->m_Interop->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL,
+                              fn_reject->ExecuteFunction(nullptr,
                                                          CefV8ValueList());
                               self->m_Interop->m_Context->Exit();
                             }));
@@ -8006,7 +8025,7 @@ private:
 
                           self->m_Interop->m_Context->Enter();
 
-                          fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                          fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
 
                           self->m_Interop->m_Context->Exit();
                         }));
@@ -8021,7 +8040,7 @@ private:
                             return;
 
                           self->m_Interop->m_Context->Enter();
-                          fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                          fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                           self->m_Interop->m_Context->Exit();
                         }));
           });
@@ -8098,7 +8117,7 @@ private:
 
                               self->m_Interop->m_Context->Enter();
 
-                              fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                              fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
 
                               self->m_Interop->m_Context->Exit();
                             }));
@@ -8112,7 +8131,7 @@ private:
                                 return;
 
                               self->m_Interop->m_Context->Enter();
-                              fn_reject->ExecuteFunction(NULL,
+                              fn_reject->ExecuteFunction(nullptr,
                                                          CefV8ValueList());
                               self->m_Interop->m_Context->Exit();
                             }));
@@ -8200,7 +8219,7 @@ private:
                           return;
 
                         if (m_OnDeviceLost->IsValid())
-                          m_OnDeviceLost->ExecuteCallback(CefV8ValueList());
+                  m_OnDeviceLost->ExecuteCallback(m_Context, CefV8ValueList());
                       }));
 
         }
@@ -8211,7 +8230,8 @@ private:
                         if (nullptr == m_Context)
                           return;
                         if (m_OnDeviceReset->IsValid())
-                          m_OnDeviceReset->ExecuteCallback(CefV8ValueList());
+                          m_OnDeviceReset->ExecuteCallback(m_Context,
+                                                           CefV8ValueList());
                       }));        
         }
           bContinue = true;
@@ -8407,7 +8427,7 @@ class CEngineInteropImpl : public CAfxObject,
                              if (nullptr == self->m_Context)
                                return;
                              self->m_Context->Enter();
-                             fn_resolve->ExecuteFunction(NULL,
+                             fn_resolve->ExecuteFunction(nullptr,
                                                          CefV8ValueList());
                              self->m_Context->Exit();
                            }));
@@ -8422,7 +8442,7 @@ class CEngineInteropImpl : public CAfxObject,
                          self->m_Context->Enter();
                          CefV8ValueList args;
                          args.push_back(CefV8Value::CreateString(error_msg));
-                         fn_reject->ExecuteFunction(NULL, args);
+                         fn_reject->ExecuteFunction(nullptr, args);
                          self->m_Context->Exit();
                        }));
              }
@@ -8485,7 +8505,7 @@ CAfxObject::AddFunction(
                                return;
 
                              self->m_Context->Enter();
-                             fn_resolve->ExecuteFunction(NULL,
+                             fn_resolve->ExecuteFunction(nullptr,
                                                          CefV8ValueList());
                              self->m_Context->Exit();
                            }));
@@ -8495,7 +8515,7 @@ CAfxObject::AddFunction(
                                return;
 
                              self->m_Context->Enter();
-                             fn_reject->ExecuteFunction(NULL, CefV8ValueList());
+                             fn_reject->ExecuteFunction(nullptr, CefV8ValueList());
                              self->m_Context->Exit();
                            }));
              }
@@ -8545,7 +8565,7 @@ CAfxObject::AddFunction(
                              return;
 
                            self->m_Context->Enter();
-                           fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                           fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
                            self->m_Context->Exit();
                          }));
            });
@@ -9012,7 +9032,7 @@ private:
   }
 
   
-  virtual void OnConnect() OVERRIDE {
+  virtual void OnConnect() override {
     m_PumpResumeAt = 0;
     m_NewConnection = true;
   }
@@ -9740,9 +9760,9 @@ private:
   }
 
   __4 : {
-    m_PumpResumeAt = 1;
     auto onDone = GetPumpFilter(filter, "onDone");
     if (nullptr != onDone) {
+      m_PumpResumeAt = 1;
       CefPostTask(TID_RENDERER,
                   new CAfxTask([this, onDone, fn_resolve, fn_reject]() {
                     if (nullptr == m_Context)
@@ -9843,7 +9863,7 @@ private:
                     return;
 
                   m_Context->Enter();
-                  fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                  fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
                   m_Context->Exit();
                 }));
     return;
@@ -9858,7 +9878,7 @@ private:
                   CefV8ValueList args;
                   args.push_back(CefV8Value::CreateString(
                       "AfxInterop.cpp:" + std::to_string(errorLine)));
-                  fn_reject->ExecuteFunction(NULL, args);
+                  fn_reject->ExecuteFunction(nullptr, args);
                   m_Context->Exit();
                 }));
   }
@@ -9876,7 +9896,7 @@ private:
   execArgs.push_back(CefV8Value::CreateString(message));
 
   if (m_OnMessage->IsValid())
-    m_OnMessage->ExecuteCallback(execArgs);
+    m_OnMessage->ExecuteCallback(m_Context, execArgs);
 
   m_Context->Exit();
  }
@@ -9905,10 +9925,13 @@ private:
              int senderId = ReadInt32();
              std::string argMessage;
              ReadStringUTF8(argMessage);
-             CefPostTask(
-                 TID_RENDERER,
-                 base::Bind(&CEngineInteropImpl::OnClientMessage_Message,
-                            m_Host, senderId, argMessage));
+
+              CefPostTask(TID_RENDERER,
+                         new advancedfx::interop::CAfxTask(
+                                     [host = m_Host, senderId, argMessage] {
+                                       host->OnClientMessage_Message(
+                                           senderId, argMessage);
+                                     }));
            } break;
            default:
              throw "CEngineInteropImplConnectionThread::ConnectionThread: Unknown message.";
@@ -10810,7 +10833,7 @@ class CInteropImpl : public CAfxObject,
                             return;
 
                           self->m_Context->Enter();
-                          fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                          fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
                           self->m_Context->Exit();
                         }));
                   } catch (const std::exception& e) {
@@ -10824,7 +10847,7 @@ class CInteropImpl : public CAfxObject,
                           self->m_Context->Enter();
                           CefV8ValueList args;
                           args.push_back(CefV8Value::CreateString(error_msg));
-                          fn_reject->ExecuteFunction(NULL, args);
+                          fn_reject->ExecuteFunction(nullptr, args);
                           self->m_Context->Exit();
                         }));
                   }
@@ -10869,7 +10892,7 @@ CAfxObject::AddFunction(
                             return;
 
                           self->m_Context->Enter();
-                          fn_resolve->ExecuteFunction(NULL, CefV8ValueList());
+                          fn_resolve->ExecuteFunction(nullptr, CefV8ValueList());
                           self->m_Context->Exit();
                         }));
                   } catch (const std::exception& e) {
@@ -10883,7 +10906,7 @@ CAfxObject::AddFunction(
                           self->m_Context->Enter();
                           CefV8ValueList args;
                           args.push_back(CefV8Value::CreateString(error_msg));
-                          fn_reject->ExecuteFunction(NULL, args);
+                          fn_reject->ExecuteFunction(nullptr, args);
                           self->m_Context->Exit();
                         }));
                   }
@@ -10928,7 +10951,7 @@ CAfxObject::AddFunction(
                                 return;
 
                               self->m_Context->Enter();
-                              fn_resolve->ExecuteFunction(NULL,
+                              fn_resolve->ExecuteFunction(nullptr,
                                                           CefV8ValueList());
                               self->m_Context->Exit();
                             }));
@@ -10942,7 +10965,7 @@ CAfxObject::AddFunction(
                       self->m_Context->Enter();
                       CefV8ValueList args;
                       args.push_back(CefV8Value::CreateString(error_msg));
-                      fn_reject->ExecuteFunction(NULL, args);
+                      fn_reject->ExecuteFunction(nullptr, args);
                       self->m_Context->Exit();
                     }));
               }
@@ -11045,7 +11068,7 @@ bool m_WaitConnectionQuit = false;
   execArgs.push_back(CefV8Value::CreateString(message));
 
   if (m_OnMessage->IsValid())
-    m_OnMessage->ExecuteCallback(execArgs);
+    m_OnMessage->ExecuteCallback(m_Context,execArgs);
 
   m_Context->Exit();
  }
@@ -11074,8 +11097,11 @@ bool m_WaitConnectionQuit = false;
              std::string argMessage;
              ReadStringUTF8(argMessage);
              CefPostTask(TID_RENDERER,
-                         base::Bind(&CInteropImpl::OnClientMessage_Message,
-                                    m_Host, senderId, argMessage));
+                         new advancedfx::interop::CAfxTask(
+                                     [host = m_Host, senderId, argMessage] {
+                                       host->OnClientMessage_Message(
+                                           senderId, argMessage);
+                                     }));
            } break;
            default:
              throw "CInteropImplConnectionThread::ConnectionThread: Unknown message.";

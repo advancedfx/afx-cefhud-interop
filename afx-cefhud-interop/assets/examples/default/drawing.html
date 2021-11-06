@@ -18,6 +18,7 @@ html,body,div {
 	backdrop-filter: contrast(50%) brightness(50%) blur(10px);
 }
 .indicator {
+	clear: right;
 	float: right;
 	width: 3rem;
 	height: 3rem;
@@ -33,8 +34,8 @@ html,body,div {
 </style>
 
 <body id="body">
-<div id="indicator" class="indicator"></div>
-<div id="indicator2" class="indicator"></div>
+<div id="indicator" class="indicator"></div><!-- top indicates CS:GO engine frame count mod 2 -->
+<div id="indicator2" class="indicator"></div><!-- top toggles on CS:GO onRenderViewBegin, might not always change due to engine stuffing intermediate frames when juggling the drawing queue -->
 <div class="main">
 This makes it freeze for sure: <img id="gif" src="https://media1.tenor.com/images/74a87da6760e119fdfbb1ee9d2914871/tenor.gif?itemid=5437251" width="320" height="auto" class="" />
 <h1 style="color: #00ff00">Hello World from afx-cefhud-interop</h1>
@@ -239,23 +240,10 @@ function AfxDrawingInterop(interop,args) {
 		"rect": null
 	};
 
-	async function waitForFirstSucessfulPaint() {
-		let painted = false;
-		while(!painted) {
-			Utils.toPromise(self.interop, "waitForCefFrame").then(()=>{
-				painted = true;
-			});
-			await Utils.sleepPromise(1000);
-		}
-	}
-	
-	
-	waitForFirstSucessfulPaint().then(()=>{
-		Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
-			"id": "drawingCreated",
-			"args": [interop.id]
-		}));
-	});
+	Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
+		"id": "drawingCreated",
+		"args": [interop.id]
+	}));
 }
 
 AfxDrawingInterop.prototype.onDeviceReset = async function() {
@@ -556,12 +544,12 @@ AfxDrawingInterop.prototype.connect = async function() {
 		"args": [this.interop.id]
 	}));
 	
-	this.interop.setFrameRate(60);
+	//this.interop.setFrameRate(60);
 }
 
 AfxDrawingInterop.prototype.disconnect = async function() {
 	
-	this.interop.setFrameRate(1);
+	//this.interop.setFrameRate(1);
 	
 	this.interop.cancel();
 	this.messages = {}
@@ -730,9 +718,6 @@ AfxDrawingInterop.prototype.render = async function(newRender) {
 		
 		await doClear();
 
-		if(newRender && newRender.onAnimationFrame)
-			await newRender.onAnimationFrame(timestamp);
-
 		self.lastRender = newRender;
 
 		if(newRender) {
@@ -762,7 +747,6 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 			"frameCount": frameCount,
 			"pass": pass,
 			"retry": false,
-			// optional: // "onAnimationFrame": async function(timestamp) {}
 			"onBegin": async function() {
 				let queued = false;
 			

@@ -27,7 +27,7 @@ class SimpleWindowDelegate : public CefWindowDelegate {
   explicit SimpleWindowDelegate(CefRefPtr<CefBrowserView> browser_view)
       : browser_view_(browser_view) {}
 
-  void OnWindowCreated(CefRefPtr<CefWindow> window) OVERRIDE {
+  void OnWindowCreated(CefRefPtr<CefWindow> window) override {
     // Add the browser view and show the window.
     window->AddChildView(browser_view_);
     window->Show();
@@ -36,11 +36,11 @@ class SimpleWindowDelegate : public CefWindowDelegate {
     browser_view_->RequestFocus();
   }
 
-  void OnWindowDestroyed(CefRefPtr<CefWindow> window) OVERRIDE {
+  void OnWindowDestroyed(CefRefPtr<CefWindow> window) override {
     browser_view_ = nullptr;
   }
 
-  bool CanClose(CefRefPtr<CefWindow> window) OVERRIDE {
+  bool CanClose(CefRefPtr<CefWindow> window) override {
     // Allow the window to close if the browser says it's OK.
     CefRefPtr<CefBrowser> browser = browser_view_->GetBrowser();
     if (browser)
@@ -48,7 +48,7 @@ class SimpleWindowDelegate : public CefWindowDelegate {
     return true;
   }
 
-  CefSize GetPreferredSize(CefRefPtr<CefView> view) OVERRIDE {
+  CefSize GetPreferredSize(CefRefPtr<CefView> view) override {
     return CefSize(800, 600);
   }
 
@@ -65,7 +65,7 @@ class SimpleBrowserViewDelegate : public CefBrowserViewDelegate {
 
   bool OnPopupBrowserViewCreated(CefRefPtr<CefBrowserView> browser_view,
                                  CefRefPtr<CefBrowserView> popup_browser_view,
-                                 bool is_devtools) OVERRIDE {
+                                 bool is_devtools) override {
     // Create a new top-level Window for the popup. It will show itself after
     // creation.
     CefWindow::CreateTopLevelWindow(
@@ -119,9 +119,11 @@ void SimpleApp::OnContextInitialized() {
   // SimpleHandler implements browser-level callbacks.
   CefRefPtr<SimpleHandler> handler(new SimpleHandler(this));
 
+  bool bWindow = !command_line->HasSwitch("afx-no-window");
+
   // Specify CEF browser settings here.
   CefBrowserSettings browser_settings;
-  browser_settings.windowless_frame_rate = 60;
+  browser_settings.windowless_frame_rate = bWindow ? 60 : 1;
 
   std::string argUrl = command_line->GetSwitchValue("url");
 
@@ -131,8 +133,6 @@ void SimpleApp::OnContextInitialized() {
 #if defined(OS_WIN)
   // On Windows we need to specify certain flags that will be passed to
   // CreateWindowEx().
-
-  bool bWindow = !command_line->HasSwitch("afx-no-window");
 
   if(bWindow)
     window_info.SetAsPopup(NULL, "cefsimple");
@@ -250,6 +250,7 @@ bool SimpleApp::OnProcessMessageReceived(
 void SimpleApp::OnBeforeCommandLineProcessing(
       const CefString& process_type,
       CefRefPtr<CefCommandLine> command_line) {
+
     // disable creation of a GPUCache/ folder on disk
     command_line->AppendSwitch("disable-gpu-shader-disk-cache");
 
@@ -267,7 +268,7 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     // See the discussion on this issue:
     // https://github.com/daktronics/cef-mixer/issues/10
     //
-    command_line->AppendSwitchWithValue("use-angle", "d3d11");
+    //command_line->AppendSwitchWithValue("use-angle", "d3d11");
 
     // tell Chromium to autoplay <video> elements without
     // requiring the muted attribute or user interaction
@@ -280,20 +281,21 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     command_line->AppendSwitch("disable-hang-monitor");
 
     command_line->AppendSwitch("disable-frame-rate-limit");
-    //command_line->AppendSwitchWithValue("deadline-to-synchronize-surfaces", "0");
+    command_line->AppendSwitchWithValue("deadline-to-synchronize-surfaces", "0");
+    command_line->AppendSwitch("double-buffer-compositing");
 
-    //command_line->AppendSwitch("disable-threaded-animation");
-    //command_line->AppendSwitch("disable-threaded-scrolling");
-    //command_line->AppendSwitch("disable-checker-imaging");
-    //command_line->AppendSwitch("run-all-compositor-stages-before-draw");
-
+    // command_line->AppendSwitch("disable-threaded-compositing ");
+    // command_line->AppendSwitch("disable-threaded-animation");
+    // command_line->AppendSwitch("disable-threaded-scrolling");
+    // command_line->AppendSwitch("disable-checker-imaging");
+    // command_line->AppendSwitch("run-all-compositor-stages-before-draw");
     //command_line->AppendSwitch("disable-image-animation-resync");
+
     //command_line->AppendSwitch("deterministic-mode");
-
-    command_line->AppendSwitch("disable-ipc-flooding-protection");
-
     //command_line->AppendSwitch("enable-main-frame-before-activation");
 
+    command_line->AppendSwitch("disable-ipc-flooding-protection");
+   
     command_line->AppendSwitch("disable-backgrounding-occluded-windows");
     command_line->AppendSwitch("disable-renderer-backgrounding");
 

@@ -29,7 +29,7 @@ class CAfxTask : public CefTask {
   explicit CAfxTask(fp_t&& op) : m_Op(std::move(op)) {}
 
   // CefTask method
-  virtual void Execute() OVERRIDE { m_Op(); }
+  virtual void Execute() override { m_Op(); }
 
  private:
   fp_t m_Op;

@@ -140,7 +140,7 @@ class ClientSchemeHandler : public CefResourceHandler {
   }
 
   bool ProcessRequest(CefRefPtr<CefRequest> request,
-                      CefRefPtr<CefCallback> callback) OVERRIDE {
+                      CefRefPtr<CefCallback> callback) override {
     CEF_REQUIRE_IO_THREAD();
     
     std::string url = request->GetURL();
@@ -183,7 +183,7 @@ class ClientSchemeHandler : public CefResourceHandler {
 
   void GetResponseHeaders(CefRefPtr<CefResponse> response,
                           int64& response_length,
-                          CefString& redirectUrl) OVERRIDE {
+                          CefString& redirectUrl) override {
     CEF_REQUIRE_IO_THREAD();
 
     DCHECK(NULL != file_);
@@ -195,12 +195,12 @@ class ClientSchemeHandler : public CefResourceHandler {
     response_length = file_size_;
   }
 
-  void Cancel() OVERRIDE { CEF_REQUIRE_IO_THREAD(); }
+  void Cancel() override { CEF_REQUIRE_IO_THREAD(); }
 
   bool ReadResponse(void* data_out,
                     int bytes_to_read,
                     int& bytes_read,
-                    CefRefPtr<CefCallback> callback) OVERRIDE {
+                    CefRefPtr<CefCallback> callback) override {
     CEF_REQUIRE_IO_THREAD();
 
     bool has_data = false;
@@ -238,7 +238,7 @@ class ClientSchemeHandlerFactory : public CefSchemeHandlerFactory {
   CefRefPtr<CefResourceHandler> Create(CefRefPtr<CefBrowser> browser,
                                        CefRefPtr<CefFrame> frame,
                                        const CefString& scheme_name,
-                                       CefRefPtr<CefRequest> request) OVERRIDE {
+                                       CefRefPtr<CefRequest> request) override {
     CEF_REQUIRE_IO_THREAD();
    
     return new ClientSchemeHandler();

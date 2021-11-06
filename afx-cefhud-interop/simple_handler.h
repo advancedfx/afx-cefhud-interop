@@ -39,46 +39,46 @@ class SimpleHandler : public CefClient,
 
   // CefClient methods:
 
-  virtual CefRefPtr<CefRenderHandler> GetRenderHandler() OVERRIDE {
+  virtual CefRefPtr<CefRenderHandler> GetRenderHandler() override {
     return this;
   }
 
-  virtual CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() OVERRIDE {
+  virtual CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override {
     return this;
   }
 
-  virtual CefRefPtr<CefDisplayHandler> GetDisplayHandler() OVERRIDE {
+  virtual CefRefPtr<CefDisplayHandler> GetDisplayHandler() override {
     return this;
   }
 
-  virtual CefRefPtr<CefLoadHandler> GetLoadHandler() OVERRIDE { return this; }
+  virtual CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
 
-  virtual CefRefPtr<CefRequestHandler> GetRequestHandler() OVERRIDE { return this; }
+  virtual CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
 
     virtual bool OnProcessMessageReceived(
       CefRefPtr<CefBrowser> browser,
       CefRefPtr<CefFrame> frame,
       CefProcessId source_process,
-      CefRefPtr<CefProcessMessage> message) OVERRIDE;
+      CefRefPtr<CefProcessMessage> message) override;
 
   // CefDisplayHandler methods:
 
   virtual void OnTitleChange(CefRefPtr<CefBrowser> browser,
-                             const CefString& title) OVERRIDE;
+                             const CefString& title) override;
 
    virtual void OnPaint(CefRefPtr<CefBrowser> browser,
                        PaintElementType type,
                        const RectList& dirtyRects,
                        const void* buffer,
                        int width,
-                       int height) OVERRIDE {
+                       int height) override {
 
    }
 
    virtual void OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
                                    PaintElementType type,
                                    const RectList& dirtyRects,
-                                   void* shared_handle) OVERRIDE {
+                                   void* shared_handle) override {
 
     if (type == PET_VIEW) {
        HANDLE clearHandle = INVALID_HANDLE_VALUE;
@@ -90,6 +90,13 @@ class SimpleHandler : public CefClient,
          if (0 != browserId) {
            auto it2 = m_Browsers.find(browserId);
            if (it2 != m_Browsers.end()) {
+             if (it2->second.ClearHandle == INVALID_HANDLE_VALUE) {
+               CefPostTask(TID_UI, new advancedfx::interop::CAfxTask([browser] {
+                             browser->GetHost()->WasHidden(true);
+                             browser->GetHost()->WasHidden(false);
+                           }));
+               return;             
+             }
              clearHandle = it2->second.ClearHandle;
            }
          }
@@ -110,18 +117,18 @@ class SimpleHandler : public CefClient,
    }
 
      virtual bool GetScreenInfo(CefRefPtr<CefBrowser> browser,
-                              CefScreenInfo& screen_info) OVERRIDE {
+                              CefScreenInfo& screen_info) override {
      m_NextBrowserId = browser->GetIdentifier();
      return false;
    }
 
   virtual void GetViewRect(CefRefPtr<CefBrowser> browser,
-                           CefRect& rect) OVERRIDE;
+                           CefRect& rect) override;
 
     // CefLifeSpanHandler methods:
-  virtual void OnAfterCreated(CefRefPtr<CefBrowser> browser) OVERRIDE;
-  virtual bool DoClose(CefRefPtr<CefBrowser> browser) OVERRIDE;
-  virtual void OnBeforeClose(CefRefPtr<CefBrowser> browser) OVERRIDE;
+  virtual void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
+  virtual bool DoClose(CefRefPtr<CefBrowser> browser) override;
+  virtual void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
 
   // CefLoadHandler methods:
 
@@ -129,7 +136,7 @@ class SimpleHandler : public CefClient,
                            CefRefPtr<CefFrame> frame,
                            ErrorCode errorCode,
                            const CefString& errorText,
-                           const CefString& failedUrl) OVERRIDE;
+                           const CefString& failedUrl) override;
   
   bool IsClosing() const { return is_closing_; }
 
@@ -139,7 +146,7 @@ class SimpleHandler : public CefClient,
                               CefRefPtr<CefFrame> frame,
                               CefRefPtr<CefRequest> request,
                               bool user_gesture,
-                              bool is_redirect) OVERRIDE;
+                              bool is_redirect) override;
 
 
  protected:
@@ -240,7 +247,7 @@ class SimpleHandler : public CefClient,
     int Height = 480;
     class CHostPipeServerConnectionThread* Connection = nullptr;
     HANDLE ClearHandle = INVALID_HANDLE_VALUE;
-    bool FirstRender = true;
+    int Waiting = 0;
 
     BrowserMapElem(CefRefPtr<CefBrowser> browser) : Browser(browser) {}
   };
@@ -373,8 +380,9 @@ class SimpleHandler : public CefClient,
               ReadStringUTF8(argStr);
 
               CefPostTask(TID_UI,
-                          base::Bind(&SimpleHandler::DoCreateDrawing,
-                                             m_Host, argStr, argUrl));
+                          new advancedfx::interop::CAfxTask([host = m_Host, argStr, argUrl]{
+                                        host->DoCreateDrawing(argStr, argUrl);
+                          }));
             } break;
             case advancedfx::interop::HostMessage::CreateEngine: {
               std::string argUrl;
@@ -383,9 +391,10 @@ class SimpleHandler : public CefClient,
               std::string argStr;
               ReadStringUTF8(argStr);
 
-              CefPostTask(TID_UI,
-                          base::Bind(&SimpleHandler::DoCreateEngine,
-                                             m_Host, argStr, argUrl));
+              CefPostTask(TID_UI, new advancedfx::interop::CAfxTask(
+                                      [host = m_Host, argStr, argUrl] {
+                                        host->DoCreateEngine(argStr, argUrl);
+                                      }));
             } break;
             case advancedfx::interop::HostMessage::Message: {
               int targetId = ReadInt32();

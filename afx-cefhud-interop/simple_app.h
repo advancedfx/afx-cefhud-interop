@@ -37,23 +37,23 @@ class SimpleApp : public CefApp,
 
   // CefApp methods:
   virtual CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler()
-      OVERRIDE {
+      override {
     return this;
   }
 
   virtual CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler()
-      OVERRIDE {
+      override {
     return this;
   }
     
   virtual void SimpleApp::OnRegisterCustomSchemes(
-      CefRawPtr<CefSchemeRegistrar> registrar) OVERRIDE;
+      CefRawPtr<CefSchemeRegistrar> registrar) override;
 
   // CefBrowserProcessHandler methods:
 
-  virtual void OnContextInitialized() OVERRIDE;
+  virtual void OnContextInitialized() override;
 
-  virtual void OnBrowserCreated( CefRefPtr< CefBrowser > browser, CefRefPtr< CefDictionaryValue > _extra_info ) OVERRIDE {
+  virtual void OnBrowserCreated( CefRefPtr< CefBrowser > browser, CefRefPtr< CefDictionaryValue > _extra_info ) override {
     extra_info_ = _extra_info->Copy(false);
   }
   
@@ -61,21 +61,21 @@ class SimpleApp : public CefApp,
 
   virtual void OnContextCreated(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefFrame> frame,
-                                CefRefPtr<CefV8Context> context) OVERRIDE;
+                                CefRefPtr<CefV8Context> context) override;
 
   virtual void OnContextReleased(CefRefPtr<CefBrowser> browser,
                                  CefRefPtr<CefFrame> frame,
-                                 CefRefPtr<CefV8Context> context) OVERRIDE;
+                                 CefRefPtr<CefV8Context> context) override;
 
     virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                         CefRefPtr<CefFrame> frame,
                                         CefProcessId source_process,
-                                        CefRefPtr<CefProcessMessage> message) OVERRIDE;
+                                        CefRefPtr<CefProcessMessage> message) override;
 
   // CefApp methods:
   virtual void OnBeforeCommandLineProcessing(
       const CefString& process_type,
-      CefRefPtr<CefCommandLine> command_line) OVERRIDE;
+      CefRefPtr<CefCommandLine> command_line) override;
 
  private:
   std::map<int,CefRefPtr<class advancedfx::interop::CInterop>> m_Interops;
