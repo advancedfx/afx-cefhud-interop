@@ -280,9 +280,9 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     command_line->AppendSwitch("disable-gpu-watchdog");
     command_line->AppendSwitch("disable-hang-monitor");
 
-    command_line->AppendSwitch("disable-frame-rate-limit"); // this will cause a hang / crash / memory leak in GPU process after a few minutes, but in Debug it will cause an exception, so ....
+    //command_line->AppendSwitch("disable-frame-rate-limit"); // this will cause a hang / crash / memory leak in GPU process after a few minutes, but in Debug it will cause an exception, so ....
     command_line->AppendSwitchWithValue("deadline-to-synchronize-surfaces", "0");
-    command_line->AppendSwitch("double-buffer-compositing");
+    //command_line->AppendSwitch("double-buffer-compositing");
 
      //command_line->AppendSwitch("disable-threaded-compositing ");
      //command_line->AppendSwitch("disable-threaded-animation");
@@ -292,14 +292,14 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     //command_line->AppendSwitch("disable-image-animation-resync");
 
     command_line->AppendSwitch("deterministic-mode");
-    command_line->AppendSwitch("enable-main-frame-before-activation");
+    //command_line->AppendSwitch("enable-main-frame-before-activation");
 
-    command_line->AppendSwitch("disable-ipc-flooding-protection");
+    //command_line->AppendSwitch("disable-ipc-flooding-protection");
    
-    command_line->AppendSwitch("disable-backgrounding-occluded-windows");
-    command_line->AppendSwitch("disable-renderer-backgrounding");
+    //command_line->AppendSwitch("disable-backgrounding-occluded-windows");
+    //command_line->AppendSwitch("disable-renderer-backgrounding");
 
-    command_line->AppendSwitch("disable-new-content-rendering-timeout");
+    //command_line->AppendSwitch("disable-new-content-rendering-timeout");
 
     //command_line->AppendSwitch("use-gpu-high-thread-priority-for-perf-tests");
 }

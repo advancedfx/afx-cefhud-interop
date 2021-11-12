@@ -166,7 +166,7 @@ function AfxDrawingInterop(interop,args) {
 		},
 		"onForceEndQueue": async function() {
 			// The engine expects us to finish rendering, so we have to push out the last frame instantly:
-			console.log("onForceEndQueue");
+			//console.log("onForceEndQueue");
 			await self.render(null);
 		}
 	};

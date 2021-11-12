@@ -280,6 +280,7 @@ bool SimpleHandler::OnProcessMessageReceived(
     return true;
   } else if (name == "afx-paint") {
     CefPostTask(TID_UI, new advancedfx::interop::CAfxTask([this, browser] {
+                  browser->GetHost()->Invalidate(PET_VIEW);
                   browser->GetHost()->SendExternalBeginFrame();
                 }));
   } else if (name == "afx-use-clear") {
