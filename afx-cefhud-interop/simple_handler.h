@@ -90,13 +90,6 @@ class SimpleHandler : public CefClient,
          if (0 != browserId) {
            auto it2 = m_Browsers.find(browserId);
            if (it2 != m_Browsers.end()) {
-             if (it2->second.ClearHandle == INVALID_HANDLE_VALUE) {
-               CefPostTask(TID_UI, new advancedfx::interop::CAfxTask([browser] {
-                             browser->GetHost()->WasHidden(true);
-                             browser->GetHost()->WasHidden(false);
-                           }));
-               return;             
-             }
              clearHandle = it2->second.ClearHandle;
            }
          }
@@ -248,6 +241,7 @@ class SimpleHandler : public CefClient,
     class CHostPipeServerConnectionThread* Connection = nullptr;
     HANDLE ClearHandle = INVALID_HANDLE_VALUE;
     int Waiting = 0;
+    bool FirstRender = true;
 
     BrowserMapElem(CefRefPtr<CefBrowser> browser) : Browser(browser) {}
   };

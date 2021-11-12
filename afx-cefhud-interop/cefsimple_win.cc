@@ -212,7 +212,7 @@ _In_opt_ ID3D11DepthStencilView* pDepthStencilView);
 
 OMSetRenderTargets_t g_Org_OMSetRenderTargets;
 
-//int g_ClearCount = 0;
+int g_ClearCount = 0;
 
 void STDMETHODCALLTYPE My_OMSetRenderTargets(
     ID3D11DeviceContext* This,
@@ -222,7 +222,6 @@ void STDMETHODCALLTYPE My_OMSetRenderTargets(
     _In_reads_opt_(NumViews) ID3D11RenderTargetView* const* ppRenderTargetViews,
     /* [annotation] */
     _In_opt_ ID3D11DepthStencilView* pDepthStencilView) {
-
   g_Org_OMSetRenderTargets(This, NumViews, ppRenderTargetViews,
                            pDepthStencilView);
 }
@@ -243,7 +242,7 @@ _In_ ID3D11Resource* pDstResource,
 /* [annotation] */
 _In_ ID3D11Resource* pSrcResource) {
 
-  bool bSkip = false;
+  static bool bSkip = false;
 
   if (pSrcResource) {
     auto it = g_Textures.find((ID3D11Texture2D*)pSrcResource);
@@ -263,8 +262,7 @@ _In_ ID3D11Resource* pSrcResource) {
     }
   }
 
-  if (!bSkip)
-     g_Org_CopyResource(This, pDstResource, pSrcResource);
+  g_Org_CopyResource(This, pDstResource, pSrcResource);
 }
 
 void STDMETHODCALLTYPE My_Flush(ID3D11DeviceContext* This) {
@@ -292,8 +290,10 @@ My_ClearRenderTargetView(ID3D11DeviceContext* This,
                          _In_ ID3D11RenderTargetView* pRenderTargetView,
                          /* [annotation] */
                          _In_ const FLOAT ColorRGBA[4]) {
+  
+    g_Org_ClearRenderTargetView(pContext, pRenderTargetView, ColorRGBA);
 
-  bool bSkip = false;
+    bool bSkip = false;
 
   if (pRenderTargetView) {
     ID3D11Resource* resource = nullptr;
@@ -303,11 +303,8 @@ My_ClearRenderTargetView(ID3D11DeviceContext* This,
     if (resource) {
       auto it = g_Textures.find((ID3D11Texture2D*)resource);
       if (it != g_Textures.end()) {
-        /*
-        FLOAT color[4] = {((g_ClearCount << 0) % 256) / 255.0f,
-                          ((g_ClearCount << 8) % 256) / 255.0f,
-                          ((g_ClearCount << 16) % 256) / 255.0f, 1.0f};
-        g_Org_ClearRenderTargetView(pContext, pRenderTargetView, color);*/
+    
+          g_ClearCount = 0;
 
         bool bUseTexture = false;
 
@@ -322,17 +319,17 @@ My_ClearRenderTargetView(ID3D11DeviceContext* This,
 
           bUseTexture = g_GpuPipeClient.ReadBoolean();
 
-          //DLOG(INFO) << "My_ClearRenderTargetView : " << bUpdateTexture;
+          // DLOG(INFO) << "My_ClearRenderTargetView : " << bUpdateTexture;
+          // DLOG(INFO) << "My_ClearRenderTargetView : " << bUpdateTexture;
 
         } catch (const std::exception& e) {
           DLOG(ERROR) << "Error in " << __FILE__ << ":" << __LINE__ << ": "
                       << e.what();
           DebugBreak();
         }
-        
+
         if (bUseTexture && pInputLayout && pVertexBuffer && pVertexShader &&
             pPixelShader) {
-
           bSkip = true;
 
           D3D11_RENDER_TARGET_VIEW_DESC desc;
@@ -452,13 +449,14 @@ My_ClearRenderTargetView(ID3D11DeviceContext* This,
             oldRenderTarget[0]->Release();
         }
       }
+      resource->Release();
     }
-
-    resource->Release();
   }
 
-  if (!bSkip)
-    g_Org_ClearRenderTargetView(This, pRenderTargetView, ColorRGBA);
+   /* ++g_ClearCount;
+  FLOAT color[4] = {((g_ClearCount << 0) % 16) / 15.0f,
+                    ((g_ClearCount << 4) % 16) / 15.0f,
+                    ((g_ClearCount << 8) % 16) / 15.0f, 1.0f};*/
 }
 
 HANDLE AfxInteropGetSharedHandle(ID3D11Resource* pD3D11Resource) {
@@ -555,8 +553,8 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
     // if (pDesc->Width > 1 &&
     //    pDesc->Height > 1 && pDesc->Usage == D3D11_USAGE_STAGING)
     //  return E_ABORT;
-
-    /* if (pDesc->Width > 1 && pDesc->Height > 1) {
+/*
+    if (pDesc->Width > 1 && pDesc->Height > 1) {
     MessageBoxA(
         0,
         (std::to_string((UINT64)This) + ", " + std::to_string(pDesc->Width) +
@@ -577,13 +575,16 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
 
     static D3D11_TEXTURE2D_DESC Desc;
 
-    if (pDesc->Width > 1 && pDesc->Height > 1 && pDesc->MipLevels == 1 &&
+    if (pDesc->Width > 1 &&
+        pDesc->Height > 1 &&
+        pDesc->MipLevels == 1 &&
         pDesc->ArraySize == 1 && pDesc->Format == DXGI_FORMAT_B8G8R8A8_UNORM &&
         pDesc->SampleDesc.Count == 1 && pDesc->SampleDesc.Quality == 0 &&
         pDesc->Usage == D3D11_USAGE_DEFAULT &&
         pDesc->BindFlags ==
             (D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE) &&
         pDesc->CPUAccessFlags == 0 && pDesc->MiscFlags == 0) {
+
       Desc = *pDesc;
       Desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
 
@@ -609,48 +610,49 @@ HRESULT STDMETHODCALLTYPE My_CreateTexture2D(
       }
 
       return result;
-    } else if (pLastGoodTexture2d && pDesc->Width == Desc.Width &&
-               pDesc->Height == Desc.Height && pDesc->MipLevels == 1 &&
-               pDesc->ArraySize == 1 &&
-               pDesc->Format == DXGI_FORMAT_B8G8R8A8_UNORM &&
-               pDesc->SampleDesc.Count == 1 && pDesc->SampleDesc.Quality == 0 &&
-               pDesc->Usage == D3D11_USAGE_DEFAULT &&
-               pDesc->BindFlags == (D3D11_BIND_SHADER_RESOURCE) &&
-               pDesc->CPUAccessFlags == 0 &&
-               pDesc->MiscFlags == D3D11_RESOURCE_MISC_SHARED) {
-      Desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+    } else if (pLastGoodTexture2d) {
+      if (pDesc->Width == Desc.Width && pDesc->Height == Desc.Height &&
+          pDesc->MipLevels == 1 && pDesc->ArraySize == 1 &&
+          pDesc->Format == DXGI_FORMAT_B8G8R8A8_UNORM &&
+          pDesc->SampleDesc.Count == 1 && pDesc->SampleDesc.Quality == 0 &&
+          pDesc->Usage == D3D11_USAGE_DEFAULT &&
+          pDesc->BindFlags == (D3D11_BIND_SHADER_RESOURCE) &&
+          pDesc->CPUAccessFlags == 0 &&
+          pDesc->MiscFlags == D3D11_RESOURCE_MISC_SHARED) {
+        Desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 
-      HRESULT result =
-          True_CreateTexture2D(This, &Desc, pInitialData, ppTexture2D);
+        HRESULT result =
+            True_CreateTexture2D(This, &Desc, pInitialData, ppTexture2D);
 
-      if (SUCCEEDED(result) && *ppTexture2D) {
-        InstallTextureHooks(*ppTexture2D);
+        if (SUCCEEDED(result) && *ppTexture2D) {
+          InstallTextureHooks(*ppTexture2D);
 
-        ID3D11Texture2D* tempTexture = nullptr;
-        //Desc.MiscFlags = 0;
+          ID3D11Texture2D* tempTexture = nullptr;
+          // Desc.MiscFlags = 0;
 
-        if (SUCCEEDED(
-                True_CreateTexture2D(This, &Desc, nullptr, &tempTexture))) {
-          ID3D11ShaderResourceView* view = nullptr;
-          if (SUCCEEDED(g_pDevice->CreateShaderResourceView(tempTexture, NULL,
-                                                            &view))) {
-            g_Textures.emplace(
-                std::piecewise_construct, std::make_tuple(pLastGoodTexture2d),
-                std::make_tuple(*ppTexture2D, tempTexture, view,
-                                AfxInteropGetSharedHandle(tempTexture),
-                                Desc.Width,
-                                Desc.Height));
+          if (SUCCEEDED(
+                  True_CreateTexture2D(This, &Desc, nullptr, &tempTexture))) {
+            ID3D11ShaderResourceView* view = nullptr;
+            if (SUCCEEDED(g_pDevice->CreateShaderResourceView(tempTexture, NULL,
+                                                              &view))) {
+              g_Textures.emplace(
+                  std::piecewise_construct,
+                  std::make_tuple(pLastGoodTexture2d),
+                  std::make_tuple(*ppTexture2D, tempTexture, view,
+                                  AfxInteropGetSharedHandle(tempTexture),
+                                  Desc.Width, Desc.Height));
 
-            view->Release();
+              view->Release();
+            }
+
+            tempTexture->Release();
           }
 
-          tempTexture->Release();
+          pLastGoodTexture2d = NULL;
         }
 
-        pLastGoodTexture2d = NULL;
+        return result;
       }
-
-      return result;
     }
   }
 

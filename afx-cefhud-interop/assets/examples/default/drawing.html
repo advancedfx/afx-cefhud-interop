@@ -6,6 +6,10 @@ html {
 	overflow: hidden;
 }
 
+body {
+	background: transparent;
+}
+
 html,body,div {
   margin: 0;
   padding: 0;
@@ -162,47 +166,24 @@ function AfxDrawingInterop(interop,args) {
 		},
 		"onForceEndQueue": async function() {
 			// The engine expects us to finish rendering, so we have to push out the last frame instantly:
+			console.log("onForceEndQueue");
 			await self.render(null);
 		}
 	};
 	
 	interop.onMessage = function(senderId, message){
-		
-		function processMessages(port)
-		{
-			let messages = self.messages[port]
-			let jMessage = messages[0];
-			
-			//console.log(JSON.stringify(jMessage));
-			
-			self.messageHandlers[jMessage.id].apply(self, jMessage.args).then(()=>{
-				messages.shift();
-				if(0 < messages.length) queueMicrotask(function(){ processMessages(port); });
-			}).catch((e)=>{
-				Utils.logError(e);
-				if(!(e && e.soft)) {
-					return Utils.toPromise(self, "disconnect");
-				}
-				messages.shift();
-				if(0 < messages.length) queueMicrotask(function(){ processMessages(port); });
-			});
-		}
-		
-		function queueMessage(jMessage)
-		{
-			const port = jMessage.port || "0";
-			
-			var messages = self.messages[port];
-			if(undefined === messages) self.messages[port] = messages = [];
-			
-			messages.push(jMessage);
-			
-			if(1 === messages.length) queueMicrotask(function(){ processMessages(port); });
-		}
-		
 		const jMessage = JSON.parse(message);
+		const port = jMessage.port || "0";
 		
-		queueMessage(jMessage);
+		let queues = self.messageQueues;
+		if(!queues) queues = self.messageQueues = [];
+		
+		let queue = queues[port];
+		if(!queue) queue = queues[port] = Promise.resolve();
+		
+		queue.then(()=>{
+			queues[port] = self.messageHandlers[jMessage.id].apply(self, jMessage.args);
+		});
 	}
 	
 	interop.onDeviceReset = function(){
@@ -239,11 +220,17 @@ function AfxDrawingInterop(interop,args) {
 	this.vertexBuffers = {
 		"rect": null
 	};
-
-	Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
-		"id": "drawingCreated",
-		"args": [interop.id]
-	}));
+	
+	let interval = setInterval(function(){
+		Utils.toPromise(self.interop, "waitForCefFrame").then(()=>{
+			console.log("Waiting for first frame ...");
+			clearInterval(interval);
+			Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
+				"id": "drawingCreated",
+				"args": [interop.id]
+			}));
+		});
+	}, 1000);
 }
 
 AfxDrawingInterop.prototype.onDeviceReset = async function() {
@@ -627,7 +614,7 @@ AfxDrawingInterop.prototype.render = async function(newRender) {
 	var self = this;
 	
 	while(true) {
-		
+	
 		let lastRender = Utils.coalesce(self.lastRender, null);
 
 		// paint last frame (if wanted):
@@ -649,15 +636,17 @@ AfxDrawingInterop.prototype.render = async function(newRender) {
 			try {
 				await lastRender.onPaint(self.interop.cefTextureShareHandle);
 			} catch(e) {
+				Utils.logError(e);
 				if(!(e && e.soft)) throw e;
 			}
 		}
-		
+			
 		// finish last frame:
 		if(lastRender && lastRender.onEnd) {
 			try {
 				await lastRender.onEnd();
 			} catch(e) {
+				Utils.logError(e);
 				if(!(e && e.soft)) throw e;
 			}
 		}
@@ -681,12 +670,13 @@ AfxDrawingInterop.prototype.render = async function(newRender) {
 			try {
 				queued = await newRender.onBegin();
 			} catch(e) {
+				Utils.logError(e);
 				if(!(e && e.soft)) throw e;
 				queued = false;
 			}
-
 		}
 		
+		queued = false;
 		
 		async function doClear() {
 			// clear new frame (if wanted):
@@ -899,6 +889,7 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 					//console.log("doPaintGameToCef BEGIN 8");
 				}
 				catch(e) {
+					Utils.logError(e);
 					if(e && e.soft) {
 						if(gameSurfaceRef[0]) await Utils.toPromise(gameSurfaceRef[0], "release");
 						if(cefTextureSuraceLevel0Ref[0]) await Utils.toPromise(cefTextureSuraceLevel0Ref[0], "release");
@@ -922,7 +913,7 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 		
 		await this.render(renderSettings);
 	} catch(e) {
-		console.log(e);
+		Utils.logError(e);
 		if(e && e.soft) {
 			Utils.logError(e);
 			self.lastRender = null;

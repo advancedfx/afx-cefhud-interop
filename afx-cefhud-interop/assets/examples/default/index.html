@@ -130,40 +130,18 @@ function AfxInterop(interop, args) {
 	};
 	
 	interop.onMessage = function(senderId, message){
-		
-		function processMessages(port)
-		{
-			let messages = self.messages[port]
-			let jMessage = messages[0];
-			
-			self.messageHandlers[jMessage.id].apply(self, jMessage.args).then(()=>{
-				messages.shift();
-				if(0 < messages.length) queueMicrotask(function(){ processMessages(port); });
-			}).catch((e)=>{
-				Utils.logError(e);
-				if(!(e && e.soft)) {
-					return Utils.toPromise(self, "disconnect");
-				}
-				messages.shift();
-				if(0 < messages.length) queueMicrotask(function(){ processMessages(port); });
-			});
-		}
-		
-		function queueMessage(jMessage)
-		{
-			const port = jMessage.port || "0";
-			
-			var messages = self.messages[port];
-			if(undefined === messages) self.messages[port] = messages = [];
-			
-			messages.push(jMessage);
-			
-			if(1 === messages.length) queueMicrotask(function(){ processMessages(port); });
-		}
-		
 		const jMessage = JSON.parse(message);
+		const port = jMessage.port || "0";
 		
-		queueMessage(jMessage);
+		let queues = self.messageQueues;
+		if(!queues) queues = self.messageQueues = [];
+		
+		let queue = queues[port];
+		if(!queue) queue = queues[port] = Promise.resolve();
+		
+		queue.then(()=>{
+			queues[port] = self.messageHandlers[jMessage.id].apply(self, jMessage.args);
+		});
 	}
 
 	interop.onError = function(senderId, message){
