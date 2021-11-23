@@ -280,7 +280,7 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     command_line->AppendSwitch("disable-gpu-watchdog");
     command_line->AppendSwitch("disable-hang-monitor");
 
-    //command_line->AppendSwitch("disable-frame-rate-limit"); // this will cause a hang / crash / memory leak in GPU process after a few minutes, but in Debug it will cause an exception, so ....
+    command_line->AppendSwitch("disable-frame-rate-limit");
     command_line->AppendSwitchWithValue("deadline-to-synchronize-surfaces", "0");
     //command_line->AppendSwitch("double-buffer-compositing");
 

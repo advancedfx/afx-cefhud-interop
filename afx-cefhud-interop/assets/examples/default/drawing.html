@@ -135,6 +135,13 @@ function AfxDrawingInterop(interop,args) {
 	};
 	
 	this.messageHandlers = {
+		"ping": async function(i){
+			console.log("PING: "+i);
+			await Utils.toPromise(this.interop, "sendMessage",this.engineInteropId, JSON.stringify({
+				"id": "pong",
+				"args": [i]
+			}));
+		},
 		"connect": async function(senderId) {
 			this.engineInteropId = senderId;
 			await this.connect(senderId);

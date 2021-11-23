@@ -53,6 +53,13 @@ function AfxEngineInterop(interop, args) {
 	this.indexSettings = {};
 	
 	this.messageHandlers = {
+		"pong": async function(i){
+			console.log("PONG: "+i);
+			await Utils.toPromise(self.interop, "sendMessage", self.args.drawingInteropId, JSON.stringify({
+				"id": "ping",
+				"args": [i + 1]
+			}));
+		},
 		"settings": async function (settings) {
 			this.indexSettings = Object.assign({}, this.indexSettings, settings);
 		},
@@ -72,6 +79,11 @@ function AfxEngineInterop(interop, args) {
 				this.drawingConnectedEvent = null;
 				e[0]();
 			}
+			/*
+			await Utils.toPromise(self.interop, "sendMessage", self.args.drawingInteropId, JSON.stringify({
+				"id": "ping",
+				"args": [0]
+			}));*/
 		},
 		"drawingDisconnected": async function(senderId) {
 			console.log("drawingDisconnected: "+senderId);
@@ -387,8 +399,8 @@ AfxEngineInterop.prototype.connect = async function() {
 		"id": "engineConnected",
 		"args": [self.interop.id]
 	}));
-
-	await self.interop.onMessage(self.interop.id, JSON.stringify({
+	
+	self.interop.onMessage(self.interop.id, JSON.stringify({
 		"id": "pump",
 		"args": []
 	}));
