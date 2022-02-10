@@ -2,24 +2,21 @@
 
 ## FAQ
 
+### Is this actively maintained?
+
+**Currently development on this is paused**, since we work on other things (HLAE 3)!
+
 ### Can I use this for browsing the internet?
 
 You should strongly avoid loading any untrusted content with afx-cefhud-interop at the moment, this would put your PC at a high risk:
 - CEF sandbox is disabled for technical reasons, so no sandbox protection
 - even on v7 the CEF version is from 2019, so lots of unpatched security holes
 
-## Old v6 (compatible with official HLAE)
-
-https://github.com/advancedfx/afx-cefhud-interop/tree/v6
-
-There's pre-built binaries for the v6 version here:
-https://drive.google.com/drive/folders/1CQFGMYhmz4x9DxunmwhWMp37ow6YOBON  
-First install / extract the Release-Base.7z and over that replace with the contents from Release.7z - the AfxHookSource.7z is not needed, since the officcial HLAE fully supports the v6 by now.
-
 ## New v7 (under development)
 
 - Based on CEF 07/27/2019 - 75.1.14+gc81164e+chromium-75.0.3770.100 / Chromium 75.0.3770.100
 - Pre-releases available here: https://github.com/advancedfx/afx-cefhud-interop/releases
+- Currently compatible with latest HLAE version
 
 ### Build instructions
 
@@ -46,13 +43,3 @@ Then, open the newly created c:\some\directory\afx-cefhud-interop\build\cef.sln 
 
 For instructions how to use the binary see the comments at the top of the example.html here:  
 https://github.com/advancedfx/afx-cefhud-interop/blob/main/afx-cefhud-interop/assets/examples/default/index.html#L4
-
-----
-
-The [Chromium Embedded Framework](https://bitbucket.org/chromiumembedded/cef/) (CEF) is a simple framework for embedding Chromium-based browsers in other applications. This repository hosts a sample project called "cef-project" that can be used as the starting point for third-party applications built using CEF.
-
-## Quick Links
-
-* Project Page - https://bitbucket.org/chromiumembedded/cef-project
-* Tutorial - https://bitbucket.org/chromiumembedded/cef/wiki/Tutorial
-* Support Forum - http://www.magpcss.org/ceforum/
