@@ -78,6 +78,9 @@ function AfxDrawingInterop(interop,args) {
 	this.connected = false;
 	this.messages = {};
 	
+	this.width = 640;
+	this.height = 480;
+	
 	this.indexSettings = {};
 	
 	this.shaderData = {
@@ -147,7 +150,7 @@ function AfxDrawingInterop(interop,args) {
 			await this.connect(senderId);
 		},
 		"disconnect": async function(senderId) {
-			await Utils.toPromise(this, "disconnect");
+			await this.disconnect();
 		},
 		"onRenderViewBegin": async function(renderInfo,settings){
 			
@@ -170,15 +173,11 @@ function AfxDrawingInterop(interop,args) {
 			
 			//console.log(frameCount+", "+pass);
 			await self.renderScreen(frameCount, pass, self.renderInfo.view.x, self.renderInfo.view.y, self.renderInfo.view.width, self.renderInfo.view.height);
-		},
-		"onForceEndQueue": async function() {
-			// The engine expects us to finish rendering, so we have to push out the last frame instantly:
-			//console.log("onForceEndQueue");
-			await self.render(null);
 		}
 	};
 	
 	interop.onMessage = function(senderId, message){
+	
 		const jMessage = JSON.parse(message);
 		const port = jMessage.port || "0";
 		
@@ -188,16 +187,19 @@ function AfxDrawingInterop(interop,args) {
 		let queue = queues[port];
 		if(!queue) queue = queues[port] = Promise.resolve();
 		
-		queue.then(()=>{
-			queues[port] = self.messageHandlers[jMessage.id].apply(self, jMessage.args);
-		});
+		queues[port] = queue.then(()=>{
+			return self.messageHandlers[jMessage.id].apply(self, jMessage.args);
+		}).catch((e)=>{
+			Utils.logError(e);
+			return self.disconnect();
+		}).finally();
 	}
 	
 	interop.onDeviceReset = function(){
 		self.onDeviceReset().catch((e)=>{
 			Utils.logError(e);
 			if(!(e && e.soft))
-				return Utils.toPromise(self, "disconnect");
+				return self.disconnect();
 		});
 	};
 
@@ -562,7 +564,6 @@ AfxDrawingInterop.prototype.disconnect = async function() {
 		}
 
 		this.lastShareHandle = null;
-		this.lastClearShareHandle = null;
 		this.cefTextures = {};
 		this.shaders["afx_drawtexture_vs20"] = null;
 		this.shaders["afx_drawtexture_ps20"] = null;
@@ -659,15 +660,20 @@ AfxDrawingInterop.prototype.render = async function(newRender) {
 		}
 		
 		// Handle resizing:
-		if(newRender && (self.width !== newRender.width || self.height !== newRender.height)) {
+		if(newRender && (self.width != newRender.width || self.height != newRender.height)) {
 			console.log("Resizing to "+newRender.width+"x"+newRender.height+" ...");
 			
 			self.width = newRender.width;
 			self.height = newRender.height;
 			
+			let lastClearShareHandle = self.interop.cefClearTextureShareHandle;
 			self.interop.setSize(newRender.width, newRender.height);
-			
-			await Utils.toPromise(self.interop, "waitForCefFrame");
+			do {
+				await Utils.toPromise(self.interop, "waitForCefFrame");
+			} while(
+				self.interop.cefClearTextureShareHandle.lo == lastClearShareHandle.lo
+				&& self.interop.cefClearTextureShareHandle.hi == lastClearShareHandle.hi
+			);
 		}
 		
 		let queued = false;
