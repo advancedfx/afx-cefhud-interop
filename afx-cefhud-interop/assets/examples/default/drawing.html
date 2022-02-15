@@ -41,7 +41,8 @@ html,body,div {
 <div id="indicator" class="indicator"></div><!-- top indicates CS:GO engine frame count mod 2 -->
 <div id="indicator2" class="indicator"></div><!-- top toggles on CS:GO onRenderViewBegin, might not always change due to engine stuffing intermediate frames when juggling the drawing queue -->
 <div class="main">
-This makes it freeze for sure: <img id="gif" src="https://media1.tenor.com/images/74a87da6760e119fdfbb1ee9d2914871/tenor.gif?itemid=5437251" width="320" height="auto" class="" />
+<!-- This makes it freeze for sure: <img id="gif" src="https://media1.tenor.com/images/74a87da6760e119fdfbb1ee9d2914871/tenor.gif?itemid=5437251" width="320" height="auto" class="" /> -->
+This makes it freeze for sure: <img id="gif" src="https://raw.githubusercontent.com/BluenationStudio/LHM-HUDs/prestige/src/assets/PlantDefuse/Plant.gif" width="320" height="auto" class="" />
 <h1 style="color: #00ff00">Hello World from afx-cefhud-interop</h1>
 <p>Client time: <span id="clientTime"></span></p>
 <h2>Last game events:</h2>
@@ -229,7 +230,7 @@ function AfxDrawingInterop(interop,args) {
 	this.vertexBuffers = {
 		"rect": null
 	};
-	
+
 	let interval = setInterval(function(){
 		Utils.toPromise(self.interop, "waitForCefFrame").then(()=>{
 			console.log("Waiting for first frame ...");
@@ -540,7 +541,7 @@ AfxDrawingInterop.prototype.connect = async function() {
 		"args": [this.interop.id]
 	}));
 	
-	//this.interop.setFrameRate(60);
+	//this.interop.setFrameRate(240);
 }
 
 AfxDrawingInterop.prototype.disconnect = async function() {
@@ -628,7 +629,13 @@ AfxDrawingInterop.prototype.render = async function(newRender) {
 		// paint last frame (if wanted):
 		if(lastRender && lastRender.onPaint) {
 			
-			await Utils.toPromise(self.interop, "waitForCefFrame");
+			{
+				let animationFrame = false;
+				window.requestAnimationFrame(()=>{ animationFrame=true; });
+				do {
+					await Utils.toPromise(self.interop, "waitForCefFrame");
+				} while(!animationFrame);
+			}
 			
 			if(self.lastShareHandle)
 			{
