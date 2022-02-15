@@ -906,6 +906,7 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 					if(e && e.soft) {
 						if(gameSurfaceRef[0]) await Utils.toPromise(gameSurfaceRef[0], "release");
 						if(cefTextureSuraceLevel0Ref[0]) await Utils.toPromise(cefTextureSuraceLevel0Ref[0], "release");
+						return;
 					}
 					
 					throw e;
