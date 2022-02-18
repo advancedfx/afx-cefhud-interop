@@ -218,11 +218,11 @@ bool SimpleHandler::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
 void SimpleHandler::DoCreateDrawing(const std::string& argStr, const std::string& argUrl) {
   CefBrowserSettings browser_settings;
   //browser_settings.file_access_from_file_urls = STATE_ENABLED;
-  browser_settings.windowless_frame_rate = 60; // vsync doesn't matter only if external_begin_frame_enabled
+  browser_settings.windowless_frame_rate = 1; // vsync doesn't matter only if external_begin_frame_enabled
   CefWindowInfo window_info;
   window_info.SetAsWindowless(NULL);
   window_info.shared_texture_enabled = true;
-  window_info.external_begin_frame_enabled = true;
+  window_info.external_begin_frame_enabled = false;
   window_info.width = 640;
   window_info.height = 360;
 
@@ -244,7 +244,7 @@ void SimpleHandler::DoCreateEngine(const std::string& argStr, const std::string&
   CefWindowInfo window_info;
   window_info.SetAsWindowless(NULL);
   window_info.shared_texture_enabled = false;
-  window_info.external_begin_frame_enabled = true;
+  window_info.external_begin_frame_enabled = false;
   window_info.width = 640;
   window_info.height = 360;
 
@@ -279,10 +279,11 @@ bool SimpleHandler::OnProcessMessageReceived(
     browser->GetMainFrame()->SendProcessMessage(PID_RENDERER, response);
     return true;
   } else if (name == "afx-paint") {
+    /*
     CefPostTask(TID_UI, new advancedfx::interop::CAfxTask([this, browser] {
-                  browser->GetHost()->WasResized();
+                  //browser->GetHost()->WasResized();
                   browser->GetHost()->SendExternalBeginFrame();
-                }));
+                }));*/
   } else if (name == "afx-use-clear") {
     {
       auto args = message->GetArgumentList();

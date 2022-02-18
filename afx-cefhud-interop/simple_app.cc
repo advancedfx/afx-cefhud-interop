@@ -268,7 +268,7 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     // See the discussion on this issue:
     // https://github.com/daktronics/cef-mixer/issues/10
     //
-    //command_line->AppendSwitchWithValue("use-angle", "d3d11");
+    command_line->AppendSwitchWithValue("use-angle", "d3d11");
 
     // tell Chromium to autoplay <video> elements without
     // requiring the muted attribute or user interaction
@@ -280,8 +280,8 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     command_line->AppendSwitch("disable-gpu-watchdog");
     command_line->AppendSwitch("disable-hang-monitor");
 
-    command_line->AppendSwitch("disable-frame-rate-limit");
-    command_line->AppendSwitchWithValue("deadline-to-synchronize-surfaces", "0");
+    //command_line->AppendSwitch("disable-frame-rate-limit");
+    //command_line->AppendSwitchWithValue("deadline-to-synchronize-surfaces", "0");
     //command_line->AppendSwitch("double-buffer-compositing");
 
      //command_line->AppendSwitch("disable-threaded-compositing ");
@@ -291,7 +291,7 @@ void SimpleApp::OnBeforeCommandLineProcessing(
     //command_line->AppendSwitch("run-all-compositor-stages-before-draw");
     //command_line->AppendSwitch("disable-image-animation-resync");
 
-    command_line->AppendSwitch("deterministic-mode");
+    //command_line->AppendSwitch("deterministic-mode");
     //command_line->AppendSwitch("enable-main-frame-before-activation");
 
     //command_line->AppendSwitch("disable-ipc-flooding-protection");

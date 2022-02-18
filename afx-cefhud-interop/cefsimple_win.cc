@@ -303,7 +303,7 @@ My_ClearRenderTargetView(ID3D11DeviceContext* This,
     if (resource) {
       auto it = g_Textures.find((ID3D11Texture2D*)resource);
       if (it != g_Textures.end()) {
-    
+
           g_ClearCount = 0;
 
         bool bUseTexture = false;

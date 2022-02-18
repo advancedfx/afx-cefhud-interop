@@ -2201,9 +2201,9 @@ class CDrawingInteropImpl : public CAfxObject,
           (HANDLE)(((unsigned __int64)lo) | (((unsigned __int64)hi << 32)));
 
 
-      if (nullptr != m_OnFrame) {
-        auto fn_resolve = m_OnFrame;
-        m_OnFrame = nullptr;
+      if (0 < m_OnFrame.size()) {
+        auto fn_resolve = m_OnFrame.front();
+        m_OnFrame.pop();
         CefPostTask(TID_RENDERER, new CAfxTask([this, fn_resolve]() {
                       if (nullptr == m_Context)
                         return;
@@ -2470,7 +2470,7 @@ CAfxObject::AddFunction(
 
        if (2 <= arguments.size() && arguments[0]->IsFunction() &&
            arguments[1]->IsFunction()) {
-         self->m_OnFrame = arguments[0];
+         self->m_OnFrame.emplace(arguments[0]);
 
          auto message = CefProcessMessage::Create("afx-paint");
          self->m_Frame->SendProcessMessage(PID_BROWSER, message);
@@ -2481,6 +2481,22 @@ CAfxObject::AddFunction(
        exceptionoverride = g_szInvalidArguments;
        return true;
      });
+
+    CAfxObject::AddFunction(
+        obj, "invalidateCefClearTexture",
+        [](const CefString& name, CefRefPtr<CefV8Value> object,
+           const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval,
+           CefString& exceptionoverride) {
+          auto self = CAfxObject::As<AfxObjectType::DrawingInteropImpl,
+                                     CDrawingInteropImpl>(object);
+          if (self == nullptr) {
+            exceptionoverride = g_szInvalidThis;
+            return true;
+          }
+
+          self->m_ClearHandle = INVALID_HANDLE_VALUE;
+          return true;
+        });
 
     CAfxObject::AddFunction(
         obj, "setCefUseClearTexture",
@@ -8160,14 +8176,14 @@ private:
         IMPLEMENT_REFCOUNTING(CAfxD3d9VertexShader);
   };
 
-  HANDLE m_ShareHandle = INVALID_HANDLE_VALUE;
-  HANDLE m_ClearHandle = INVALID_HANDLE_VALUE;
+  std::atomic<HANDLE> m_ShareHandle = INVALID_HANDLE_VALUE;
+  std::atomic<HANDLE> m_ClearHandle = INVALID_HANDLE_VALUE;
 
   CefRefPtr<CAfxCallback> m_OnMessage;
   CefRefPtr<CAfxCallback> m_OnError;
   CefRefPtr<CAfxCallback> m_OnDeviceLost;
   CefRefPtr<CAfxCallback> m_OnDeviceReset;
-  CefRefPtr<CefV8Value> m_OnFrame;
+  std::queue<CefRefPtr<CefV8Value>> m_OnFrame;
   CefRefPtr<CefV8Value> m_OnAck;
 
    bool m_WaitConnectionQuit = false;

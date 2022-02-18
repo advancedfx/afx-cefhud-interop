@@ -2,10 +2,6 @@
 
 ## FAQ
 
-### Is this actively maintained?
-
-**Currently development on this is paused**, since we work on other things (HLAE 3)!
-
 ### Can I use this for browsing the internet?
 
 You should strongly avoid loading any untrusted content with afx-cefhud-interop at the moment, this would put your PC at a high risk:

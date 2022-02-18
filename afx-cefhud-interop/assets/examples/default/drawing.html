@@ -28,6 +28,12 @@ html,body,div {
 	height: 3rem;
 	border: 3px solid red;
 	background: #000;
+	margin-bottom: 3rem;
+	color: #00ff00;
+	font-weight: bold;
+	line-height: 3rem;
+	text-align: center;
+	vertical-align: middle;
 }
 .indicator.white {
 	background: #fff;
@@ -42,7 +48,7 @@ html,body,div {
 <div id="indicator2" class="indicator"></div><!-- top toggles on CS:GO onRenderViewBegin, might not always change due to engine stuffing intermediate frames when juggling the drawing queue -->
 <div class="main">
 <!-- This makes it freeze for sure: <img id="gif" src="https://media1.tenor.com/images/74a87da6760e119fdfbb1ee9d2914871/tenor.gif?itemid=5437251" width="320" height="auto" class="" /> -->
-This makes it freeze for sure: <img id="gif" src="https://raw.githubusercontent.com/BluenationStudio/LHM-HUDs/prestige/src/assets/PlantDefuse/Plant.gif" width="320" height="auto" class="" />
+<!-- This makes it freeze for sure: <img id="gif" src="https://raw.githubusercontent.com/BluenationStudio/LHM-HUDs/prestige/src/assets/PlantDefuse/Plant.gif" width="320" height="auto" class="" /> -->
 <h1 style="color: #00ff00">Hello World from afx-cefhud-interop</h1>
 <p>Client time: <span id="clientTime"></span></p>
 <h2>Last game events:</h2>
@@ -157,8 +163,12 @@ function AfxDrawingInterop(interop,args) {
 			
 			this.indexSettings = Object.assign({}, this.indexSettings, settings);
 			
+			let count = self.count2 || 0;
+			count++;
+			self.count2 = count;
+			this.elIndicator2.innerText = count;
 			this.elIndicator2.classList.toggle("white");
-			
+	
 			this.renderInfo = renderInfo;
 			this.elClientTime.innerText = renderInfo.curTime;
 		},
@@ -170,6 +180,10 @@ function AfxDrawingInterop(interop,args) {
 			this.elGameEvents.insertBefore(docP, this.elGameEvents.firstElementChild);
 		},
 		"onHudEnd": async function(frameCount, pass){
+			let count = self.count || 0;
+			count++;
+			self.count = count;
+			this.elIndicator.innerText = count;
 			this.elIndicator.classList.toggle("white",(frameCount % 2) == 0);
 			
 			//console.log(frameCount+", "+pass);
@@ -178,7 +192,6 @@ function AfxDrawingInterop(interop,args) {
 	};
 	
 	interop.onMessage = function(senderId, message){
-	
 		const jMessage = JSON.parse(message);
 		const port = jMessage.port || "0";
 		
@@ -188,12 +201,18 @@ function AfxDrawingInterop(interop,args) {
 		let queue = queues[port];
 		if(!queue) queue = queues[port] = Promise.resolve();
 		
-		queues[port] = queue.then(()=>{
-			return self.messageHandlers[jMessage.id].apply(self, jMessage.args);
-		}).catch((e)=>{
-			Utils.logError(e);
-			return self.disconnect();
-		}).finally();
+		async function execute(last,jMessage) {
+			await last;
+			try {
+				await self.messageHandlers[jMessage.id].apply(self, jMessage.args);
+			}
+			catch(e){
+				Utils.logError(e);
+				await self.disconnect();
+			}
+		}
+		
+		queues[port] = execute(queue,jMessage);
 	}
 	
 	interop.onDeviceReset = function(){
@@ -230,17 +249,12 @@ function AfxDrawingInterop(interop,args) {
 	this.vertexBuffers = {
 		"rect": null
 	};
-
-	let interval = setInterval(function(){
-		Utils.toPromise(self.interop, "waitForCefFrame").then(()=>{
-			console.log("Waiting for first frame ...");
-			clearInterval(interval);
-			Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
-				"id": "drawingCreated",
-				"args": [interop.id]
-			}));
-		});
-	}, 1000);
+	
+	self.promises = [];
+	Utils.toPromise(self.interop, "sendMessage", self.args.indexInteropId, JSON.stringify({
+		"id": "drawingCreated",
+		"args": [interop.id]
+	}));
 }
 
 AfxDrawingInterop.prototype.onDeviceReset = async function() {
@@ -541,16 +555,15 @@ AfxDrawingInterop.prototype.connect = async function() {
 		"args": [this.interop.id]
 	}));
 	
-	//this.interop.setFrameRate(240);
+	this.interop.setFrameRate(240);
 }
 
 AfxDrawingInterop.prototype.disconnect = async function() {
 	
-	//this.interop.setFrameRate(1);
+	this.interop.setFrameRate(1);
 	
 	this.interop.cancel();
 	this.messages = {}
-	this.lastRender = null;
 	
 	if(this.connected)
 	{
@@ -621,123 +634,93 @@ AfxDrawingInterop.prototype.releaseShareHandle = async function(cefTextureHandle
 AfxDrawingInterop.prototype.render = async function(newRender) {
 	
 	var self = this;
+
+	// Handle resizing:
+	if(newRender && (self.width != newRender.width || self.height != newRender.height)) {
+		console.log("Resizing to "+newRender.width+"x"+newRender.height+" ...");
+		
+		self.width = newRender.width;
+		self.height = newRender.height;
+		
+		self.interop.setSize(newRender.width, newRender.height);
+		
+		self.interop.invalidateCefClearTexture();
+		do {
+			await new Promise((resolve,reject)=>{window.requestAnimationFrame(resolve)});
+		} while(self.interop.cefClearTextureShareHandle.invalid);
+	}
 	
-	while(true) {
+	let queued = false;
 	
-		let lastRender = Utils.coalesce(self.lastRender, null);
-
-		// paint last frame (if wanted):
-		if(lastRender && lastRender.onPaint) {
-			
-			{
-				let animationFrame = false;
-				window.requestAnimationFrame(()=>{ animationFrame=true; });
-				do {
-					await Utils.toPromise(self.interop, "waitForCefFrame");
-				} while(!animationFrame);
-			}
-			
-			if(self.lastShareHandle)
-			{
-				if(
-					self.interop.cefTextureShareHandle.lo != self.lastShareHandle.lo
-					|| self.interop.cefTextureShareHandle.hi != self.lastShareHandle.hi) {
-					console.log("Share handle changed, releasing old one on client ...");
-					await self.releaseShareHandle(self.lastShareHandle);
-				}
-			}
-			self.lastShareHandle = self.interop.cefTextureShareHandle;
-			
-			try {
-				await lastRender.onPaint(self.interop.cefTextureShareHandle);
-			} catch(e) {
-				Utils.logError(e);
-				if(!(e && e.soft)) throw e;
+	// begin new frame:
+	if(newRender && newRender.onBegin) {
+		try {
+			queued = await newRender.onBegin();
+		} catch(e) {
+			Utils.logError(e);
+			if(!(e && e.soft)) throw e;
+			queued = false;
+		}
+	}
+	
+	queued = false;
+	
+	// clear new frame (if wanted):
+	if(newRender && newRender.onClear) {
+		self.interop.setCefUseClearTexture(true);
+		if(self.lastClearShareHandle)
+		{
+			if(
+				self.interop.cefClearTextureShareHandle.lo != self.lastClearShareHandle.lo
+				|| self.interop.cefClearTextureShareHandle.hi != self.lastClearShareHandle.hi) {
+				console.log("Clear share handle changed, releasing old one on client ...");
+				await self.releaseShareHandle(self.lastClearShareHandle);
 			}
 		}
-			
-		// finish last frame:
-		if(lastRender && lastRender.onEnd) {
-			try {
-				await lastRender.onEnd();
-			} catch(e) {
-				Utils.logError(e);
-				if(!(e && e.soft)) throw e;
+		self.lastClearShareHandle = self.interop.cefClearTextureShareHandle;
+		
+		try {
+			await newRender.onClear(self.interop.cefClearTextureShareHandle);
+		} catch(e) {
+			Utils.logError(e);
+			if(!(e && e.soft)) throw e;
+		}
+	}
+	else {
+		self.interop.setCefUseClearTexture(false);
+	}
+	
+	// paint last frame (if wanted):
+	if(newRender && newRender.onPaint) {
+		
+		await new Promise((resolve,reject)=>{window.requestAnimationFrame(resolve)});
+		
+		if(self.lastShareHandle)
+		{
+			if(
+				self.interop.cefTextureShareHandle.lo != self.lastShareHandle.lo
+				|| self.interop.cefTextureShareHandle.hi != self.lastShareHandle.hi) {
+				console.log("Share handle changed, releasing old one on client ...");
+				await self.releaseShareHandle(self.lastShareHandle);
 			}
 		}
+		self.lastShareHandle = self.interop.cefTextureShareHandle;
 		
-		// Handle resizing:
-		if(newRender && (self.width != newRender.width || self.height != newRender.height)) {
-			console.log("Resizing to "+newRender.width+"x"+newRender.height+" ...");
-			
-			self.width = newRender.width;
-			self.height = newRender.height;
-			
-			let lastClearShareHandle = self.interop.cefClearTextureShareHandle;
-			self.interop.setSize(newRender.width, newRender.height);
-			do {
-				await Utils.toPromise(self.interop, "waitForCefFrame");
-			} while(
-				self.interop.cefClearTextureShareHandle.lo == lastClearShareHandle.lo
-				&& self.interop.cefClearTextureShareHandle.hi == lastClearShareHandle.hi
-			);
+		try {
+			await newRender.onPaint(self.interop.cefTextureShareHandle);
+		} catch(e) {
+			Utils.logError(e);
+			if(!(e && e.soft)) throw e;
 		}
+	}
 		
-		let queued = false;
-		
-		// begin new frame:
-		if(newRender && newRender.onBegin) {
-			try {
-				queued = await newRender.onBegin();
-			} catch(e) {
-				Utils.logError(e);
-				if(!(e && e.soft)) throw e;
-				queued = false;
-			}
-		}
-		
-		queued = false;
-		
-		async function doClear() {
-			// clear new frame (if wanted):
-			if(newRender && newRender.onClear) {
-				self.interop.setCefUseClearTexture(true);
-
-				if(self.lastClearShareHandle)
-				{
-					if(
-						self.interop.cefClearTextureShareHandle.lo != self.lastClearShareHandle.lo
-						|| self.interop.cefClearTextureShareHandle.hi != self.lastClearShareHandle.hi) {
-						console.log("Clear share handle changed, releasing old one on client ...");
-						await self.releaseShareHandle(self.lastClearShareHandle);
-					}
-				}
-				self.lastClearShareHandle = self.interop.cefClearTextureShareHandle;
-				
-				try {
-					await newRender.onClear(self.interop.cefClearTextureShareHandle);
-				} catch(e) {
-					Utils.logError(e);
-					if(!(e && e.soft)) throw e;
-				}
-			}
-			else {
-				self.interop.setCefUseClearTexture(false);
-			}
-		}
-		
-		await doClear();
-
-		self.lastRender = newRender;
-
-		if(newRender) {
-			if(queued) {
-				break;
-			}
-			newRender = null;
-		}
-		else {
-			break;
+	// finish last frame:
+	if(newRender && newRender.onEnd) {
+		try {
+			await newRender.onEnd();
+		} catch(e) {
+			Utils.logError(e);
+			if(!(e && e.soft)) throw e;
 		}
 	}
 }
@@ -772,11 +755,13 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 					
 					if(cmp < 0) {
 						// client ahead.
+						console.log("RETRY");
 						this.retry = true;
 						return false; // push out instantly.
 					}
 					else if(cmp > 0) {
 						// client behind.
+						console.log("SKIP");
 						await Utils.toPromise(self.interop, "pumpSkip");
 						continue;
 					}
@@ -937,7 +922,6 @@ AfxDrawingInterop.prototype.renderScreen = async function(frameCount,pass,x,y,wi
 		Utils.logError(e);
 		if(e && e.soft) {
 			Utils.logError(e);
-			self.lastRender = null;
 			await Utils.toPromise(self.interop, "pumpFinish");
 			return;
 		}
@@ -951,10 +935,6 @@ window.addEventListener('load', function(){
 	
 	console.log(window.afxInterop.args);
 	new AfxDrawingInterop(window.afxInterop, JSON.parse(window.afxInterop.args));
-	
-	//setInterval(function(){
-	//	console.log("HI");
-	//}, 500);
 }, false);
 
 </script>
